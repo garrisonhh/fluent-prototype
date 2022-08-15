@@ -1,11 +1,11 @@
 const std = @import("std");
 const parse = @import("parse.zig");
 const sema = @import("sema.zig");
+const FlFile = @import("file.zig");
+const Expr = @import("fluent/expr.zig");
 
 const stdout = std.io.getStdOut().writer();
 const Allocator = std.mem.Allocator;
-const LispFile = @import("file.zig");
-const Expr = @import("ast/expr.zig");
 
 const c = @cImport({
     @cInclude("linenoise.h");
@@ -13,8 +13,8 @@ const c = @cImport({
 
 const MessageContext = struct {
     ally: Allocator,
-    lfile: *const LispFile,
-    msg_list: std.ArrayList(LispFile.Message),
+    lfile: *const FlFile,
+    msg_list: std.ArrayList(FlFile.Message),
 };
 
 fn gen_type_message(ctx: *MessageContext, expr: *const Expr) !void {
@@ -51,7 +51,7 @@ fn eval_repl_expr(
     global: *const sema.TypeScope,
     text: []const u8
 ) !void {
-    var lfile = try LispFile.init(ally, "stdin", text);
+    var lfile = try FlFile.init(ally, "stdin", text);
     defer lfile.deinit(ally);
 
     // generate ast
@@ -66,12 +66,12 @@ fn eval_repl_expr(
         var msg_ctx = MessageContext{
             .ally = arena.allocator(),
             .lfile = &lfile,
-            .msg_list = std.ArrayList(LispFile.Message).init(ally)
+            .msg_list = std.ArrayList(FlFile.Message).init(ally)
         };
         defer msg_ctx.msg_list.deinit();
 
         try ast.traverse(&msg_ctx, gen_type_message);
-        try LispFile.print_messages(
+        try FlFile.print_messages(
             ally,
             msg_ctx.msg_list.items,
             stdout

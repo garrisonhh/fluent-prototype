@@ -2,9 +2,9 @@ const std = @import("std");
 const lex = @import("lex.zig");
 const sema = @import("sema.zig");
 const util = @import("util/util.zig");
-const Expr = @import("ast/expr.zig");
-const LispFile = @import("file.zig");
-const LispType = @import("ast/type.zig").LispType;
+const FlFile = @import("file.zig");
+const Expr = @import("fluent/expr.zig");
+const FlType = @import("fluent/type.zig").FlType;
 
 const stderr = std.io.getStdErr().writer();
 const Allocator = std.mem.Allocator;
@@ -18,7 +18,7 @@ const Error = sema.Error
 // generates ast starting at token index `from`
 // writes final index to `out_to`
 fn generate_ast_r(
-    ctx: *LispFile.Context,
+    ctx: *FlFile.Context,
     tbuf: *const TokenBuffer,
     from: usize,
     out_to: *usize
@@ -73,12 +73,12 @@ fn generate_ast_r(
     };
 }
 
-fn err_empty_program(ctx: *LispFile.Context) Allocator.Error!void {
+fn err_empty_program(ctx: *FlFile.Context) Allocator.Error!void {
     try ctx.add_message(.err, "empty program?", ctx.lfile.text[0..0]);
 }
 
 fn generate_expr_ast(
-    ctx: *LispFile.Context,
+    ctx: *FlFile.Context,
     tbuf: *const TokenBuffer
 ) Error!?Expr {
     if (tbuf.tokens.len == 0) {
@@ -111,7 +111,7 @@ fn generate_expr_ast(
 /// returns a list of the expressions stored in ctx allocated onto the context
 /// allocator
 fn generate_file_ast(
-    ctx: *LispFile.Context,
+    ctx: *FlFile.Context,
     tbuf: *const TokenBuffer
 ) Error!?Expr {
     if (tbuf.tokens.len == 0) {
@@ -153,10 +153,10 @@ fn infer_ast_types(ctx: *sema.SemaContext, ast: *Expr) sema.Error!void {
 pub fn parse(
     ally: Allocator,
     global: *const sema.TypeScope,
-    lfile: *const LispFile,
+    lfile: *const FlFile,
     to: enum{expr, file}
 ) !?Expr {
-    var ctx = LispFile.Context.init(ally, lfile);
+    var ctx = FlFile.Context.init(ally, lfile);
     defer ctx.deinit();
 
     // lex

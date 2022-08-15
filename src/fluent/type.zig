@@ -3,7 +3,7 @@ const util = @import("../util/util.zig");
 const Allocator = std.mem.Allocator;
 const WriteError = std.os.WriteError;
 
-pub const LispType = union(enum) {
+pub const FlType = union(enum) {
     const Self = @This();
 
     pub const Function = struct {
@@ -90,9 +90,9 @@ pub const LispType = union(enum) {
     }
 
     const Fmt = struct {
-        ltype: *const LispType,
+        ltype: *const FlType,
 
-        fn of(ltype: *const LispType) Fmt {
+        fn of(ltype: *const FlType) Fmt {
             return Fmt{ .ltype = ltype };
         }
 
@@ -135,4 +135,3 @@ pub const LispType = union(enum) {
         try std.fmt.format(writer, "<type {}>", .{Fmt.of(self)});
     }
 };
-

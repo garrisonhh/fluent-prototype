@@ -1,6 +1,6 @@
 const std = @import("std");
 const util = @import("../util/util.zig");
-const LispType = @import("type.zig").LispType;
+const FlType = @import("type.zig").FlType;
 
 const Self = @This();
 
@@ -24,7 +24,7 @@ pub const Type = enum {
 
 etype: Type,
 slice: []const u8,
-ltype: LispType = LispType{ .unknown = {} },
+ltype: FlType = FlType{ .unknown = {} },
 children: ?[]Self = null,
 
 pub fn init_sequence(tag: Type, slice: []const u8, children: []Self) Self {

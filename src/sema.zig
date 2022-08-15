@@ -1,9 +1,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const parse = @import("parse.zig");
-const Expr = @import("ast/expr.zig");
-const LispType = @import("ast/type.zig").LispType;
-const LispFile = @import("file.zig");
+const FlFile = @import("file.zig");
+const Expr = @import("fluent/expr.zig");
+const FlType = @import("fluent/type.zig").FlType;
 
 const Allocator = std.mem.Allocator;
 
@@ -13,10 +13,10 @@ pub const SemaContext = struct {
     const Self = @This();
 
     ally: Allocator,
-    ctx: *LispFile.Context,
+    ctx: *FlFile.Context,
     global: *const TypeScope,
 
-    pub fn init(ctx: *LispFile.Context, global: *const TypeScope) Self {
+    pub fn init(ctx: *FlFile.Context, global: *const TypeScope) Self {
         return Self{
             .ally = ctx.ally,
             .ctx = ctx,
@@ -29,11 +29,11 @@ pub const TypeScope = struct {
     const Self = @This();
 
     // maps {ident: ltype}
-    map: std.StringHashMap(LispType),
+    map: std.StringHashMap(FlType),
 
     pub fn init(ally: Allocator) Self {
         return Self{
-            .map = std.StringHashMap(LispType).init(ally),
+            .map = std.StringHashMap(FlType).init(ally),
         };
     }
 
@@ -44,12 +44,12 @@ pub const TypeScope = struct {
 
         // only 'ltype' and 'fn' must be created from scratch in order to
         // compile the other types (this is a mindfuck lmao)
-        const ltype_ltype = LispType{ .ltype = {} };
+        const ltype_ltype = FlType{ .ltype = {} };
         try global.bind("type", ltype_ltype);
 
-        const fn_param_arr = [_]LispType{LispType.init_list(&ltype_ltype)};
-        const fn_params = try ally.dupe(LispType, fn_param_arr[0..]);
-        const fn_ltype = LispType.init_function(fn_params, &ltype_ltype);
+        const fn_param_arr = [_]FlType{FlType.init_list(&ltype_ltype)};
+        const fn_params = try ally.dupe(FlType, fn_param_arr[0..]);
+        const fn_ltype = FlType.init_function(fn_params, &ltype_ltype);
         try global.bind("fn", fn_ltype);
 
         // TODO add other builtins
@@ -120,12 +120,12 @@ pub const TypeScope = struct {
     pub fn bind(
         self: *Self,
         key: []const u8,
-        value: LispType
+        value: FlType
     ) Allocator.Error!void {
         try self.map.put(key, value);
     }
 
-    pub fn get(self: *const Self, key: []const u8) ?*const LispType {
+    pub fn get(self: *const Self, key: []const u8) ?*const FlType {
         return if (self.map.get(key)) |value| &value else null;
     }
 };
@@ -134,13 +134,13 @@ pub const TypeScope = struct {
 pub fn type_check_and_infer(
     ctx: *SemaContext,
     ast: *const Expr
-) Error!?LispType {
+) Error!?FlType {
     return switch (ast.etype) {
-        .file => LispType{ .nil = {} },
-        .int => LispType{ .int = {} },
-        .float => LispType{ .float = {} },
-        .string => LispType{ .string = {} },
-        .ltype => LispType{ .ltype = {} },
+        .file => FlType{ .nil = {} },
+        .int => FlType{ .int = {} },
+        .float => FlType{ .float = {} },
+        .string => FlType{ .string = {} },
+        .ltype => FlType{ .ltype = {} },
         .ident => infer_ident: {
             if (ctx.global.get(ast.slice)) |binding| {
                 break :infer_ident try binding.clone(ctx.ally);
@@ -175,8 +175,8 @@ pub fn type_check_and_infer(
         .list => infer_list: {
             const children = ast.children.?;
             if (children.len == 0) {
-                const unk = LispType{ .unknown = {} };
-                break :infer_list LispType.init_list(&unk);
+                const unk = FlType{ .unknown = {} };
+                break :infer_list FlType.init_list(&unk);
             }
 
             const fst = children[0];
@@ -209,7 +209,7 @@ pub fn type_check_and_infer(
             }
 
             const subtype = try fst.ltype.create_clone(ctx.ally);
-            break :infer_list LispType.init_list(subtype);
+            break :infer_list FlType.init_list(subtype);
         }
     };
 }

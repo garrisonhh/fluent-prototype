@@ -1,5 +1,5 @@
 const std = @import("std");
-const LispFile = @import("file.zig");
+const FlFile = @import("file.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -66,13 +66,13 @@ pub const TokenBuffer = struct {
         };
     }
 
-    pub fn deinit(self: *Self, ctx: *LispFile.Context) void {
+    pub fn deinit(self: *Self, ctx: *FlFile.Context) void {
         self.tokens.deinit(ctx.ally);
     }
 
     fn emit(
         self: *Self,
-        ctx: *LispFile.Context,
+        ctx: *FlFile.Context,
         ttype: Token.Type,
         view: []const u8
     ) !void {
@@ -82,7 +82,7 @@ pub const TokenBuffer = struct {
         });
     }
 
-    fn validate_parens(self: *const Self, ctx: *LispFile.Context) !void {
+    fn validate_parens(self: *const Self, ctx: *FlFile.Context) !void {
         var level: i32 = 0;
         var warned_unmatched_at_zero: bool = false;
 
@@ -92,7 +92,7 @@ pub const TokenBuffer = struct {
                     // try to diagnose mismatched parens early on
                     if (!warned_unmatched_at_zero and level > 0) {
                         const view = self.tokens.items(.view)[i];
-                        const loc = try LispFile.Location.of_slice(
+                        const loc = try FlFile.Location.of_slice(
                             ctx.lfile,
                             view
                         );
@@ -134,7 +134,7 @@ pub const TokenBuffer = struct {
         }
     }
 
-    pub fn validate(self: *const Self, ctx: *LispFile.Context) !void {
+    pub fn validate(self: *const Self, ctx: *FlFile.Context) !void {
         try self.validate_parens(ctx);
         // TODO more stuff I can check here?
     }
@@ -166,7 +166,7 @@ fn classify_char_at(str: []const u8, index: usize) CharClass {
 }
 
 /// tokenizes ctx.lfile
-pub fn lex(ctx: *LispFile.Context) Allocator.Error!TokenBuffer {
+pub fn lex(ctx: *FlFile.Context) Allocator.Error!TokenBuffer {
     const str = ctx.lfile.text;
     var tbuf = TokenBuffer.init();
 

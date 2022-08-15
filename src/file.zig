@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 const TextBox = canvas.TextBox;
 const ConsoleColor = canvas.ConsoleColor;
 
-/// the LispFile abstraction allow for contextual errors.
+/// the FlFile abstraction allow for contextual errors.
 const Self = @This();
 
 const WriteError = std.fs.File.WriteError;
@@ -19,7 +19,7 @@ pub const Error = Allocator.Error
 
 /// Message is a message relating to code in a lfile.
 pub const Message = struct {
-    const LispFile = Self;
+    const FlFile = Self;
 
     pub const Level = enum {
         debug,
@@ -37,14 +37,14 @@ pub const Message = struct {
         }
     };
 
-    lfile: *const LispFile,
+    lfile: *const FlFile,
     level: Level,
     msg: []const u8,
     slice: []const u8, // slice of lfile to be displayed with message
 };
 
 pub const Location = struct {
-    const LispFile = Self;
+    const FlFile = Self;
 
     // these are stored zero-indexed for lispfileming convenience, and displayed
     // with 1 added
@@ -52,7 +52,7 @@ pub const Location = struct {
     line: usize,
     char: usize,
 
-    pub fn of_slice(lfile: *const LispFile, slice: []const u8) Error!Location {
+    pub fn of_slice(lfile: *const FlFile, slice: []const u8) Error!Location {
         // verify slice is within lfile
         const text = lfile.text;
         const text_pos = @ptrToInt(text.ptr);
@@ -102,21 +102,21 @@ pub const Location = struct {
 /// File.Context can be used to collect messages and stop compilation to report
 /// them throughout the various stages of compilation
 pub const Context = struct {
-    const LispFile = Self;
+    const FlFile = Self;
 
     ally: Allocator,
     arena: std.heap.ArenaAllocator,
-    lfile: *const LispFile,
+    lfile: *const FlFile,
     messages: std.ArrayList(Message),
     // when an error is added to the context, this flag is set
     err: bool,
 
-    pub fn init(ally: Allocator, lfile: *const LispFile) Context {
+    pub fn init(ally: Allocator, lfile: *const FlFile) Context {
         return Context{
             .ally = ally,
             .arena = std.heap.ArenaAllocator.init(ally),
             .lfile = lfile,
-            .messages = std.ArrayList(LispFile.Message).init(ally),
+            .messages = std.ArrayList(FlFile.Message).init(ally),
             .err = false,
         };
     }
@@ -143,7 +143,7 @@ pub const Context = struct {
     }
 
     pub fn print_messages(self: *Context) !void {
-        try LispFile.print_messages(self.ally, self.messages.items, stderr);
+        try FlFile.print_messages(self.ally, self.messages.items, stderr);
         self.messages.clearAndFree();
     }
 };
@@ -189,7 +189,7 @@ pub fn new_message(
 
 // used for collecting message batches for printing
 const MessageQueue = struct {
-    const LispFile = Self;
+    const FlFile = Self;
     const LocatedMessage = struct {
         level: Message.Level,
         msg: []const u8,
@@ -198,10 +198,10 @@ const MessageQueue = struct {
         num_lines: usize,
     };
 
-    lfile: *const LispFile,
+    lfile: *const FlFile,
     messages: std.ArrayList(LocatedMessage),
 
-    fn init(lfile: *const LispFile, ally: Allocator) MessageQueue {
+    fn init(lfile: *const FlFile, ally: Allocator) MessageQueue {
         return MessageQueue{
             .lfile = lfile,
             .messages = std.ArrayList(LocatedMessage).init(ally),

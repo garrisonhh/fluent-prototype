@@ -1,6 +1,7 @@
 const std = @import("std");
 
-pub const LispValue = union(enum) {
+// TODO actually, put this in 'fluent' folder
+pub const FlValue = union(enum) {
 
 };
 
