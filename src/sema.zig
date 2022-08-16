@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 
 pub const Error = Allocator.Error;
 
-pub const SemaContext = struct {
+pub const Context = struct {
     const Self = @This();
 
     ally: Allocator,
@@ -29,6 +29,8 @@ pub const TypeScope = struct {
     const Self = @This();
 
     // maps {ident: ltype}
+    // I think eventually I will need to store Exprs or FlValues associated with
+    // idents here, but for builtins I think it will always be unnecessary
     map: std.StringHashMap(FlType),
 
     pub fn init(ally: Allocator) Self {
@@ -42,17 +44,23 @@ pub const TypeScope = struct {
     pub fn init_global(ally: Allocator) !Self {
         var global = Self.init(ally);
 
-        // only 'ltype' and 'fn' must be created from scratch in order to
-        // compile the other types (this is a mindfuck lmao)
-        const ltype_ltype = FlType{ .ltype = {} };
-        try global.bind("type", ltype_ltype);
+        // some types have to be created from scratch, like `type` and `fn`
+        const type_ltype = FlType{ .ltype = {} };
+        try global.bind("type", type_ltype);
 
-        const fn_param_arr = [_]FlType{FlType.init_list(&ltype_ltype)};
+        const fn_param_arr = [_]FlType{FlType.init_list(&type_ltype)};
         const fn_params = try ally.dupe(FlType, fn_param_arr[0..]);
-        const fn_ltype = FlType.init_function(fn_params, &ltype_ltype);
+        const fn_ltype = FlType.init_function(fn_params, &type_ltype);
         try global.bind("fn", fn_ltype);
 
-        // TODO add other builtins
+        // TODO add these through dynamic exec
+        const int_ltype = FlType{ .int = {} };
+        const add_param_arr = [_]FlType{int_ltype, int_ltype};
+        const add_params = try ally.dupe(FlType, add_param_arr[0..]);
+        const add_ltype = FlType.init_function(add_params, &int_ltype);
+        try global.bind("+", add_ltype);
+
+        // TODO add other builtins through dynamic exec
         const builtin_types = [_][2][]const u8{
             .{"int", "type"},
             .{"float", "type"},
@@ -132,7 +140,7 @@ pub const TypeScope = struct {
 
 // inference is generally bottom-up, only bindings are top-down
 pub fn type_check_and_infer(
-    ctx: *SemaContext,
+    ctx: *Context,
     ast: *const Expr
 ) Error!?FlType {
     return switch (ast.etype) {

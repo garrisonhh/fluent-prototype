@@ -1,6 +1,7 @@
 const std = @import("std");
 const parse = @import("parse.zig");
 const sema = @import("sema.zig");
+const dynamic = @import("dynamic.zig");
 const FlFile = @import("file.zig");
 const Expr = @import("fluent/expr.zig");
 
@@ -76,6 +77,13 @@ fn eval_repl_expr(
             msg_ctx.msg_list.items,
             stdout
         );
+
+        // dynamic exec expr
+        if (try dynamic.compile(ally, &lfile, global, &ast)) |*dyn_program| {
+            defer dyn_program.deinit();
+
+            dyn_program.debug();
+        }
     }
 }
 

@@ -2,6 +2,7 @@ const std = @import("std");
 const util = @import("../util/util.zig");
 const FlType = @import("type.zig").FlType;
 
+/// Expr is an intermediate AST representation
 const Self = @This();
 
 pub const Type = enum {
@@ -9,8 +10,8 @@ pub const Type = enum {
     file,
     list,
     ident,
-    float,
     int,
+    float,
     string,
     ltype,
 
@@ -56,6 +57,10 @@ pub fn traverse(
     if (self.children) |children| {
         for (children) |*child| try child.traverse(ctx, cb);
     }
+}
+
+pub fn is_flat_literal(self: *const Self) bool {
+    return self.children == null;
 }
 
 const Fmt = struct {

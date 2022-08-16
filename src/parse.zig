@@ -136,7 +136,7 @@ fn generate_file_ast(
 }
 
 /// bottom-up type inference
-fn infer_ast_types(ctx: *sema.SemaContext, ast: *Expr) sema.Error!void {
+fn infer_ast_types(ctx: *sema.Context, ast: *Expr) sema.Error!void {
     // infer on subexprs
     if (ast.children) |children| {
         for (children) |*child| try infer_ast_types(ctx, child);
@@ -176,7 +176,7 @@ pub fn parse(
         .file => generate_file_ast(&ctx, &tbuf),
     }) orelse return null;
 
-    var sema_ctx = sema.SemaContext.init(&ctx, global);
+    var sema_ctx = sema.Context.init(&ctx, global);
 
     try infer_ast_types(&sema_ctx, &ast);
 
