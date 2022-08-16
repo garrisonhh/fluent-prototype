@@ -58,31 +58,27 @@ fn eval_repl_expr(
     // generate ast
     if (try parse.parse(ally, global, &lfile, .expr)) |ast| {
         // print ast
-        try stdout.print("ast:\n{}\n", .{ast.fmt(.{})});
-
-        // print types of exprs
-        var arena = std.heap.ArenaAllocator.init(ally);
-        defer arena.deinit();
-
-        var msg_ctx = MessageContext{
-            .ally = arena.allocator(),
-            .lfile = &lfile,
-            .msg_list = std.ArrayList(FlFile.Message).init(ally)
-        };
-        defer msg_ctx.msg_list.deinit();
-
-        try ast.traverse(&msg_ctx, gen_type_message);
-        try FlFile.print_messages(
-            ally,
-            msg_ctx.msg_list.items,
-            stdout
+        try stdout.print(
+            "ast:\n{}\n{}\n\n",
+            .{ast.ltype, ast.fmt(.{})}
         );
 
         // dynamic exec expr
-        if (try dynamic.compile(ally, &lfile, global, &ast)) |*dyn_program| {
-            defer dyn_program.deinit();
+        if (try dynamic.compile(ally, &lfile, global, &ast)) |*block| {
+            defer block.deinit();
 
-            dyn_program.debug();
+            var vm = dynamic.FlVm.init(ally);
+            defer vm.deinit();
+
+            block.debug();
+
+            try vm.exec(block);
+            vm.debug();
+
+            std.debug.assert(vm.stack.items.len == 1);
+
+            const value = vm.stack.items[0];
+            try stdout.print("{}\n", .{value.fmt(.{})});
         }
     }
 }

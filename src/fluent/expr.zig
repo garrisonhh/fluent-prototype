@@ -68,7 +68,7 @@ const Fmt = struct {
 
     root: *const Expr,
     indent: i32,
-    typed: bool,
+    typing: FmtArgs.TypeLevel,
 
     fn format_r(
         self: *const @This(),
@@ -83,6 +83,12 @@ const Fmt = struct {
             while (i < level * self.indent) : (i += 1) {
                 try writer.writeAll(" ");
             }
+        }
+
+        // types
+        if (self.typing == .all
+         or self.typing == .functions and !expr.is_flat_literal()) {
+            try std.fmt.format(writer, "{}", .{expr.ltype});
         }
 
         // data
@@ -109,9 +115,6 @@ const Fmt = struct {
             .ident, .string, .int, .float => try writer.writeAll(expr.slice),
             else => @panic("TODO ???")
         }
-
-        // types
-        if (self.typed) try std.fmt.format(writer, " {}", .{expr.ltype});
     }
 
     pub fn format(
@@ -128,14 +131,20 @@ const Fmt = struct {
 };
 
 const FmtArgs = struct {
+    const TypeLevel = enum {
+        none,
+        functions,
+        all,
+    };
+
+    typing: TypeLevel = .none,
     indent: i32 = 0,
-    typed: bool = false,
 };
 
 pub fn fmt(self: *const Self, args: FmtArgs) Fmt {
     return Fmt{
         .root = self,
         .indent = args.indent,
-        .typed = args.typed
+        .typing = args.typing
     };
 }

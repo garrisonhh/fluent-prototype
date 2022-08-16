@@ -132,6 +132,6 @@ pub const FlType = union(enum) {
         _ = fmt;
         _ = options;
 
-        try std.fmt.format(writer, "<type {}>", .{Fmt.of(self)});
+        try std.fmt.format(writer, "<{}>", .{Fmt.of(self)});
     }
 };

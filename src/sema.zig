@@ -158,6 +158,8 @@ pub fn type_check_and_infer(
             }
         },
         .call => infer_call: {
+            const tmp_ally = ctx.ctx.temp_allocator();
+
             const children = ast.children.?;
             if (children.len == 0) {
                 try ctx.ctx.add_message(
@@ -175,9 +177,46 @@ pub fn type_check_and_infer(
                     "attempted to call non-function",
                     ast.slice
                 );
+                break :infer_call null;
             }
 
+            // type check parameters
+            var bad_params = false;
             const function = fn_expr.ltype.function;
+            const params = children[1..];
+
+            var i: usize = 0;
+            while (i < @minimum(function.params.len, params.len)) : (i += 1) {
+                const expected = &function.params[i];
+                const actual = &params[i].ltype;
+                if (!actual.eql(expected)) {
+                    bad_params = true;
+
+                    const msg = try std.fmt.allocPrint(
+                        tmp_ally,
+                        "wrong parameter type: expected {}, found {}",
+                        .{expected, actual}
+                    );
+                    try ctx.ctx.add_message(.err, msg, params[i].slice);
+                }
+            }
+
+            if (params.len != function.params.len) {
+                bad_params = true;
+
+                const cmp_text =
+                    if (params.len > function.params.len) "many"
+                    else "few";
+                const msg = try std.fmt.allocPrint(
+                    tmp_ally,
+                    "too {s} parameters: expected {d}, found {d}",
+                    .{cmp_text, function.params.len, params.len}
+                );
+                try ctx.ctx.add_message(.err, msg, ast.slice);
+            }
+
+            if (bad_params) break :infer_call null;
+
             break :infer_call try function.returns.clone(ctx.ally);
         },
         .list => infer_list: {
