@@ -11,12 +11,12 @@ const Context = struct {
     const Self = @This();
 
     ctx: *FlFile.Context,
-    scope: *const sema.TypeScope,
+    scope: *const sema.Scope,
 
     ally: Allocator, // backing allocator
     arena: std.heap.ArenaAllocator, // use for memory scoped to context lifetime
 
-    fn init(ctx: *FlFile.Context, scope: *const sema.TypeScope) Self {
+    fn init(ctx: *FlFile.Context, scope: *const sema.Scope) Self {
         var ally = ctx.ally;
         return Self{
             .ctx = ctx,
@@ -87,7 +87,7 @@ const FlOp = union(enum) {
     // maximum input args of all FlOps
     const max_args = blk: {
         var args: usize = 0;
-        for (FlOp.diffs.values) |diff|  args = @maximum(args, diff.in);
+        for (FlOp.diffs.values) |diff| args = @maximum(args, diff.in);
         break :blk args;
     };
 
@@ -104,8 +104,6 @@ const FlOp = union(enum) {
 
     // TODO call: Size, // push inst addr onto call stack and jump
     // TODO ret, // pop inst addr from call stack
-
-
 
     pub fn format(
         self: Self,
@@ -163,10 +161,80 @@ pub const FlBlock = struct {
     constants: []const FlValue,
     ops: []const FlOp,
 
-    /// `init` with Builder.to_program
+    /// `init` with Builder or assemble
     pub fn deinit(self: *Self) void {
         self.ally.free(self.constants);
         self.ally.free(self.ops);
+    }
+
+    /// allows you to generate blocks from 'assembly'
+    /// syntax is simple, follows the same format as debug output: op name
+    /// followed by an optional unsigned number, separated by newlines
+    ///
+    /// copies constant array onto the allocator
+    pub fn assemble(
+        ally: Allocator,
+        constants: []const FlValue,
+        text: []const u8
+    ) !Self {
+        var ops = std.ArrayList(FlOp).init(ally);
+        defer ops.deinit();
+
+        var lines = std.mem.split(u8, text, "\n");
+        while (lines.next()) |line| {
+            var words = std.mem.tokenize(u8, line, " ");
+            if (words.next()) |tag_name| {
+                const tag = std.meta.stringToEnum(FlOp.Enum, tag_name).?;
+                const num =
+                    if (words.next()) |word|
+                        try std.fmt.parseUnsigned(FlOp.Size, word, 10)
+                    else
+                        0;
+
+                const op = switch(tag) {
+                    .debug => FlOp{ .debug = {} },
+                    .push => FlOp{ .push = num },
+                    .drop => FlOp{ .drop = {} },
+                    .iadd => FlOp{ .iadd = {} },
+                    .isub => FlOp{ .isub = {} },
+                };
+
+                try ops.append(op);
+            }
+        }
+
+        return Self{
+            .ally = ally,
+            .constants = try ally.dupe(FlValue, constants), // TODO deepcopy?
+            .ops = ops.toOwnedSlice(),
+        };
+    }
+
+    /// creates a third block which is the concatenation of two blocks
+    pub fn concat(ally: Allocator, a: *const Self, b: *const Self) !Self {
+        const constants = try std.mem.concat(
+            ally,
+            &[_][]const FlValue{a.constants, b.constants}
+        );
+        var ops = try std.mem.concat(
+            ally,
+            &[_][]const FlOp{a.ops, b.ops}
+        );
+
+        // adjust constant indices from other.ops
+        const offset = @intCast(FlOp.Size, a.constants.len);
+        for (ops[a.ops.len..]) |*op| {
+            switch (op.*) {
+                .push => op.push += offset,
+                else => {}
+            }
+        }
+
+        return Self{
+            .ally = ally,
+            .constants = constants,
+            .ops = ops
+        };
     }
 
     fn find_total_diff(self: *const Self) FlStackDiff {
@@ -181,7 +249,7 @@ pub const FlBlock = struct {
 
         return FlStackDiff.init(
             @intCast(usize, -min_diff),
-            @intCast(usize, total)
+            @intCast(usize, total - min_diff)
         );
     }
 
@@ -333,7 +401,7 @@ fn compile_expr(
 pub fn compile(
     ally: Allocator,
     lfile: *const FlFile,
-    scope: *const sema.TypeScope,
+    scope: *const sema.Scope,
     ast: *const Expr
 ) !?FlBlock {
     var lfile_ctx = FlFile.Context.init(ally, lfile);

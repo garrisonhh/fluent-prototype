@@ -114,8 +114,7 @@ fn generate_expr_ast(
     return expr;
 }
 
-/// returns a list of the expressions stored in ctx allocated onto the context
-/// allocator
+/// files are really just lists of expressions
 fn generate_file_ast(
     ctx: *FlFile.Context,
     ast: *Ast,
@@ -166,7 +165,7 @@ fn infer_expr_ltype(
     }
 }
 
-/// contains the ast and the allocator backing the entire tree
+/// the ast and the arena which backs it
 pub const Ast = struct {
     const Self = @This();
 
@@ -196,7 +195,7 @@ pub const Ast = struct {
 /// TODO allocating ast onto an arena allocator may make a lot of sense
 pub fn parse(
     ally: Allocator,
-    global: *const sema.TypeScope,
+    global: *const sema.Scope,
     lfile: *const FlFile,
     to: enum{expr, file}
 ) !?Ast {

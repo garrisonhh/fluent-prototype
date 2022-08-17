@@ -49,7 +49,7 @@ fn parse_repl_command(ally: Allocator, text: []const u8) !?REPLCommand {
 
 fn eval_repl_expr(
     ally: Allocator,
-    global: *const sema.TypeScope,
+    global: *const sema.Scope,
     text: []const u8
 ) !void {
     var lfile = try FlFile.init(ally, "stdin", text);
@@ -96,7 +96,7 @@ pub fn main() !void {
     var text = std.ArrayList(u8).init(ally);
     defer text.deinit();
 
-    var global = try sema.TypeScope.init_global(ally);
+    var global = try sema.Scope.init_global(ally);
     defer global.deinit();
 
     var empty_lines: usize = 0;

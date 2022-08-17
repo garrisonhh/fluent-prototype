@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const parse = @import("parse.zig");
+const dynamic = @import("dynamic.zig");
 const FlFile = @import("file.zig");
 const Expr = @import("fluent/expr.zig");
 const FlType = @import("fluent/type.zig").FlType;
@@ -14,9 +15,9 @@ pub const Context = struct {
 
     // ally: Allocator,
     ctx: *FlFile.Context,
-    global: *const TypeScope,
+    global: *const Scope,
 
-    pub fn init(ctx: *FlFile.Context, global: *const TypeScope) Self {
+    pub fn init(ctx: *FlFile.Context, global: *const Scope) Self {
         return Self{
             .ctx = ctx,
             .global = global,
@@ -24,7 +25,7 @@ pub const Context = struct {
     }
 };
 
-pub const TypeScope = struct {
+pub const Scope = struct {
     const Self = @This();
 
     arena: std.heap.ArenaAllocator,
@@ -44,24 +45,36 @@ pub const TypeScope = struct {
     /// initializes a scope with all of the necessary typing builtins
     /// TODO can I do this at compile time? like with ComptimeStringMap?
     pub fn init_global(ally: Allocator) !Self {
-        var global = Self.init(ally);
-        const scope_ally = global.allocator();
+        var self = Self.init(ally);
+        const scope_ally = self.allocator();
 
         // some types have to be created from scratch, like `type` and `fn`
         const type_ltype = FlType{ .ltype = {} };
-        try global.bind("type", type_ltype);
+        try self.bind("type", type_ltype);
 
         const fn_param_arr = [_]FlType{FlType.init_list(&type_ltype)};
         const fn_params = try scope_ally.dupe(FlType, fn_param_arr[0..]);
         const fn_ltype = FlType.init_function(fn_params, &type_ltype);
-        try global.bind("fn", fn_ltype);
+        try self.bind("fn", fn_ltype);
 
         // TODO add these through dynamic exec
         const int_ltype = FlType{ .int = {} };
         const add_param_arr = [_]FlType{int_ltype, int_ltype};
         const add_params = try scope_ally.dupe(FlType, add_param_arr[0..]);
         const add_ltype = FlType.init_function(add_params, &int_ltype);
-        try global.bind("+", add_ltype);
+        try self.bind("+", add_ltype);
+
+        // TODO bind this to the add function
+        var add_block = try dynamic.FlBlock.assemble(
+            scope_ally,
+            &.{},
+            \\ push 0
+            \\ iadd
+        );
+        defer add_block.deinit();
+
+        std.debug.print("ASSEMBLED:\n", .{});
+        add_block.debug();
 
         // TODO add other builtins through dynamic exec
         const builtin_types = [_][2][]const u8{
@@ -93,7 +106,7 @@ pub const TypeScope = struct {
                 canvas.ConsoleColor{ .fg = .cyan }
             ));
 
-            var entries = global.map.iterator();
+            var entries = self.map.iterator();
             var i: usize = 0;
             while (entries.next()) |entry| : (i += 1) {
                 const key = entry.key_ptr.*;
@@ -121,7 +134,7 @@ pub const TypeScope = struct {
             stderr.writeAll("\n") catch unreachable;
         }
 
-        return global;
+        return self;
     }
 
     fn allocator(self: *Self) Allocator {
