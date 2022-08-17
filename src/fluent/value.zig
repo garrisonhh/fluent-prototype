@@ -3,10 +3,12 @@ const Expr = @import("expr.zig");
 const FlType = @import("type.zig").FlType;
 
 /// FlValue is the *dynamic* representation of a Fluent value
-/// TODO eventually may be able to remove the enum as an optimization
+/// eventually may be able to remove the enum as an optimization
 pub const FlValue = union(enum) {
     const Self = @This();
 
+    // TODO eventually this will cause memory bugs, make sure to clone
+    ltype: FlType,
     int: i64,
     float: f64,
     string: []const u8,
@@ -51,6 +53,7 @@ pub const FlValue = union(enum) {
                 .int => |n| try writer.print("{d}", .{n}),
                 .float => |n| try writer.print("{d}", .{n}),
                 .string => |s| try writer.print("{s}", .{s}),
+                .ltype => |t| try writer.print("{}", .{t}),
             }
         }
     };

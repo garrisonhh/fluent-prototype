@@ -150,8 +150,8 @@ pub const FlBlock = struct {
             self.ops.deinit();
         }
 
-        fn append(self: *Builder, block: *const FlBlock) !void {
-            const constants_len = block.constants.len;
+        fn append(self: *Builder, block: *const FlBlock) Allocator.Error!void {
+            const constants_len = self.constants.items.len;
             const ops_len = self.ops.items.len;
             try self.constants.appendSlice(block.constants);
             try self.ops.appendSlice(block.ops);
@@ -159,17 +159,17 @@ pub const FlBlock = struct {
             offset_constant_ops(self.ops.items[ops_len..], constants_len);
         }
 
-        /// generates a block and clears builder
-        fn to_block(self: *Builder, ally: Allocator) !FlBlock {
-            const block = FlBlock{
+        /// generates a block by copying current contents of builder
+        fn to_block(self: *Builder, ally: Allocator) Allocator.Error!FlBlock {
+            return FlBlock{
                 .constants = try ally.dupe(FlValue, self.constants.items),
                 .ops = try ally.dupe(FlOp, self.ops.items),
             };
+        }
 
+        fn clear(self: *Builder) void {
             self.constants.clearAndFree();
             self.ops.clearAndFree();
-
-            return block;
         }
     };
 
@@ -365,37 +365,27 @@ fn compile_expr(
     builder: *FlBlock.Builder,
     expr: *const Expr
 ) anyerror!void {
-    _ = ctx;
+    switch (expr.etype) {
+        .int, .float, .string => {
+            // easy literals
+            const index = builder.constants.items.len;
+            try builder.constants.append(try FlValue.from_literal(expr));
+            try builder.ops.append(FlOp{ .push = @intCast(u32, index) });
+        },
+        .ident => {
+            const binding = ctx.scope.get(expr.slice) orelse {
+                @panic("TODO didn't find ident in scope");
+            };
+            try builder.append(&binding.block);
+        },
+        .call => {
+            const children = expr.children.?;
+            if (children.len == 0) @panic("TODO empty function call");
 
-    if (expr.is_flat_literal()) {
-        // easy literals like int, float, string etc
-        const index = builder.constants.items.len;
-        try builder.constants.append(try FlValue.from_literal(expr));
-        try builder.ops.append(FlOp{ .push = @intCast(u32, index) });
-    } else if (expr.etype == .call) {
-        // function calls
-        const children = expr.children.?;
-        if (children.len == 0) @panic("TODO empty function call");
-
-        for (children[1..]) |*child| try compile_expr(ctx, builder, child);
-
-        const function = children[0];
-        if (function.etype == .ident) {
-            if (ctx.scope.get(function.slice)) |binding| {
-                // append compiled block
-                if (binding.block) |*block| {
-                    try builder.append(block);
-                } else {
-                    @panic("TODO function binding doesn't contain a block");
-                }
-            } else {
-                @panic("TODO didn't find function ident in scope");
-            }
-        } else {
-            @panic("TODO called something that isn't an ident");
-        }
-    } else {
-        @panic("TODO encountered expr I can't compile yet");
+            for (children[1..]) |*child| try compile_expr(ctx, builder, child);
+            try compile_expr(ctx, builder, &children[0]);
+        },
+        else => @panic("TODO encountered expr I can't compile yet")
     }
 }
 

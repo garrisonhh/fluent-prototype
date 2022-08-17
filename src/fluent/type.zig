@@ -90,40 +90,6 @@ pub const FlType = union(enum) {
         return copy;
     }
 
-    const Fmt = struct {
-        ltype: *const FlType,
-
-        fn of(ltype: *const FlType) Fmt {
-            return Fmt{ .ltype = ltype };
-        }
-
-        pub fn format(
-            fmt_r: *const Fmt,
-            comptime fmt: []const u8,
-            options: std.fmt.FormatOptions,
-            writer: anytype
-        ) @TypeOf(writer).Error!void {
-            _ = fmt;
-            _ = options;
-
-            switch (fmt_r.ltype.*) {
-                .function => |function| {
-                    try writer.writeAll("(fn [");
-                    for (function.params) |*param, i| {
-                        if (i > 0) try writer.writeByte(' ');
-                        try writer.print("{}", .{Fmt.of(param)});
-                    }
-                    try writer.print("] {})", .{Fmt.of(function.returns)});
-                },
-                .list => |list| {
-                    try writer.print("(list {})", .{Fmt.of(list.subtype)});
-                },
-                .ltype => try writer.writeAll("type"),
-                else => |ltype| try writer.writeAll(@tagName(ltype))
-            }
-        }
-    };
-
     pub fn format(
         self: *const Self,
         comptime fmt: []const u8,
@@ -133,6 +99,20 @@ pub const FlType = union(enum) {
         _ = fmt;
         _ = options;
 
-        try std.fmt.format(writer, "<{}>", .{Fmt.of(self)});
+        switch (self.*) {
+            .function => |function| {
+                try writer.writeAll("(fn [");
+                for (function.params) |*param, i| {
+                    if (i > 0) try writer.writeByte(' ');
+                    try writer.print("{}", .{param});
+                }
+                try writer.print("] {})", .{function.returns});
+            },
+            .list => |list| {
+                try writer.print("(list {})", .{list.subtype});
+            },
+            .ltype => try writer.writeAll("type"),
+            else => |ltype| try writer.writeAll(@tagName(ltype))
+        }
     }
 };

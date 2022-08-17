@@ -5,6 +5,7 @@ const dynamic = @import("dynamic.zig");
 const FlFile = @import("file.zig");
 const Expr = @import("fluent/expr.zig");
 const FlType = @import("fluent/type.zig").FlType;
+const FlValue = @import("fluent/value.zig").FlValue;
 
 const FlBlock = dynamic.FlBlock;
 const Allocator = std.mem.Allocator;
@@ -34,10 +35,17 @@ pub const Scope = struct {
         // all bindings are typed
         ltype: FlType,
 
-        // contains a compiled expr, currently using this for builtins. in the
-        // future I will probably also want bindings that store Exprs and/or
+        // this thing as compiled expr, currently using this for builtins. in
+        // the future I will probably also want bindings that store Exprs and/or
         // other info
-        block: ?FlBlock = null,
+        block: FlBlock,
+
+        fn init(ltype: FlType, block: FlBlock) Binding {
+            return Binding{
+                .ltype = ltype,
+                .block = block
+            };
+        }
     };
 
     arena: std.heap.ArenaAllocator,
@@ -62,18 +70,28 @@ pub const Scope = struct {
 
         // some types have to be created from scratch, like `type` and `fn`
         const type_ltype = FlType{ .ltype = {} };
-        try self.bind("type", .{ .ltype = type_ltype });
+        const type_block = try FlBlock.assemble(
+            scope_ally,
+            &.{ FlValue{ .ltype = FlType{ .ltype = {} } } },
+            \\ push 0
+        );
+        try self.bind("type", Binding.init(type_ltype, type_block));
 
         const fn_params = [_]FlType{FlType.init_list(&type_ltype)};
         const fn_ltype = FlType.init_function(fn_params[0..], &type_ltype);
-        try self.bind("fn", .{ .ltype = fn_ltype });
+        const fn_block = try FlBlock.assemble(
+            scope_ally,
+            &.{},
+            "debug" // TODO
+        );
+        try self.bind("fn", Binding.init(fn_ltype, fn_block));
 
         // TODO add these through dynamic exec
         const int_ltype = FlType{ .int = {} };
         const add_params = [_]FlType{int_ltype, int_ltype};
         const add_ltype = FlType.init_function(add_params[0..], &int_ltype);
         const add_block = try FlBlock.assemble(scope_ally, &.{}, "iadd");
-        try self.bind("+", .{ .ltype = add_ltype, .block = add_block });
+        try self.bind("+", Binding.init(add_ltype, add_block));
 
         std.debug.print("ASSEMBLED:\n", .{});
         add_block.debug();
@@ -127,7 +145,7 @@ pub const Scope = struct {
                 // print binding
                 try tc.add_box(canvas.TextBox.init(
                     .{ .x = 0, .y = @intCast(i32, i) },
-                    try std.fmt.allocPrint(tmp_ally, "{}", .{value.*.ltype}),
+                    try std.fmt.allocPrint(tmp_ally, "<{}>", .{value.*.ltype}),
                     canvas.ConsoleColor{}
                 ));
             }
@@ -179,7 +197,6 @@ pub fn type_check_and_infer(
         .int => FlType{ .int = {} },
         .float => FlType{ .float = {} },
         .string => FlType{ .string = {} },
-        .ltype => FlType{ .ltype = {} },
         .ident => infer_ident: {
             if (ctx.global.get(expr.slice)) |binding| {
                 break :infer_ident try binding.ltype.clone(ast_ally);

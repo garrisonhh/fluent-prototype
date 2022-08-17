@@ -13,7 +13,7 @@ pub const Type = enum {
     int,
     float,
     string,
-    ltype,
+    // ltype,
 
     fn is_sequence(self: Type) bool {
         return switch (self) {
