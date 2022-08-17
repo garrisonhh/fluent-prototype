@@ -63,6 +63,7 @@ const FlOp = union(enum) {
     const Self = @This();
     const Enum = @typeInfo(Self).Union.tag_type.?;
 
+    // used in place of usize in order to keep @sizeof(FlOp) <= 8 bytes
     const Size = u32;
 
     // I want this type to stay a 64-bit word
@@ -103,6 +104,8 @@ const FlOp = union(enum) {
 
     // TODO call: Size, // push inst addr onto call stack and jump
     // TODO ret, // pop inst addr from call stack
+
+
 
     pub fn format(
         self: Self,

@@ -82,9 +82,10 @@ pub const FlType = union(enum) {
         };
     }
 
-    pub fn create_clone(self: *const Self, allocator: Allocator) !*Self {
-        var copy = try allocator.create(Self);
-        copy.* = try self.clone(allocator);
+    /// creates a deep copy in allocated memory
+    pub fn create_clone(self: *const Self, ally: Allocator) !*Self {
+        var copy = try ally.create(Self);
+        copy.* = try self.clone(ally);
 
         return copy;
     }

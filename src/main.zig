@@ -56,21 +56,26 @@ fn eval_repl_expr(
     defer lfile.deinit(ally);
 
     // generate ast
-    if (try parse.parse(ally, global, &lfile, .expr)) |ast| {
+    if (try parse.parse(ally, global, &lfile, .expr)) |*ast| {
+        defer ast.deinit();
+
+        const root = ast.root;
+
         // print ast
         try stdout.print(
             "ast:\n{}\n{}\n\n",
-            .{ast.ltype, ast.fmt(.{})}
+            .{root.ltype, root.fmt(.{})}
         );
 
-        // dynamic exec expr
-        if (try dynamic.compile(ally, &lfile, global, &ast)) |*block| {
+        // compile and exec expr
+        if (try dynamic.compile(ally, &lfile, global, &root)) |*block| {
             defer block.deinit();
 
+            block.debug();
+
+            // exec
             var vm = dynamic.FlVm.init(ally);
             defer vm.deinit();
-
-            block.debug();
 
             try vm.exec(block);
             vm.debug();
@@ -84,10 +89,10 @@ fn eval_repl_expr(
 }
 
 pub fn main() !void {
-    // TODO use gpa to debug memory stuff
-    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // defer _ = gpa.deinit();
-    const ally = std.heap.page_allocator; // gpa.allocator();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const ally = gpa.allocator();
+
     var text = std.ArrayList(u8).init(ally);
     defer text.deinit();
 

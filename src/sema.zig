@@ -12,13 +12,12 @@ pub const Error = Allocator.Error;
 pub const Context = struct {
     const Self = @This();
 
-    ally: Allocator,
+    // ally: Allocator,
     ctx: *FlFile.Context,
     global: *const TypeScope,
 
     pub fn init(ctx: *FlFile.Context, global: *const TypeScope) Self {
         return Self{
-            .ally = ctx.ally,
             .ctx = ctx,
             .global = global,
         };
@@ -28,6 +27,8 @@ pub const Context = struct {
 pub const TypeScope = struct {
     const Self = @This();
 
+    arena: std.heap.ArenaAllocator,
+
     // maps {ident: ltype}
     // I think eventually I will need to store Exprs or FlValues associated with
     // idents here, but for builtins I think it will always be unnecessary
@@ -35,6 +36,7 @@ pub const TypeScope = struct {
 
     pub fn init(ally: Allocator) Self {
         return Self{
+            .arena = std.heap.ArenaAllocator.init(ally),
             .map = std.StringHashMap(FlType).init(ally),
         };
     }
@@ -43,20 +45,21 @@ pub const TypeScope = struct {
     /// TODO can I do this at compile time? like with ComptimeStringMap?
     pub fn init_global(ally: Allocator) !Self {
         var global = Self.init(ally);
+        const scope_ally = global.allocator();
 
         // some types have to be created from scratch, like `type` and `fn`
         const type_ltype = FlType{ .ltype = {} };
         try global.bind("type", type_ltype);
 
         const fn_param_arr = [_]FlType{FlType.init_list(&type_ltype)};
-        const fn_params = try ally.dupe(FlType, fn_param_arr[0..]);
+        const fn_params = try scope_ally.dupe(FlType, fn_param_arr[0..]);
         const fn_ltype = FlType.init_function(fn_params, &type_ltype);
         try global.bind("fn", fn_ltype);
 
         // TODO add these through dynamic exec
         const int_ltype = FlType{ .int = {} };
         const add_param_arr = [_]FlType{int_ltype, int_ltype};
-        const add_params = try ally.dupe(FlType, add_param_arr[0..]);
+        const add_params = try scope_ally.dupe(FlType, add_param_arr[0..]);
         const add_ltype = FlType.init_function(add_params, &int_ltype);
         try global.bind("+", add_ltype);
 
@@ -121,7 +124,12 @@ pub const TypeScope = struct {
         return global;
     }
 
+    fn allocator(self: *Self) Allocator {
+        return self.arena.allocator();
+    }
+
     pub fn deinit(self: *Self) void {
+        self.arena.deinit();
         self.map.deinit();
     }
 
@@ -141,31 +149,32 @@ pub const TypeScope = struct {
 // inference is generally bottom-up, only bindings are top-down
 pub fn type_check_and_infer(
     ctx: *Context,
-    ast: *const Expr
+    ast: *parse.Ast,
+    expr: *const Expr
 ) Error!?FlType {
-    return switch (ast.etype) {
+    return switch (expr.etype) {
         .file => FlType{ .nil = {} },
         .int => FlType{ .int = {} },
         .float => FlType{ .float = {} },
         .string => FlType{ .string = {} },
         .ltype => FlType{ .ltype = {} },
         .ident => infer_ident: {
-            if (ctx.global.get(ast.slice)) |binding| {
-                break :infer_ident try binding.clone(ctx.ally);
+            if (ctx.global.get(expr.slice)) |binding| {
+                break :infer_ident try binding.clone(ast.ast_ally);
             } else {
-                try ctx.ctx.add_message(.err, "unknown identifier", ast.slice);
+                try ctx.ctx.add_message(.err, "unknown identifier", expr.slice);
                 break :infer_ident null;
             }
         },
         .call => infer_call: {
-            const tmp_ally = ctx.ctx.temp_allocator();
+            const msg_ally = ctx.ctx.temp_allocator();
 
-            const children = ast.children.?;
+            const children = expr.children.?;
             if (children.len == 0) {
                 try ctx.ctx.add_message(
                     .err,
                     "function call without function",
-                    ast.slice
+                    expr.slice
                 );
                 break :infer_call null;
             }
@@ -175,7 +184,7 @@ pub fn type_check_and_infer(
                 try ctx.ctx.add_message(
                     .err,
                     "attempted to call non-function",
-                    ast.slice
+                    expr.slice
                 );
                 break :infer_call null;
             }
@@ -193,7 +202,7 @@ pub fn type_check_and_infer(
                     bad_params = true;
 
                     const msg = try std.fmt.allocPrint(
-                        tmp_ally,
+                        msg_ally,
                         "wrong parameter type: expected {}, found {}",
                         .{expected, actual}
                     );
@@ -208,19 +217,19 @@ pub fn type_check_and_infer(
                     if (params.len > function.params.len) "many"
                     else "few";
                 const msg = try std.fmt.allocPrint(
-                    tmp_ally,
+                    msg_ally,
                     "too {s} parameters: expected {d}, found {d}",
                     .{cmp_text, function.params.len, params.len}
                 );
-                try ctx.ctx.add_message(.err, msg, ast.slice);
+                try ctx.ctx.add_message(.err, msg, expr.slice);
             }
 
             if (bad_params) break :infer_call null;
 
-            break :infer_call try function.returns.clone(ctx.ally);
+            break :infer_call try function.returns.clone(ast.ast_ally);
         },
         .list => infer_list: {
-            const children = ast.children.?;
+            const children = expr.children.?;
             if (children.len == 0) {
                 const unk = FlType{ .unknown = {} };
                 break :infer_list FlType.init_list(&unk);
@@ -229,23 +238,23 @@ pub fn type_check_and_infer(
             const fst = children[0];
             for (children[1..]) |child| {
                 if (!child.ltype.eql(&fst.ltype)) {
-                    const tmp_ally = ctx.ctx.temp_allocator();
+                    const msg_ally = ctx.ctx.temp_allocator();
 
                     try ctx.ctx.add_message(
                         .err,
                         "list contains mismatched types:",
-                        ast.slice
+                        expr.slice
                     );
 
                     const fst_note = try std.fmt.allocPrint(
-                        tmp_ally,
+                        msg_ally,
                         "this is {}",
                         .{fst.ltype}
                     );
                     try ctx.ctx.add_message(.note, fst_note, fst.slice);
 
                     const child_note = try std.fmt.allocPrint(
-                        tmp_ally,
+                        msg_ally,
                         "but this is {}",
                         .{child.ltype}
                     );
@@ -255,7 +264,7 @@ pub fn type_check_and_infer(
                 }
             }
 
-            const subtype = try fst.ltype.create_clone(ctx.ally);
+            const subtype = try fst.ltype.create_clone(ast.ast_ally);
             break :infer_list FlType.init_list(subtype);
         }
     };

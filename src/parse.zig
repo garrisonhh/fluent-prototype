@@ -15,10 +15,14 @@ const Error = sema.Error
            || util.FmtError
            || util.Error;
 
+// TODO this file contains a lot of different allocators implicitly thrown
+// around, need more explicit naming
+
 // generates ast starting at token index `from`
 // writes final index to `out_to`
 fn generate_ast_r(
     ctx: *FlFile.Context,
+    ast: *Ast,
     tbuf: *const TokenBuffer,
     from: usize,
     out_to: *usize
@@ -47,7 +51,7 @@ fn generate_ast_r(
             const ttypes = tbuf.tokens.items(.ttype);
             var i: usize = from + 1;
             while (ttypes[i] != terminator) {
-                try children.append(try generate_ast_r(ctx, tbuf, i, &i));
+                try children.append(try generate_ast_r(ctx, ast, tbuf, i, &i));
             }
 
             out_to.* = i + 1;
@@ -61,7 +65,7 @@ fn generate_ast_r(
             break :gen_matched Expr.init_sequence(
                 seq_type,
                 slice,
-                children.toOwnedSlice()
+                try ast.ast_ally.dupe(Expr, children.items)
             );
         },
         .ident => Expr.init_slice(.ident, token.view),
@@ -79,6 +83,7 @@ fn err_empty_program(ctx: *FlFile.Context) Allocator.Error!void {
 
 fn generate_expr_ast(
     ctx: *FlFile.Context,
+    ast: *Ast,
     tbuf: *const TokenBuffer
 ) Error!?Expr {
     if (tbuf.tokens.len == 0) {
@@ -87,7 +92,7 @@ fn generate_expr_ast(
     }
 
     var index: usize = 0;
-    const expr = try generate_ast_r(ctx, tbuf, index, &index);
+    const expr = try generate_ast_r(ctx, ast, tbuf, index, &index);
 
     if (index != tbuf.tokens.len) {
         const views = tbuf.tokens.items(.view);
@@ -98,7 +103,7 @@ fn generate_expr_ast(
 
         try ctx.add_message(
             .err,
-            "too many tokenrrontnndexpression string.",
+            "too many tokens in expression string.",
             slice
         );
 
@@ -112,6 +117,7 @@ fn generate_expr_ast(
 /// allocator
 fn generate_file_ast(
     ctx: *FlFile.Context,
+    ast: *Ast,
     tbuf: *const TokenBuffer
 ) Error!?Expr {
     if (tbuf.tokens.len == 0) {
@@ -120,10 +126,11 @@ fn generate_file_ast(
     }
 
     var children = std.ArrayList(Expr).init(ctx.ally);
+    defer children.deinit();
 
     var index: usize = 0;
     while (index < tbuf.tokens.len) {
-        try children.append(try generate_ast_r(ctx, tbuf, index, &index));
+        try children.append(try generate_ast_r(ctx, ast, tbuf, index, &index));
     }
 
     const token_views = tbuf.tokens.items(.view);
@@ -132,21 +139,53 @@ fn generate_file_ast(
         token_views[token_views.len - 1]
     );
 
-    return Expr.init_sequence(.file, slice, children.toOwnedSlice());
+    return Expr.init_sequence(
+        .file,
+        slice,
+        try ast.ast_ally.dupe(Expr, children.items)
+    );
 }
 
 /// bottom-up type inference
-fn infer_ast_types(ctx: *sema.Context, ast: *Expr) sema.Error!void {
+fn infer_expr_ltype(
+    ctx: *sema.Context,
+    ast: *Ast,
+    expr: *Expr
+) sema.Error!void {
     // infer on subexprs
-    if (ast.children) |children| {
-        for (children) |*child| try infer_ast_types(ctx, child);
+    if (expr.children) |children| {
+        for (children) |*child| try infer_expr_ltype(ctx, ast, child);
     }
 
     // infer this expr
-    if (try sema.type_check_and_infer(ctx, ast)) |ltype| {
-        ast.ltype = ltype;
+    if (try sema.type_check_and_infer(ctx, ast, expr)) |ltype| {
+        expr.ltype = ltype;
     }
 }
+
+/// contains the ast and the allocator backing the entire tree
+pub const Ast = struct {
+    const Self = @This();
+
+    arena: std.heap.ArenaAllocator,
+    backing_ally: Allocator,
+    ast_ally: Allocator,
+
+    root: Expr = undefined,
+
+    pub fn init(backing_ally: Allocator) Ast {
+        var arena = std.heap.ArenaAllocator.init(backing_ally);
+        return Ast {
+            .arena = arena,
+            .backing_ally = backing_ally,
+            .ast_ally = arena.allocator(),
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.arena.deinit();
+    }
+};
 
 /// intakes program as a string and outputs an ast
 /// TODO allocating ast onto an arena allocator may make a lot of sense
@@ -155,7 +194,7 @@ pub fn parse(
     global: *const sema.TypeScope,
     lfile: *const FlFile,
     to: enum{expr, file}
-) !?Expr {
+) !?Ast {
     var ctx = FlFile.Context.init(ally, lfile);
     defer ctx.deinit();
 
@@ -170,15 +209,16 @@ pub fn parse(
         return null;
     }
 
-    // generate and typing infer asttype_
-    var ast = (try switch (to) {
-        .expr => generate_expr_ast(&ctx, &tbuf),
-        .file => generate_file_ast(&ctx, &tbuf),
+    // generate and typing infer ast
+    var ast = Ast.init(ctx.ally);
+    ast.root = (try switch (to) {
+        .expr => generate_expr_ast(&ctx, &ast, &tbuf),
+        .file => generate_file_ast(&ctx, &ast, &tbuf),
     }) orelse return null;
 
     var sema_ctx = sema.Context.init(&ctx, global);
 
-    try infer_ast_types(&sema_ctx, &ast);
+    try infer_expr_ltype(&sema_ctx, &ast, &ast.root);
 
     if (ctx.err) {
         try ctx.print_messages();
