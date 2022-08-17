@@ -169,17 +169,51 @@ fn infer_expr_ltype(
 pub const Ast = struct {
     const Self = @This();
 
-    backing_ally: Allocator,
     arena: std.heap.ArenaAllocator,
+    root: Expr,
 
-    root: Expr = undefined,
+    /// intakes program as an lfile and outputs an ast
+    pub fn parse(
+        ally: Allocator,
+        global: *const sema.Scope,
+        lfile: *const FlFile,
+        to: enum{expr, file}
+    ) !?Self {
+        var ctx = FlFile.Context.init(ally, lfile);
+        defer ctx.deinit();
 
-    pub fn init(ally: Allocator) Ast {
-        var arena = std.heap.ArenaAllocator.init(ally);
-        return Ast {
-            .backing_ally = ally,
-            .arena = arena,
+        // lex
+        var tbuf = try lex.lex(&ctx);
+        defer tbuf.deinit(&ctx);
+
+        try tbuf.validate(&ctx);
+
+        if (ctx.err) {
+            try ctx.print_messages();
+            return null;
+        }
+
+        // generate and typing infer ast
+        var self = Self{
+            .arena = std.heap.ArenaAllocator.init(ally),
+            .root = undefined,
         };
+
+        self.root = (try switch (to) {
+            .expr => generate_expr_ast(&ctx, &self, &tbuf),
+            .file => generate_file_ast(&ctx, &self, &tbuf),
+        }) orelse return null;
+
+        var sema_ctx = sema.Context.init(&ctx, global);
+
+        try infer_expr_ltype(&sema_ctx, &self, &self.root);
+
+        if (ctx.err) {
+            try ctx.print_messages();
+            return null;
+        }
+
+        return self;
     }
 
     pub fn deinit(self: *Self) void {
@@ -190,44 +224,3 @@ pub const Ast = struct {
         return self.arena.allocator();
     }
 };
-
-/// intakes program as a string and outputs an ast
-/// TODO allocating ast onto an arena allocator may make a lot of sense
-pub fn parse(
-    ally: Allocator,
-    global: *const sema.Scope,
-    lfile: *const FlFile,
-    to: enum{expr, file}
-) !?Ast {
-    var ctx = FlFile.Context.init(ally, lfile);
-    defer ctx.deinit();
-
-    // lex
-    var tbuf = try lex.lex(&ctx);
-    defer tbuf.deinit(&ctx);
-
-    try tbuf.validate(&ctx);
-
-    if (ctx.err) {
-        try ctx.print_messages();
-        return null;
-    }
-
-    // generate and typing infer ast
-    var ast = Ast.init(ctx.ally);
-    ast.root = (try switch (to) {
-        .expr => generate_expr_ast(&ctx, &ast, &tbuf),
-        .file => generate_file_ast(&ctx, &ast, &tbuf),
-    }) orelse return null;
-
-    var sema_ctx = sema.Context.init(&ctx, global);
-
-    try infer_expr_ltype(&sema_ctx, &ast, &ast.root);
-
-    if (ctx.err) {
-        try ctx.print_messages();
-        return null;
-    }
-
-    return ast;
-}

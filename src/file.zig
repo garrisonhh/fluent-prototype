@@ -261,7 +261,14 @@ pub fn print_messages(
     // collect messages by lfile, expanded into an easily textboxable format
     // (keyed by lfile name)
     var queues = std.StringArrayHashMap(*MessageQueue).init(ally);
-    defer queues.deinit();
+    defer {
+        for (queues.values()) |queue| {
+            queue.deinit();
+            ally.destroy(queue);
+        }
+
+        queues.deinit();
+    }
 
     for (messages) |message| {
         // retrieve queue or make a new one

@@ -146,25 +146,35 @@ pub const FlBlock = struct {
             self.ops.deinit();
         }
 
+        fn append(self: *Builder, block: *const FlBlock) !void {
+            const constants_len = block.constants.len;
+            const ops_len = self.ops.items.len;
+            try self.constants.appendSlice(block.constants);
+            try self.ops.appendSlice(block.ops);
+
+            offset_constant_ops(self.ops.items[ops_len..], constants_len);
+        }
+
         /// generates a block and clears builder
-        fn to_block(self: *Builder, ctx: *Context) Self {
-            // TODO prune repeating constants
-            return Self{
-                .ally = ctx.ally,
-                .constants = self.constants.toOwnedSlice(),
-                .ops = self.ops.toOwnedSlice(),
+        fn to_block(self: *Builder, ally: Allocator) !FlBlock {
+            const block = FlBlock{
+                .constants = try ally.dupe(FlValue, self.constants.items),
+                .ops = try ally.dupe(FlOp, self.ops.items),
             };
+
+            self.constants.clearAndFree();
+            self.ops.clearAndFree();
+
+            return block;
         }
     };
 
-    ally: Allocator,
     constants: []const FlValue,
     ops: []const FlOp,
 
-    /// `init` with Builder or assemble
-    pub fn deinit(self: *Self) void {
-        self.ally.free(self.constants);
-        self.ally.free(self.ops);
+    pub fn deinit(self: *Self, ally: Allocator) void {
+        ally.free(self.constants);
+        ally.free(self.ops);
     }
 
     /// allows you to generate blocks from 'assembly'
@@ -176,7 +186,7 @@ pub const FlBlock = struct {
         ally: Allocator,
         constants: []const FlValue,
         text: []const u8
-    ) !Self {
+    ) !FlBlock {
         var ops = std.ArrayList(FlOp).init(ally);
         defer ops.deinit();
 
@@ -204,10 +214,23 @@ pub const FlBlock = struct {
         }
 
         return Self{
-            .ally = ally,
             .constants = try ally.dupe(FlValue, constants), // TODO deepcopy?
             .ops = ops.toOwnedSlice(),
         };
+    }
+
+    /// used by append + concat
+    fn offset_constant_ops(
+        ops: []FlOp,
+        offset: usize
+    ) void {
+        const offset_size = @intCast(FlOp.Size, offset);
+        for (ops) |*op| {
+            switch (op.*) {
+                .push => op.push += offset_size,
+                else => {}
+            }
+        }
     }
 
     /// creates a third block which is the concatenation of two blocks
@@ -221,17 +244,9 @@ pub const FlBlock = struct {
             &[_][]const FlOp{a.ops, b.ops}
         );
 
-        // adjust constant indices from other.ops
-        const offset = @intCast(FlOp.Size, a.constants.len);
-        for (ops[a.ops.len..]) |*op| {
-            switch (op.*) {
-                .push => op.push += offset,
-                else => {}
-            }
-        }
+        offset_constant_ops(ops[a.ops.len], a.constants.len);
 
         return Self{
-            .ally = ally,
             .constants = constants,
             .ops = ops
         };
@@ -240,11 +255,12 @@ pub const FlBlock = struct {
     fn find_total_diff(self: *const Self) FlStackDiff {
         var total: isize = 0;
         var min_diff: isize = 0;
+
         for (self.ops) |op| {
             const diff = FlOp.diffs.get(op);
-            total += @intCast(isize, diff.out);
             total -= @intCast(isize, diff.in);
             min_diff = @minimum(total, min_diff);
+            total += @intCast(isize, diff.out);
         }
 
         return FlStackDiff.init(
@@ -340,30 +356,6 @@ pub const FlVm = struct {
     }
 };
 
-// TODO get rid of this and somehow integrate this information with scopes,
-// probably by assembling stack vm code and storing that alongside the
-// function type information
-const build_builtin_fn = fn(*Context, *FlBlock.Builder) anyerror!void;
-const builtin_fns = std.ComptimeStringMap(build_builtin_fn, .{
-    .{"+", emit_fn(&[_]FlOp{FlOp{ .iadd = {} }})},
-});
-
-// generates a function which simply emits the ops given
-fn emit_fn(comptime ops: []const FlOp) build_builtin_fn {
-    const Closure = struct {
-        pub fn emit_ops(
-            ctx: *Context,
-            builder: *FlBlock.Builder
-        ) anyerror!void {
-            _ = ctx;
-            for (ops) |op| {
-                try builder.ops.append(op);
-            }
-        }
-    };
-    return Closure.emit_ops;
-}
-
 fn compile_expr(
     ctx: *Context,
     builder: *FlBlock.Builder,
@@ -377,27 +369,33 @@ fn compile_expr(
         try builder.constants.append(try FlValue.from_literal(expr));
         try builder.ops.append(FlOp{ .push = @intCast(u32, index) });
     } else if (expr.etype == .call) {
+        // function calls
         const children = expr.children.?;
-        if (children.len == 0) @panic("TODO");
+        if (children.len == 0) @panic("TODO empty function call");
 
         for (children[1..]) |*child| try compile_expr(ctx, builder, child);
 
         const function = children[0];
         if (function.etype == .ident) {
-            if (builtin_fns.get(function.slice)) |compile_fn| {
-                try compile_fn(ctx, builder);
+            if (ctx.scope.get(function.slice)) |binding| {
+                // append compiled block
+                if (binding.block) |*block| {
+                    try builder.append(block);
+                } else {
+                    @panic("TODO function binding doesn't contain a block");
+                }
             } else {
-                @panic("TODO ???");
+                @panic("TODO didn't find function ident in scope");
             }
         } else {
-            @panic("TODO ???");
+            @panic("TODO called something that isn't an ident");
         }
     } else {
-        @panic("TODO");
+        @panic("TODO encountered expr I can't compile yet");
     }
 }
 
-/// returns program allocated on context arena
+/// returns program allocated on ally
 pub fn compile(
     ally: Allocator,
     lfile: *const FlFile,
@@ -420,5 +418,5 @@ pub fn compile(
         return null;
     }
 
-    return builder.to_block(&ctx);
+    return try builder.to_block(ally);
 }

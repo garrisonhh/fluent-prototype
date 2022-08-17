@@ -7,6 +7,7 @@ const Expr = @import("fluent/expr.zig");
 
 const stdout = std.io.getStdOut().writer();
 const Allocator = std.mem.Allocator;
+const Ast = parse.Ast;
 
 const c = @cImport({
     @cInclude("linenoise.h");
@@ -56,36 +57,34 @@ fn eval_repl_expr(
     defer lfile.deinit(ally);
 
     // generate ast
-    if (try parse.parse(ally, global, &lfile, .expr)) |*ast| {
-        defer ast.deinit();
+    var ast = (try Ast.parse(ally, global, &lfile, .expr)) orelse return;
+    defer ast.deinit();
+    const root = ast.root;
 
-        const root = ast.root;
+    // print ast
+    try stdout.print(
+        "ast:\n{}\n{}\n\n",
+        .{root.ltype, root.fmt(.{})}
+    );
 
-        // print ast
-        try stdout.print(
-            "ast:\n{}\n{}\n\n",
-            .{root.ltype, root.fmt(.{})}
-        );
+    // compile and exec expr
+    var block =
+        (try dynamic.compile(ally, &lfile, global, &root)) orelse return;
+    defer block.deinit(ally);
 
-        // compile and exec expr
-        if (try dynamic.compile(ally, &lfile, global, &root)) |*block| {
-            defer block.deinit();
+    block.debug();
 
-            block.debug();
+    // exec
+    var vm = dynamic.FlVm.init(ally);
+    defer vm.deinit();
 
-            // exec
-            var vm = dynamic.FlVm.init(ally);
-            defer vm.deinit();
+    try vm.exec(&block);
+    vm.debug();
 
-            try vm.exec(block);
-            vm.debug();
+    std.debug.assert(vm.stack.items.len == 1);
 
-            std.debug.assert(vm.stack.items.len == 1);
-
-            const value = vm.stack.items[0];
-            try stdout.print("{}\n", .{value.fmt(.{})});
-        }
-    }
+    const value = vm.stack.items[0];
+    try stdout.print("{}\n", .{value.fmt(.{})});
 }
 
 pub fn main() !void {
@@ -104,6 +103,7 @@ pub fn main() !void {
     while (true) {
         // get text with linenoise
         const raw_line: ?[*:0]u8 = c.linenoise("> ");
+        defer c.linenoiseFree(raw_line);
 
         const line =
             if (raw_line == null or raw_line.?[0] == 0) ""

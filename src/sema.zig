@@ -6,6 +6,7 @@ const FlFile = @import("file.zig");
 const Expr = @import("fluent/expr.zig");
 const FlType = @import("fluent/type.zig").FlType;
 
+const FlBlock = dynamic.FlBlock;
 const Allocator = std.mem.Allocator;
 
 pub const Error = Allocator.Error;
@@ -28,17 +29,27 @@ pub const Context = struct {
 pub const Scope = struct {
     const Self = @This();
 
+    const Binding = struct {
+        // all bindings are typed
+        ltype: FlType,
+
+        // contains a compiled expr, currently using this for builtins. in the
+        // future I will probably also want bindings that store Exprs and/or
+        // other info
+        block: ?FlBlock = null,
+    };
+
     arena: std.heap.ArenaAllocator,
 
     // maps {ident: ltype}
     // I think eventually I will need to store Exprs or FlValues associated with
     // idents here, but for builtins I think it will always be unnecessary
-    map: std.StringHashMap(FlType),
+    map: std.StringHashMap(*const Binding),
 
     pub fn init(ally: Allocator) Self {
         return Self{
             .arena = std.heap.ArenaAllocator.init(ally),
-            .map = std.StringHashMap(FlType).init(ally),
+            .map = std.StringHashMap(*const Binding).init(ally),
         };
     }
 
@@ -50,28 +61,18 @@ pub const Scope = struct {
 
         // some types have to be created from scratch, like `type` and `fn`
         const type_ltype = FlType{ .ltype = {} };
-        try self.bind("type", type_ltype);
+        try self.bind("type", .{ .ltype = type_ltype });
 
-        const fn_param_arr = [_]FlType{FlType.init_list(&type_ltype)};
-        const fn_params = try scope_ally.dupe(FlType, fn_param_arr[0..]);
-        const fn_ltype = FlType.init_function(fn_params, &type_ltype);
-        try self.bind("fn", fn_ltype);
+        const fn_params = [_]FlType{FlType.init_list(&type_ltype)};
+        const fn_ltype = FlType.init_function(fn_params[0..], &type_ltype);
+        try self.bind("fn", .{ .ltype = fn_ltype });
 
         // TODO add these through dynamic exec
         const int_ltype = FlType{ .int = {} };
-        const add_param_arr = [_]FlType{int_ltype, int_ltype};
-        const add_params = try scope_ally.dupe(FlType, add_param_arr[0..]);
-        const add_ltype = FlType.init_function(add_params, &int_ltype);
-        try self.bind("+", add_ltype);
-
-        // TODO bind this to the add function
-        var add_block = try dynamic.FlBlock.assemble(
-            scope_ally,
-            &.{},
-            \\ push 0
-            \\ iadd
-        );
-        defer add_block.deinit();
+        const add_params = [_]FlType{int_ltype, int_ltype};
+        const add_ltype = FlType.init_function(add_params[0..], &int_ltype);
+        const add_block = try FlBlock.assemble(scope_ally, &.{}, "iadd");
+        try self.bind("+", .{ .ltype = add_ltype, .block = add_block });
 
         std.debug.print("ASSEMBLED:\n", .{});
         add_block.debug();
@@ -125,7 +126,7 @@ pub const Scope = struct {
                 // print binding
                 try tc.add_box(canvas.TextBox.init(
                     .{ .x = 0, .y = @intCast(i32, i) },
-                    try std.fmt.allocPrint(tmp_ally, "{}", .{value}),
+                    try std.fmt.allocPrint(tmp_ally, "{}", .{value.*.ltype}),
                     canvas.ConsoleColor{}
                 ));
             }
@@ -137,25 +138,29 @@ pub const Scope = struct {
         return self;
     }
 
-    fn allocator(self: *Self) Allocator {
-        return self.arena.allocator();
-    }
-
     pub fn deinit(self: *Self) void {
         self.arena.deinit();
         self.map.deinit();
     }
 
+    fn allocator(self: *Self) Allocator {
+        return self.arena.allocator();
+    }
+
     pub fn bind(
         self: *Self,
         key: []const u8,
-        value: FlType
+        binding: Binding
     ) Allocator.Error!void {
-        try self.map.put(key, value);
+        const ally = self.allocator();
+        var ptr = try ally.create(Binding);
+        ptr.* = binding;
+
+        try self.map.put(key, ptr);
     }
 
-    pub fn get(self: *const Self, key: []const u8) ?*const FlType {
-        return if (self.map.get(key)) |value| &value else null;
+    pub fn get(self: *const Self, key: []const u8) ?*const Binding {
+        return self.map.get(key);
     }
 };
 
@@ -176,7 +181,7 @@ pub fn type_check_and_infer(
         .ltype => FlType{ .ltype = {} },
         .ident => infer_ident: {
             if (ctx.global.get(expr.slice)) |binding| {
-                break :infer_ident try binding.clone(ast_ally);
+                break :infer_ident try binding.ltype.clone(ast_ally);
             } else {
                 try ctx.ctx.add_message(.err, "unknown identifier", expr.slice);
                 break :infer_ident null;
