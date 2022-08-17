@@ -26,6 +26,7 @@ pub const Context = struct {
     }
 };
 
+/// TODO give this its own file
 pub const Scope = struct {
     const Self = @This();
 

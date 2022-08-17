@@ -172,50 +172,6 @@ pub const Ast = struct {
     arena: std.heap.ArenaAllocator,
     root: Expr,
 
-    /// intakes program as an lfile and outputs an ast
-    pub fn parse(
-        ally: Allocator,
-        global: *const sema.Scope,
-        lfile: *const FlFile,
-        to: enum{expr, file}
-    ) !?Self {
-        var ctx = FlFile.Context.init(ally, lfile);
-        defer ctx.deinit();
-
-        // lex
-        var tbuf = try lex.lex(&ctx);
-        defer tbuf.deinit(&ctx);
-
-        try tbuf.validate(&ctx);
-
-        if (ctx.err) {
-            try ctx.print_messages();
-            return null;
-        }
-
-        // generate and typing infer ast
-        var self = Self{
-            .arena = std.heap.ArenaAllocator.init(ally),
-            .root = undefined,
-        };
-
-        self.root = (try switch (to) {
-            .expr => generate_expr_ast(&ctx, &self, &tbuf),
-            .file => generate_file_ast(&ctx, &self, &tbuf),
-        }) orelse return null;
-
-        var sema_ctx = sema.Context.init(&ctx, global);
-
-        try infer_expr_ltype(&sema_ctx, &self, &self.root);
-
-        if (ctx.err) {
-            try ctx.print_messages();
-            return null;
-        }
-
-        return self;
-    }
-
     pub fn deinit(self: *Self) void {
         self.arena.deinit();
     }
@@ -224,3 +180,47 @@ pub const Ast = struct {
         return self.arena.allocator();
     }
 };
+
+/// intakes program as an lfile and outputs an ast
+pub fn parse(
+    ally: Allocator,
+    scope: *const sema.Scope,
+    lfile: *const FlFile,
+    to: enum{expr, file}
+) !?Ast {
+    var ctx = FlFile.Context.init(ally, lfile);
+    defer ctx.deinit();
+
+    // lex
+    var tbuf = try lex.lex(&ctx);
+    defer tbuf.deinit(&ctx);
+
+    try tbuf.validate(&ctx);
+
+    if (ctx.err) {
+        try ctx.print_messages();
+        return null;
+    }
+
+    // generate and typing infer ast
+    var ast = Ast{
+        .arena = std.heap.ArenaAllocator.init(ally),
+        .root = undefined,
+    };
+
+    ast.root = (try switch (to) {
+        .expr => generate_expr_ast(&ctx, &ast, &tbuf),
+        .file => generate_file_ast(&ctx, &ast, &tbuf),
+    }) orelse return null;
+
+    var sema_ctx = sema.Context.init(&ctx, scope);
+
+    try infer_expr_ltype(&sema_ctx, &ast, &ast.root);
+
+    if (ctx.err) {
+        try ctx.print_messages();
+        return null;
+    }
+
+    return ast;
+}

@@ -1,22 +1,26 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const parse = @import("parse.zig");
 const sema = @import("sema.zig");
 const Expr = @import("fluent/expr.zig");
 const FlFile = @import("file.zig");
 const FlValue = @import("fluent/value.zig").FlValue;
 
+const Scope = sema.Scope;
 const Allocator = std.mem.Allocator;
+
+// TODO split up this file
 
 const Context = struct {
     const Self = @This();
 
     ctx: *FlFile.Context,
-    scope: *const sema.Scope,
+    scope: *const Scope,
 
     ally: Allocator, // backing allocator
     arena: std.heap.ArenaAllocator, // use for memory scoped to context lifetime
 
-    fn init(ctx: *FlFile.Context, scope: *const sema.Scope) Self {
+    fn init(ctx: *FlFile.Context, scope: *const Scope) Self {
         var ally = ctx.ally;
         return Self{
             .ctx = ctx,
@@ -309,7 +313,7 @@ pub const FlVm = struct {
         try self.stack.append(value);
     }
 
-    pub fn exec(self: *Self, block: *const FlBlock) !void {
+    pub fn execute_block(self: *Self, block: *const FlBlock) !void {
         if (comptime builtin.mode == .Debug) {
             const diff = block.find_total_diff();
 
@@ -398,8 +402,8 @@ fn compile_expr(
 /// returns program allocated on ally
 pub fn compile(
     ally: Allocator,
+    scope: *const Scope,
     lfile: *const FlFile,
-    scope: *const sema.Scope,
     ast: *const Expr
 ) !?FlBlock {
     var lfile_ctx = FlFile.Context.init(ally, lfile);
@@ -419,4 +423,36 @@ pub fn compile(
     }
 
     return try builder.to_block(ally);
+}
+
+/// evaluates an expression from start to finish. returns 'null' and prints
+/// out error messages if any stage of compilation fails.
+pub fn evaluate(
+    ally: Allocator,
+    scope: *Scope,
+    name: []const u8,
+    text: []const u8
+) !?FlValue {
+    var lfile = try FlFile.init(ally, name, text);
+    defer lfile.deinit(ally);
+
+    var ast = (try parse.parse(ally, scope, &lfile, .expr)) orelse return null;
+    defer ast.deinit();
+
+    var block =
+        (try compile(ally, scope, &lfile, &ast.root)) orelse return null;
+    defer block.deinit(ally);
+
+    if (comptime builtin.mode == .Debug) {
+        const diff = block.find_total_diff();
+        std.debug.assert(diff.in == 0 and diff.out == 1);
+    }
+
+    var vm = FlVm.init(ally);
+    defer vm.deinit();
+
+    try vm.execute_block(&block);
+    std.debug.assert(vm.stack.items.len == 1);
+
+    return vm.stack.items[0];
 }
