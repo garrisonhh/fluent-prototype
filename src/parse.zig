@@ -27,6 +27,7 @@ fn generate_ast_r(
     from: usize,
     out_to: *usize
 ) Error!Expr {
+    const ast_ally = ast.allocator();
     const token = tbuf.tokens.get(from);
 
     out_to.* = from + 1; // for lists, this is modified again
@@ -65,7 +66,7 @@ fn generate_ast_r(
             break :gen_matched Expr.init_sequence(
                 seq_type,
                 slice,
-                try ast.ast_ally.dupe(Expr, children.items)
+                try ast_ally.dupe(Expr, children.items)
             );
         },
         .ident => Expr.init_slice(.ident, token.view),
@@ -120,6 +121,8 @@ fn generate_file_ast(
     ast: *Ast,
     tbuf: *const TokenBuffer
 ) Error!?Expr {
+    const ast_ally = ast.allocator();
+
     if (tbuf.tokens.len == 0) {
         try err_empty_program(ctx);
         return null;
@@ -142,7 +145,7 @@ fn generate_file_ast(
     return Expr.init_sequence(
         .file,
         slice,
-        try ast.ast_ally.dupe(Expr, children.items)
+        try ast_ally.dupe(Expr, children.items)
     );
 }
 
@@ -167,23 +170,25 @@ fn infer_expr_ltype(
 pub const Ast = struct {
     const Self = @This();
 
-    arena: std.heap.ArenaAllocator,
     backing_ally: Allocator,
-    ast_ally: Allocator,
+    arena: std.heap.ArenaAllocator,
 
     root: Expr = undefined,
 
-    pub fn init(backing_ally: Allocator) Ast {
-        var arena = std.heap.ArenaAllocator.init(backing_ally);
+    pub fn init(ally: Allocator) Ast {
+        var arena = std.heap.ArenaAllocator.init(ally);
         return Ast {
+            .backing_ally = ally,
             .arena = arena,
-            .backing_ally = backing_ally,
-            .ast_ally = arena.allocator(),
         };
     }
 
     pub fn deinit(self: *Self) void {
         self.arena.deinit();
+    }
+
+    pub fn allocator(self: *Self) Allocator {
+        return self.arena.allocator();
     }
 };
 

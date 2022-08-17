@@ -152,6 +152,9 @@ pub fn type_check_and_infer(
     ast: *parse.Ast,
     expr: *const Expr
 ) Error!?FlType {
+    const ast_ally = ast.allocator();
+    const msg_ally = ctx.ctx.temp_allocator();
+
     return switch (expr.etype) {
         .file => FlType{ .nil = {} },
         .int => FlType{ .int = {} },
@@ -160,15 +163,13 @@ pub fn type_check_and_infer(
         .ltype => FlType{ .ltype = {} },
         .ident => infer_ident: {
             if (ctx.global.get(expr.slice)) |binding| {
-                break :infer_ident try binding.clone(ast.ast_ally);
+                break :infer_ident try binding.clone(ast_ally);
             } else {
                 try ctx.ctx.add_message(.err, "unknown identifier", expr.slice);
                 break :infer_ident null;
             }
         },
         .call => infer_call: {
-            const msg_ally = ctx.ctx.temp_allocator();
-
             const children = expr.children.?;
             if (children.len == 0) {
                 try ctx.ctx.add_message(
@@ -226,7 +227,7 @@ pub fn type_check_and_infer(
 
             if (bad_params) break :infer_call null;
 
-            break :infer_call try function.returns.clone(ast.ast_ally);
+            break :infer_call try function.returns.clone(ast_ally);
         },
         .list => infer_list: {
             const children = expr.children.?;
@@ -238,8 +239,6 @@ pub fn type_check_and_infer(
             const fst = children[0];
             for (children[1..]) |child| {
                 if (!child.ltype.eql(&fst.ltype)) {
-                    const msg_ally = ctx.ctx.temp_allocator();
-
                     try ctx.ctx.add_message(
                         .err,
                         "list contains mismatched types:",
@@ -264,7 +263,7 @@ pub fn type_check_and_infer(
                 }
             }
 
-            const subtype = try fst.ltype.create_clone(ast.ast_ally);
+            const subtype = try fst.ltype.create_clone(ast_ally);
             break :infer_list FlType.init_list(subtype);
         }
     };
