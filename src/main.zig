@@ -19,7 +19,8 @@ fn eval_repl(
     text: []const u8
 ) !void {
     var result =
-        (try dynamic.evaluate(ally, scope, "stdin", text)) orelse return;
+        (try dynamic.eval(ally, scope, "stdin", text)) orelse return;
+    defer result.deinit(ally);
 
     try stdout.print("{}\n", .{result.fmt(.{})});
 }

@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const util = @import("util/util.zig");
 const parse = @import("parse.zig");
 const dynamic = @import("dynamic.zig");
 const FlFile = @import("file.zig");
@@ -39,13 +40,6 @@ pub const Scope = struct {
         // the future I will probably also want bindings that store Exprs and/or
         // other info
         block: FlBlock,
-
-        fn init(ltype: FlType, block: FlBlock) Binding {
-            return Binding{
-                .ltype = ltype,
-                .block = block
-            };
-        }
     };
 
     arena: std.heap.ArenaAllocator,
@@ -69,48 +63,41 @@ pub const Scope = struct {
         const scope_ally = self.allocator();
 
         // some types have to be created from scratch, like `type` and `fn`
+        // once those are created, the rest can be compiled!
         const type_ltype = FlType{ .ltype = {} };
-        const type_block = try FlBlock.assemble(
-            scope_ally,
-            &.{ FlValue{ .ltype = FlType{ .ltype = {} } } },
-            \\ push 0
-        );
-        try self.bind("type", Binding.init(type_ltype, type_block));
 
-        const fn_params = [_]FlType{FlType.init_list(&type_ltype)};
-        const fn_ltype = FlType.init_function(fn_params[0..], &type_ltype);
-        const fn_block = try FlBlock.assemble(
-            scope_ally,
-            &.{},
-            "debug" // TODO
-        );
-        try self.bind("fn", Binding.init(fn_ltype, fn_block));
+        try self.bind("type", Binding{
+            .ltype = type_ltype,
+            .block = FlBlock{
+                .constants = &.{ FlValue{ .ltype = FlType{ .ltype = {} } } },
+                .ops = FlBlock.assemble_ops("push 0")
+            }
+        });
 
-        // TODO add these through dynamic exec
-        const int_ltype = FlType{ .int = {} };
-        const add_params = [_]FlType{int_ltype, int_ltype};
-        const add_ltype = FlType.init_function(add_params[0..], &int_ltype);
-        const add_block = try FlBlock.assemble(scope_ally, &.{}, "iadd");
-        try self.bind("+", Binding.init(add_ltype, add_block));
-
-        std.debug.print("ASSEMBLED:\n", .{});
-        add_block.debug();
+        try self.bind("fn", Binding{
+            .ltype = try FlType.init_function(
+                scope_ally,
+                &[_]FlType{
+                    try FlType.init_list(scope_ally, &type_ltype),
+                    type_ltype
+                },
+                &type_ltype
+            ),
+            .block = FlBlock{
+                .constants = &.{},
+                .ops = FlBlock.assemble_ops("fn_type"),
+            }
+        });
 
         // TODO add other builtins through dynamic exec
-        const builtin_types = [_][2][]const u8{
+        const compilable_builtins = comptime [_][2][]const u8{
             .{"int", "type"},
             .{"float", "type"},
-            .{"string", "type"},
         };
 
-        _ = builtin_types;
-        // for (builtin_types) |kv| {
-        //     const name = kv[0];
-        //     const ltype_expr = kv[1];
-        //
-        //     _ = name;
-        //     _ = ltype_expr;
-        // }
+        inline for (compilable_builtins) |kv| {
+            try self.compile_bind(ally, kv[0], kv[1]);
+        }
 
         if (comptime builtin.mode == .Debug) {
             const canvas = @import("util/canvas.zig");
@@ -168,14 +155,61 @@ pub const Scope = struct {
 
     pub fn bind(
         self: *Self,
-        key: []const u8,
+        name: []const u8,
         binding: Binding
     ) Allocator.Error!void {
         const ally = self.allocator();
         var ptr = try ally.create(Binding);
         ptr.* = binding;
 
-        try self.map.put(key, ptr);
+        try self.map.put(name, ptr);
+    }
+
+    pub fn assemble_bind(
+        self: *Self,
+        ally: Allocator,
+        name: []const u8,
+        comptime ltype_expr: []const u8,
+        comptime constants: []const []const u8,
+        comptime assembly: []const u8
+    ) !void {
+        const scope_ally = self.allocator();
+        const eval = dynamic.internal_eval;
+
+        var ltype = (try eval(ally, self, "builtin", ltype_expr)).ltype;
+
+        var const_vals: [constants.len]FlValue = undefined;
+        inline for (constants) |text, i| {
+            const_vals[i] = try eval(ally, self, "builtin constant", text);
+        }
+
+        const block = try FlBlock.assemble(scope_ally, &const_vals, assembly);
+        try self.bind(name, Binding{ .ltype = ltype, .block = block });
+    }
+
+    pub fn compile_bind(
+        self: *Self,
+        ally: Allocator,
+        comptime name: []const u8,
+        comptime text: []const u8
+    ) !void {
+        const scope_ally = self.allocator();
+
+        var lfile = try FlFile.init(ally, name, text);
+        defer lfile.deinit(ally);
+
+        var ast = (try parse.parse(ally, self, &lfile, .expr))
+                  orelse return;
+        defer ast.deinit();
+
+        var block = (try dynamic.compile(ally, self, &lfile, &ast.root))
+                    orelse return;
+        defer block.deinit(ally);
+
+        try self.bind(name, Binding{
+            .ltype = try ast.root.ltype.clone(scope_ally),
+            .block = try block.clone(scope_ally),
+        });
     }
 
     pub fn get(self: *const Self, key: []const u8) ?*const Binding {
@@ -193,6 +227,7 @@ pub fn type_check_and_infer(
     const msg_ally = ctx.ctx.temp_allocator();
 
     return switch (expr.etype) {
+        .nil => FlType{ .nil = {} },
         .file => FlType{ .nil = {} },
         .int => FlType{ .int = {} },
         .float => FlType{ .float = {} },
@@ -269,7 +304,7 @@ pub fn type_check_and_infer(
             const children = expr.children.?;
             if (children.len == 0) {
                 const unk = FlType{ .unknown = {} };
-                break :infer_list FlType.init_list(&unk);
+                break :infer_list try FlType.init_list(ast_ally, &unk);
             }
 
             const fst = children[0];
@@ -299,8 +334,7 @@ pub fn type_check_and_infer(
                 }
             }
 
-            const subtype = try fst.ltype.create_clone(ast_ally);
-            break :infer_list FlType.init_list(subtype);
+            break :infer_list try FlType.init_list(ast_ally, &fst.ltype);
         }
     };
 }

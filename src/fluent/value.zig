@@ -2,30 +2,63 @@ const std = @import("std");
 const Expr = @import("expr.zig");
 const FlType = @import("type.zig").FlType;
 
-/// FlValue is the *dynamic* representation of a Fluent value
+const Allocator = std.mem.Allocator;
+
+/// FlValue is the dynamic representation of a Fluent value. it is specifically
+/// designed to be usable on an arena allocator, no reallocations are performed.
 /// eventually may be able to remove the enum as an optimization
 pub const FlValue = union(enum) {
     const Self = @This();
+    const Enum = @typeInfo(Self).Union.tag_type.?;
 
-    // TODO eventually this will cause memory bugs, make sure to clone
-    ltype: FlType,
+    comptime {
+        // nil being zero means initializing empty FlValues will be faster
+        std.debug.assert(@enumToInt(Enum.nil) == 0);
+    }
+
+    nil,
     int: i64,
     float: f64,
-    string: []const u8,
+    ltype: FlType,
+    list: []Self,
 
+    /// creates a zeroed list
+    pub fn init_list(ally: Allocator, n: usize) Allocator.Error!Self {
+        var list = try ally.alloc(Self, n);
+        std.mem.set(Self, list, Self{ .nil = {} });
+
+        return Self{ .list = list };
+    }
+
+    pub fn deinit(self: *Self, ally: Allocator) void {
+        switch (self.*) {
+            .ltype => |*t| t.deinit(ally),
+            .list => |l| ally.free(l),
+            else => {}
+        }
+    }
+
+    // TODO I feel like this should be in dynamic.compile_expr and not here
     pub fn from_literal(expr: *const Expr) !Self {
         std.debug.assert(expr.is_flat_literal());
         return switch (expr.etype) {
-            .int => Self{
-                .int = try std.fmt.parseInt(i64, expr.slice, 10)
-            },
-            .float => Self{
-                .float = try std.fmt.parseFloat(f64, expr.slice)
-            },
-            .string => Self{
-                .string = expr.slice
-            },
+            .nil => Self{ .nil = {} },
+            .int => Self{ .int = try std.fmt.parseInt(i64, expr.slice, 10) },
+            .float => Self{ .float = try std.fmt.parseFloat(f64, expr.slice) },
             else => @panic("TODO"),
+        };
+    }
+
+    pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
+        return switch (self) {
+            .nil, .int, .float => self,
+            .ltype => |t| Self{ .ltype = try t.clone(ally) },
+            .list => |l| blk: {
+                var new_list = try ally.alloc(FlValue, self.list.len);
+                for (l) |child, i| new_list[i] = try child.clone(ally);
+
+                break :blk Self{ .list = new_list };
+            },
         };
     }
 
@@ -50,10 +83,18 @@ pub const FlValue = union(enum) {
             }
 
             switch (self.*) {
+                .nil => try writer.writeAll("nil"),
                 .int => |n| try writer.print("{d}", .{n}),
                 .float => |n| try writer.print("{d}", .{n}),
-                .string => |s| try writer.print("{s}", .{s}),
                 .ltype => |t| try writer.print("{}", .{t}),
+                .list => |l| {
+                    try writer.writeByte('[');
+                    for (l) |child, i| {
+                        if (i > 0) try writer.writeByte(' ');
+                        try writer.print("{}", .{child.fmt(options)});
+                    }
+                    try writer.writeByte(']');
+                }
             }
         }
     };

@@ -1,6 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const Allocator = std.mem.Allocator;
+
 pub const FmtError = std.os.WriteError
                   || std.fmt.AllocPrintError
                   || std.fmt.BufPrintError;
@@ -26,4 +28,13 @@ pub fn slice_from_bookends(a: anytype, b: @TypeOf(a)) Error!@TypeOf(a) {
     }
 
     return a.ptr[0..@ptrToInt(b.ptr) - @ptrToInt(a.ptr) + b.len];
+}
+
+pub fn place_on(
+    ally: Allocator,
+    value: anytype
+) Allocator.Error!*@TypeOf(value) {
+    const ptr = try ally.create(@TypeOf(value));
+    ptr.* = value;
+    return ptr;
 }

@@ -6,14 +6,15 @@ const FlType = @import("type.zig").FlType;
 const Self = @This();
 
 pub const Type = enum {
-    call,
-    file,
-    list,
-    ident,
+    nil,
     int,
     float,
     string,
-    // ltype,
+
+    list,
+    ident,
+    call,
+    file,
 
     fn is_sequence(self: Type) bool {
         return switch (self) {

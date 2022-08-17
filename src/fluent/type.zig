@@ -7,12 +7,12 @@ pub const FlType = union(enum) {
     const Self = @This();
 
     pub const Function = struct {
-        params: []const Self,
-        returns: *const Self
+        params: []Self,
+        returns: *Self
     };
 
     pub const List = struct {
-        subtype: *const Self,
+        subtype: *Self,
     };
 
     function: Function,
@@ -26,19 +26,44 @@ pub const FlType = union(enum) {
     builtin,
     unknown,
 
-    pub fn init_function(params: []const Self, returns: *const Self) Self {
+    pub fn init_function(
+        ally: Allocator,
+        params: []const Self,
+        returns: *const Self
+    ) Allocator.Error!Self {
+        var new_params = try ally.alloc(Self, params.len);
+        for (params) |param, i| new_params[i] = try param.clone(ally);
+
         return Self{
             .function = Function{
-                .params = params,
-                .returns = returns
+                .params = new_params,
+                .returns = try util.place_on(ally, try returns.clone(ally)),
             }
         };
     }
 
-    pub fn init_list(subtype: *const Self) Self{
+    pub fn init_list(
+        ally: Allocator,
+        subtype: *const Self
+    ) Allocator.Error!Self {
         return Self{
-            .list = List{ .subtype = subtype }
+            .list = List{
+                .subtype = try util.place_on(ally, try subtype.clone(ally))
+            }
         };
+    }
+
+    pub fn deinit(self: *Self, ally: Allocator) void {
+        switch (self.*) {
+            .function => |*function| {
+                for (function.params) |*param| param.deinit(ally);
+                ally.free(function.params);
+
+                function.returns.deinit(ally);
+            },
+            .list => |list| list.subtype.deinit(ally),
+            else => {}
+        }
     }
 
     pub fn eql(self: *const Self, other: *const Self) bool {
@@ -68,26 +93,14 @@ pub const FlType = union(enum) {
     /// creates a deep copy of this type
     pub fn clone(self: *const Self, ally: Allocator) Allocator.Error!Self {
         return switch (self.*) {
-            .function => |function| clone_function: {
-                var params = try ally.alloc(Self, function.params.len);
-                for (function.params) |param, i| {
-                    params[i] = try param.clone(ally);
-                }
-
-                const returns = try function.returns.create_clone(ally);
-                break :clone_function Self.init_function(params, returns);
-            },
-            .list => |list| Self.init_list(try list.subtype.create_clone(ally)),
+            .function => |function| Self.init_function(
+                ally,
+                function.params,
+                function.returns
+            ),
+            .list => |list| Self.init_list(ally, list.subtype),
             else => self.*
         };
-    }
-
-    /// creates a deep copy in allocated memory
-    pub fn create_clone(self: *const Self, ally: Allocator) !*Self {
-        var copy = try ally.create(Self);
-        copy.* = try self.clone(ally);
-
-        return copy;
     }
 
     pub fn format(
