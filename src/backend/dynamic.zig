@@ -1,12 +1,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const sema = @import("sema.zig");
 const util = @import("../util/util.zig");
 const fluent = @import("../fluent.zig");
 const frontend = @import("../frontend.zig");
 const FlFile = @import("../util/file.zig");
 
-const Scope = sema.Scope;
+const Scope = frontend.Scope;
 const Expr = frontend.Expr;
 const FlType = fluent.FlType;
 const FlValue = fluent.FlValue;
@@ -601,8 +600,13 @@ pub fn eval(
     var lfile = try FlFile.init(ally, name, text);
     defer lfile.deinit(ally);
 
-    var ast = (try frontend.parse(ally, scope, &lfile, .expr)) orelse return null;
+    var ctx = FlFile.Context.init(ally, &lfile);
+    defer ctx.deinit();
+
+    var ast = (try frontend.parse(&ctx, .expr)) orelse return null;
     defer ast.deinit();
+
+    try frontend.analyze(&ctx, scope, &ast);
 
     return compile_run(ally, scope, &lfile, &ast.root);
 }

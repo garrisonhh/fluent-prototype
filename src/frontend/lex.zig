@@ -1,6 +1,7 @@
 const std = @import("std");
 const FlFile = @import("../util/file.zig");
 
+const Context = FlFile.Context;
 const Allocator = std.mem.Allocator;
 
 const CharClass = enum {
@@ -66,13 +67,13 @@ pub const TokenBuffer = struct {
         };
     }
 
-    pub fn deinit(self: *Self, ctx: *FlFile.Context) void {
+    pub fn deinit(self: *Self, ctx: *Context) void {
         self.tokens.deinit(ctx.ally);
     }
 
     fn emit(
         self: *Self,
-        ctx: *FlFile.Context,
+        ctx: *Context,
         ttype: Token.Type,
         view: []const u8
     ) !void {
@@ -82,7 +83,7 @@ pub const TokenBuffer = struct {
         });
     }
 
-    fn validate_parens(self: *const Self, ctx: *FlFile.Context) !void {
+    fn validate_parens(self: *const Self, ctx: *Context) !void {
         var level: i32 = 0;
         var warned_unmatched_at_zero: bool = false;
 
@@ -134,7 +135,7 @@ pub const TokenBuffer = struct {
         }
     }
 
-    pub fn validate(self: *const Self, ctx: *FlFile.Context) !void {
+    pub fn validate(self: *const Self, ctx: *Context) !void {
         try self.validate_parens(ctx);
     }
 
@@ -165,7 +166,7 @@ fn classify_char_at(str: []const u8, index: usize) CharClass {
 }
 
 /// tokenizes ctx.lfile
-pub fn lex(ctx: *FlFile.Context) Allocator.Error!TokenBuffer {
+pub fn lex(ctx: *Context) Allocator.Error!TokenBuffer {
     const str = ctx.lfile.text;
     var tbuf = TokenBuffer.init();
 

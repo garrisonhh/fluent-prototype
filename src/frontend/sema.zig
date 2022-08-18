@@ -1,33 +1,20 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const dynamic = @import("dynamic.zig");
+const parse = @import("parse.zig");
+const backend = @import("../backend.zig");
 const util = @import("../util/util.zig");
 const fluent = @import("../fluent.zig");
-const frontend = @import("../frontend.zig");
+const Expr = @import("expr.zig");
 const FlFile = @import("../util/file.zig");
 
-const Expr = frontend.Expr;
+const Ast = parse.Ast;
+const Context = FlFile.Context;
 const FlType = fluent.FlType;
 const FlValue = fluent.FlValue;
-const FlBlock = dynamic.FlBlock;
+const FlBlock = backend.FlBlock;
 const Allocator = std.mem.Allocator;
 
 pub const Error = Allocator.Error;
-
-pub const Context = struct {
-    const Self = @This();
-
-    // ally: Allocator,
-    ctx: *FlFile.Context,
-    global: *const Scope,
-
-    pub fn init(ctx: *FlFile.Context, global: *const Scope) Self {
-        return Self{
-            .ctx = ctx,
-            .global = global,
-        };
-    }
-};
 
 /// TODO give this its own file
 pub const Scope = struct {
@@ -175,7 +162,7 @@ pub const Scope = struct {
         comptime assembly: []const u8
     ) !void {
         const scope_ally = self.allocator();
-        const eval = dynamic.internal_eval;
+        const eval = backend.internal_eval;
 
         var ltype = (try eval(ally, self, "builtin", ltype_expr)).ltype;
 
@@ -199,11 +186,16 @@ pub const Scope = struct {
         var lfile = try FlFile.init(ally, name, text);
         defer lfile.deinit(ally);
 
-        var ast = (try frontend.parse(ally, self, &lfile, .expr))
+        var ctx = Context.init(ally, &lfile);
+        defer ctx.deinit();
+
+        var ast = (try parse.parse(&ctx, .expr))
                   orelse return;
         defer ast.deinit();
 
-        var block = (try dynamic.compile(ally, self, &lfile, &ast.root))
+        try analyze(&ctx, self, &ast);
+
+        var block = (try backend.compile(ally, self, &lfile, &ast.root))
                     orelse return;
         defer block.deinit(ally);
 
@@ -218,48 +210,52 @@ pub const Scope = struct {
     }
 };
 
-// inference is generally bottom-up, only bindings are top-down
-pub fn type_infer(
+/// infers types from the bottom up, using scope as context
+fn type_infer(
     ctx: *Context,
-    ast: *frontend.Ast,
-    expr: *const Expr
-) Error!?FlType {
-    const ast_ally = ast.allocator();
-    const msg_ally = ctx.ctx.temp_allocator();
+    scope: *Scope,
+    ast_ally: Allocator,
+    expr: *Expr
+) Error!void {
+    const msg_ally = ctx.temp_allocator();
 
-    return switch (expr.etype) {
+    if (expr.children) |children| {
+        for (children) |*child| try type_infer(ctx, scope, ast_ally, child);
+    }
+
+    expr.ltype = switch (expr.etype) {
         .nil => FlType{ .nil = {} },
         .file => FlType{ .nil = {} },
         .int => FlType{ .int = {} },
         .float => FlType{ .float = {} },
         .string => FlType{ .string = {} },
         .ident => infer_ident: {
-            if (ctx.global.get(expr.slice)) |binding| {
+            if (scope.get(expr.slice)) |binding| {
                 break :infer_ident try binding.ltype.clone(ast_ally);
             } else {
-                try ctx.ctx.add_message(.err, "unknown identifier", expr.slice);
-                break :infer_ident null;
+                try ctx.add_message(.err, "unknown identifier", expr.slice);
+                return; // TODO error
             }
         },
         .call => infer_call: {
             const children = expr.children.?;
             if (children.len == 0) {
-                try ctx.ctx.add_message(
+                try ctx.add_message(
                     .err,
                     "function call without function",
                     expr.slice
                 );
-                break :infer_call null;
+                return; // TODO error
             }
 
             const fn_expr = children[0];
             if (fn_expr.ltype != .function) {
-                try ctx.ctx.add_message(
+                try ctx.add_message(
                     .err,
                     "attempted to call non-function",
                     expr.slice
                 );
-                break :infer_call null;
+                return; // TODO error
             }
 
             // type check parameters
@@ -279,7 +275,7 @@ pub fn type_infer(
                         "wrong parameter type: expected {}, found {}",
                         .{expected, actual}
                     );
-                    try ctx.ctx.add_message(.err, msg, params[i].slice);
+                    try ctx.add_message(.err, msg, params[i].slice);
                 }
             }
 
@@ -294,10 +290,10 @@ pub fn type_infer(
                     "too {s} parameters: expected {d}, found {d}",
                     .{cmp_text, function.params.len, params.len}
                 );
-                try ctx.ctx.add_message(.err, msg, expr.slice);
+                try ctx.add_message(.err, msg, expr.slice);
             }
 
-            if (bad_params) break :infer_call null;
+            if (bad_params) return; // TODO error
 
             break :infer_call try function.returns.clone(ast_ally);
         },
@@ -311,7 +307,7 @@ pub fn type_infer(
             const fst = children[0];
             for (children[1..]) |child| {
                 if (!child.ltype.eql(&fst.ltype)) {
-                    try ctx.ctx.add_message(
+                    try ctx.add_message(
                         .err,
                         "list contains mismatched types:",
                         expr.slice
@@ -322,20 +318,29 @@ pub fn type_infer(
                         "this is {}",
                         .{fst.ltype}
                     );
-                    try ctx.ctx.add_message(.note, fst_note, fst.slice);
+                    try ctx.add_message(.note, fst_note, fst.slice);
 
                     const child_note = try std.fmt.allocPrint(
                         msg_ally,
                         "but this is {}",
                         .{child.ltype}
                     );
-                    try ctx.ctx.add_message(.note, child_note, child.slice);
+                    try ctx.add_message(.note, child_note, child.slice);
 
-                    break :infer_list null;
+                    return; // TODO error
                 }
             }
 
             break :infer_list try FlType.init_list(ast_ally, &fst.ltype);
         }
     };
+}
+
+/// semantic analysis. performs type inference.
+pub fn analyze(
+    ctx: *Context,
+    scope: *Scope,
+    ast: *parse.Ast
+) Error!void {
+    return type_infer(ctx, scope, ast.allocator(), &ast.root);
 }

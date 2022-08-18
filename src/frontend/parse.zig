@@ -1,18 +1,16 @@
 const std = @import("std");
 const lex = @import("lex.zig");
-const backend = @import("../backend.zig");
 const fluent = @import("../fluent.zig");
 const util = @import("../util/util.zig");
 const Expr = @import("expr.zig");
 const FlFile = @import("../util/file.zig");
 
-const Scope = backend.Scope;
+const Context = FlFile.Context;
 const Allocator = std.mem.Allocator;
 const TokenBuffer = lex.TokenBuffer;
 const stderr = std.io.getStdErr().writer();
 
-const Error = backend.SemaError
-           || Allocator.Error
+const Error = Allocator.Error
            || util.FmtError
            || util.Error;
 
@@ -147,23 +145,6 @@ fn generate_file_ast(
     );
 }
 
-/// bottom-up type inference
-fn type_infer(
-    ctx: *backend.SemaContext,
-    ast: *Ast,
-    expr: *Expr
-) backend.SemaError!void {
-    // infer on subexprs
-    if (expr.children) |children| {
-        for (children) |*child| try type_infer(ctx, ast, child);
-    }
-
-    // infer this expr
-    if (try backend.type_infer(ctx, ast, expr)) |ltype| {
-        expr.ltype = ltype;
-    }
-}
-
 /// the ast and the arena which backs it
 pub const Ast = struct {
     const Self = @This();
@@ -181,45 +162,34 @@ pub const Ast = struct {
 };
 
 /// intakes program as an lfile and outputs an ast
+/// TODO in general factor out the pattern of using optionals, instead return
+/// an error like 'StageFailed' or something
 pub fn parse(
-    ally: Allocator,
-    scope: *const Scope,
-    lfile: *const FlFile,
+    ctx: *Context,
     to: enum{expr, file}
 ) !?Ast {
-    var ctx = FlFile.Context.init(ally, lfile);
-    defer ctx.deinit();
-
     // lex
-    var tbuf = try lex.lex(&ctx);
-    defer tbuf.deinit(&ctx);
+    var tbuf = try lex.lex(ctx);
+    defer tbuf.deinit(ctx);
 
-    try tbuf.validate(&ctx);
+    try tbuf.validate(ctx);
 
     if (ctx.err) {
         try ctx.print_messages();
         return null;
     }
 
-    // generate and typing infer ast
+    // generate ast
     var ast = Ast{
-        .arena = std.heap.ArenaAllocator.init(ally),
+        .arena = std.heap.ArenaAllocator.init(ctx.ally),
         .root = undefined,
     };
 
     ast.root = (try switch (to) {
-        .expr => generate_expr_ast(&ctx, &ast, &tbuf),
-        .file => generate_file_ast(&ctx, &ast, &tbuf),
+        // TODO remove ast from these and just hand them an allocator
+        .expr => generate_expr_ast(ctx, &ast, &tbuf),
+        .file => generate_file_ast(ctx, &ast, &tbuf),
     }) orelse return null;
-
-    var sema_ctx = backend.SemaContext.init(&ctx, scope);
-
-    try type_infer(&sema_ctx, &ast, &ast.root);
-
-    if (ctx.err) {
-        try ctx.print_messages();
-        return null;
-    }
 
     return ast;
 }

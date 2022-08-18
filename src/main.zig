@@ -5,7 +5,7 @@ const fluent = @import("fluent.zig");
 
 const stdout = std.io.getStdOut().writer();
 const Allocator = std.mem.Allocator;
-const Scope = backend.Scope;
+const Scope = frontend.Scope;
 
 const c = @cImport({
     @cInclude("linenoise.h");
