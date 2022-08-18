@@ -54,11 +54,10 @@ pub const ConsoleColor = struct {
     }
 };
 
-pub const TextBox = struct {
-    // TODO move out of textbox
-    pub const Vec2 = struct{x: i32, y: i32};
-    pub const Rect = struct{x: i32, y: i32, w: i32, h: i32};
+pub const Vec2 = struct {x: i32, y: i32};
+pub const Rect = struct {x: i32, y: i32, w: i32, h: i32};
 
+pub const TextBox = struct {
     rect: Rect,
     text: []const u8,
     color: ConsoleColor,
@@ -213,10 +212,10 @@ pub const TextCanvas = struct {
         while (i < self.boxes.len) : (i += 1) {
             const box = self.boxes.get(i);
 
-            var pos = TextBox.Vec2{ .x = box.rect.x, .y = box.rect.y };
+            var pos = Vec2{ .x = box.rect.x, .y = box.rect.y };
             for (box.text) |ch| {
                 // find indices into 2d array
-                const rel_pos = TextBox.Vec2{
+                const rel_pos = Vec2{
                     .x = pos.x - bounds.x,
                     .y = pos.y - bounds.y
                 };

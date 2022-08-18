@@ -1,6 +1,8 @@
 const std = @import("std");
 const util = @import("../util/util.zig");
-const FlType = @import("type.zig").FlType;
+const fluent = @import("../fluent.zig");
+
+const FlType = fluent.FlType;
 
 /// Expr is an intermediate AST representation
 const Self = @This();

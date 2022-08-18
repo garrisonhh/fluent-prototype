@@ -1,22 +1,20 @@
 const std = @import("std");
 const lex = @import("lex.zig");
-const sema = @import("sema.zig");
-const util = @import("util/util.zig");
-const FlFile = @import("file.zig");
-const Expr = @import("fluent/expr.zig");
-const FlType = @import("fluent/type.zig").FlType;
+const backend = @import("../backend.zig");
+const fluent = @import("../fluent.zig");
+const util = @import("../util/util.zig");
+const Expr = @import("expr.zig");
+const FlFile = @import("../util/file.zig");
 
-const stderr = std.io.getStdErr().writer();
+const Scope = backend.Scope;
 const Allocator = std.mem.Allocator;
 const TokenBuffer = lex.TokenBuffer;
+const stderr = std.io.getStdErr().writer();
 
-const Error = sema.Error
+const Error = backend.SemaError
            || Allocator.Error
            || util.FmtError
            || util.Error;
-
-// TODO this file contains a lot of different allocators implicitly thrown
-// around, need more explicit naming
 
 // generates ast starting at token index `from`
 // writes final index to `out_to`
@@ -73,8 +71,9 @@ fn generate_ast_r(
         .integer => Expr.init_slice(.int, token.view),
         .float => Expr.init_slice(.float, token.view),
         .string => Expr.init_slice(.string, token.view),
+        .character => @panic("TODO characters are currently unimplemented"),
+        .atom => @panic("TODO atoms are currently unimplemented"),
         .rbracket, .rparen => unreachable,
-        else => @panic("TODO ???")
     };
 }
 
@@ -149,18 +148,18 @@ fn generate_file_ast(
 }
 
 /// bottom-up type inference
-fn infer_expr_ltype(
-    ctx: *sema.Context,
+fn type_infer(
+    ctx: *backend.SemaContext,
     ast: *Ast,
     expr: *Expr
-) sema.Error!void {
+) backend.SemaError!void {
     // infer on subexprs
     if (expr.children) |children| {
-        for (children) |*child| try infer_expr_ltype(ctx, ast, child);
+        for (children) |*child| try type_infer(ctx, ast, child);
     }
 
     // infer this expr
-    if (try sema.type_check_and_infer(ctx, ast, expr)) |ltype| {
+    if (try backend.type_infer(ctx, ast, expr)) |ltype| {
         expr.ltype = ltype;
     }
 }
@@ -184,7 +183,7 @@ pub const Ast = struct {
 /// intakes program as an lfile and outputs an ast
 pub fn parse(
     ally: Allocator,
-    scope: *const sema.Scope,
+    scope: *const Scope,
     lfile: *const FlFile,
     to: enum{expr, file}
 ) !?Ast {
@@ -213,9 +212,9 @@ pub fn parse(
         .file => generate_file_ast(&ctx, &ast, &tbuf),
     }) orelse return null;
 
-    var sema_ctx = sema.Context.init(&ctx, scope);
+    var sema_ctx = backend.SemaContext.init(&ctx, scope);
 
-    try infer_expr_ltype(&sema_ctx, &ast, &ast.root);
+    try type_infer(&sema_ctx, &ast, &ast.root);
 
     if (ctx.err) {
         try ctx.print_messages();

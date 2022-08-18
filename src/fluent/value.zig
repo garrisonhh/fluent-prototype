@@ -1,5 +1,4 @@
 const std = @import("std");
-const Expr = @import("expr.zig");
 const FlType = @import("type.zig").FlType;
 
 const Allocator = std.mem.Allocator;
@@ -19,6 +18,7 @@ pub const FlValue = union(enum) {
     nil,
     int: i64,
     float: f64,
+    // TODO a global type set with type ids?
     ltype: FlType,
     list: []Self,
 
@@ -36,17 +36,6 @@ pub const FlValue = union(enum) {
             .list => |l| ally.free(l),
             else => {}
         }
-    }
-
-    // TODO I feel like this should be in dynamic.compile_expr and not here
-    pub fn from_literal(expr: *const Expr) !Self {
-        std.debug.assert(expr.is_flat_literal());
-        return switch (expr.etype) {
-            .nil => Self{ .nil = {} },
-            .int => Self{ .int = try std.fmt.parseInt(i64, expr.slice, 10) },
-            .float => Self{ .float = try std.fmt.parseFloat(f64, expr.slice) },
-            else => @panic("TODO"),
-        };
     }
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {

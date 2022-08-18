@@ -1,5 +1,5 @@
 const std = @import("std");
-const FlFile = @import("file.zig");
+const FlFile = @import("../util/file.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -136,7 +136,6 @@ pub const TokenBuffer = struct {
 
     pub fn validate(self: *const Self, ctx: *FlFile.Context) !void {
         try self.validate_parens(ctx);
-        // TODO more stuff I can check here?
     }
 
     pub fn debug(self: *const Self) void {

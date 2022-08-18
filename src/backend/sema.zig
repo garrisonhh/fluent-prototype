@@ -1,13 +1,14 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const util = @import("util/util.zig");
-const parse = @import("parse.zig");
 const dynamic = @import("dynamic.zig");
-const FlFile = @import("file.zig");
-const Expr = @import("fluent/expr.zig");
-const FlType = @import("fluent/type.zig").FlType;
-const FlValue = @import("fluent/value.zig").FlValue;
+const util = @import("../util/util.zig");
+const fluent = @import("../fluent.zig");
+const frontend = @import("../frontend.zig");
+const FlFile = @import("../util/file.zig");
 
+const Expr = frontend.Expr;
+const FlType = fluent.FlType;
+const FlValue = fluent.FlValue;
 const FlBlock = dynamic.FlBlock;
 const Allocator = std.mem.Allocator;
 
@@ -100,7 +101,7 @@ pub const Scope = struct {
         }
 
         if (comptime builtin.mode == .Debug) {
-            const canvas = @import("util/canvas.zig");
+            const canvas = @import("../util/canvas.zig");
             const stderr = std.io.getStdErr().writer();
 
             var tc = canvas.TextCanvas.init(ally);
@@ -198,7 +199,7 @@ pub const Scope = struct {
         var lfile = try FlFile.init(ally, name, text);
         defer lfile.deinit(ally);
 
-        var ast = (try parse.parse(ally, self, &lfile, .expr))
+        var ast = (try frontend.parse(ally, self, &lfile, .expr))
                   orelse return;
         defer ast.deinit();
 
@@ -218,9 +219,9 @@ pub const Scope = struct {
 };
 
 // inference is generally bottom-up, only bindings are top-down
-pub fn type_check_and_infer(
+pub fn type_infer(
     ctx: *Context,
-    ast: *parse.Ast,
+    ast: *frontend.Ast,
     expr: *const Expr
 ) Error!?FlType {
     const ast_ally = ast.allocator();

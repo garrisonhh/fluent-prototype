@@ -1,14 +1,15 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const util = @import("util/util.zig");
-const parse = @import("parse.zig");
 const sema = @import("sema.zig");
-const Expr = @import("fluent/expr.zig");
-const FlFile = @import("file.zig");
-const FlValue = @import("fluent/value.zig").FlValue;
-const FlType = @import("fluent/type.zig").FlType;
+const util = @import("../util/util.zig");
+const fluent = @import("../fluent.zig");
+const frontend = @import("../frontend.zig");
+const FlFile = @import("../util/file.zig");
 
 const Scope = sema.Scope;
+const Expr = frontend.Expr;
+const FlType = fluent.FlType;
+const FlValue = fluent.FlValue;
 const Allocator = std.mem.Allocator;
 
 // TODO split up this file
@@ -39,7 +40,7 @@ const Context = struct {
 
 /// used to represent in/out value number requirements for stack ops
 /// TODO modify this to include FlValue.Enum values to type check FlBlocks
-pub const FlStackDiff = struct {
+const FlStackDiff = struct {
     const Self = @This();
 
     in: usize,
@@ -58,7 +59,6 @@ pub const FlStackDiff = struct {
     }
 };
 
-// TODO an FlOp assembler
 const FlOp = union(enum) {
     const Self = @This();
     const Enum = @typeInfo(Self).Union.tag_type.?;
@@ -131,9 +131,6 @@ const FlOp = union(enum) {
     fn_type,
     list_type,
 
-    // TODO call: Size, // push inst addr onto call stack and jump
-    // TODO ret, // pop inst addr from call stack
-
     pub fn format(
         self: Self,
         comptime fmt: []const u8,
@@ -143,7 +140,6 @@ const FlOp = union(enum) {
         _ = fmt;
         _ = options;
 
-        // TODO can prob do this easier with reflection
         switch (self) {
             .push => |d| try writer.print("{s} {d}", .{@tagName(self), d}),
             else => try writer.print("{s}", .{@tagName(self)}),
@@ -463,21 +459,33 @@ pub const FlVm = struct {
     }
 };
 
+/// adds FlValue + FlOp to the builder to push a constant.
+/// (used by compile_expr)
+fn add_push_op(
+    ally: Allocator,
+    builder: *FlBlock.Builder,
+    constant: FlValue
+) !void {
+    const idx = @intCast(FlOp.Size, builder.constants.items.len);
+    try builder.constants.append(try constant.clone(ally));
+    try builder.ops.append(FlOp{ .push = idx });
+}
+
 fn compile_expr(
     ctx: *Context,
     builder: *FlBlock.Builder,
     expr: *const Expr
 ) anyerror!void {
-    const constants = &builder.constants;
+    const ally = ctx.arena.allocator();
 
     switch (expr.etype) {
-        .int, .float, .string => {
-            // easy literals
-            const index = constants.items.len;
-            const value = try FlValue.from_literal(expr);
-            try constants.append(value);
-            try builder.ops.append(FlOp{ .push = @intCast(u32, index) });
-        },
+        .nil => try add_push_op(ally, builder, FlValue{ .nil = {} }),
+        .int => try add_push_op(ally, builder, FlValue{
+            .int = try std.fmt.parseInt(i64, expr.slice, 10)
+        }),
+        .float => try add_push_op(ally, builder, FlValue{
+            .float = try std.fmt.parseFloat(f64, expr.slice)
+        }),
         .ident => {
             const binding = ctx.scope.get(expr.slice) orelse {
                 @panic("TODO didn't find ident in scope");
@@ -522,6 +530,9 @@ fn compile_expr(
         else => @panic("TODO encountered expr I can't compile yet")
     }
 }
+
+// TODO compile + eval functions don't need to be in this file, probably put
+// them in their own file in src/? idk
 
 /// compiles an ast to an FlBlock allocated on ally
 pub fn compile(
@@ -590,7 +601,7 @@ pub fn eval(
     var lfile = try FlFile.init(ally, name, text);
     defer lfile.deinit(ally);
 
-    var ast = (try parse.parse(ally, scope, &lfile, .expr)) orelse return null;
+    var ast = (try frontend.parse(ally, scope, &lfile, .expr)) orelse return null;
     defer ast.deinit();
 
     return compile_run(ally, scope, &lfile, &ast.root);

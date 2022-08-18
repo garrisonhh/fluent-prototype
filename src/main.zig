@@ -1,13 +1,11 @@
 const std = @import("std");
-const parse = @import("parse.zig");
-const sema = @import("sema.zig");
-const dynamic = @import("dynamic.zig");
-const FlFile = @import("file.zig");
-const Expr = @import("fluent/expr.zig");
+const frontend = @import("frontend.zig");
+const backend = @import("backend.zig");
+const fluent = @import("fluent.zig");
 
 const stdout = std.io.getStdOut().writer();
 const Allocator = std.mem.Allocator;
-const Scope = sema.Scope;
+const Scope = backend.Scope;
 
 const c = @cImport({
     @cInclude("linenoise.h");
@@ -19,7 +17,7 @@ fn eval_repl(
     text: []const u8
 ) !void {
     var result =
-        (try dynamic.eval(ally, scope, "stdin", text)) orelse return;
+        (try backend.eval(ally, scope, "stdin", text)) orelse return;
     defer result.deinit(ally);
 
     try stdout.print("{}\n", .{result.fmt(.{})});
@@ -79,7 +77,7 @@ pub fn main() !void {
     // const ally = gpa.allocator();
     const ally = std.heap.page_allocator;
 
-    var global = try sema.Scope.init_global(ally);
+    var global = try Scope.init_global(ally);
     defer global.deinit();
 
     while (true) {
