@@ -223,19 +223,6 @@ const MessageQueue = struct {
     }
 };
 
-/// for sorting message queues in print_messages.
-/// orders first by ascending line number, and then by ascending character
-fn message_less_than(
-    context: void,
-    lhs: MessageQueue.LocatedMessage,
-    rhs: MessageQueue.LocatedMessage
-) bool {
-    _ = context;
-
-    return lhs.loc.line == rhs.loc.line and lhs.loc.char < rhs.loc.char
-        or lhs.loc.line < rhs.loc.line;
-}
-
 /// prints a line number to the canvas
 fn print_line_num(tc: *canvas.TextCanvas, y: i32, line_num: usize) !void {
     const textbox_text = try std.fmt.allocPrint(
@@ -283,16 +270,6 @@ pub fn print_messages(
             };
 
         try msg_queue.add_message(&message);
-    }
-
-    // sort messages in each queue by line number
-    for (queues.values()) |msg_queue| {
-        std.sort.sort(
-            MessageQueue.LocatedMessage,
-            msg_queue.messages.items,
-            {},
-            message_less_than
-        );
     }
 
     // draw and print output for each message queue

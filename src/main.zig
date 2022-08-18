@@ -74,9 +74,10 @@ fn take_repl_input(ally: Allocator) ![]const u8 {
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    // defer _ = gpa.deinit();
+    // const ally = gpa.allocator();
+    const ally = std.heap.page_allocator;
 
     var global = try sema.Scope.init_global(ally);
     defer global.deinit();

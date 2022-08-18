@@ -561,17 +561,17 @@ pub fn compile_run(
     defer block.deinit(ally);
 
     if (comptime builtin.mode == .Debug) {
+        std.debug.print("compiled block:\n", .{});
+        block.debug();
+    }
+
+    if (comptime builtin.mode == .Debug) {
         const diff = block.find_total_diff();
         std.debug.assert(diff.in == 0 and diff.out == 1);
     }
 
     var vm = FlVm.init(ally);
     defer vm.deinit();
-
-    if (comptime builtin.mode == .Debug) {
-        std.debug.print("executing:\n", .{});
-        block.debug();
-    }
 
     try vm.execute_block(&block);
     std.debug.assert(vm.stack.items.len == 1);
