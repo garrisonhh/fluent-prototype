@@ -8,11 +8,45 @@ const fluent = @import("fluent.zig");
 const FlFile = @import("file.zig");
 const Scope = @import("scope.zig");
 
+const Context = FlFile.Context;
 const FlValue = fluent.FlValue;
 const FlType = fluent.FlType;
-const Context = FlFile.Context;
 const Expr = frontend.Expr;
+const FlBlock = backend.FlBlock;
 const Allocator = std.mem.Allocator;
+
+/// assemble a block without any constants
+pub fn assemble_simple(comptime text: []const u8) FlBlock {
+    return FlBlock{
+        .constants = &.{},
+        .ops = FlBlock.assemble_ops(text)
+    };
+}
+
+/// ONLY FOR USAGE AT PROGRAM INITIALIZATION
+/// this is a really nice way to assemble FlBlocks, but it has to recompile
+/// constants every time due to zig's lack of comptime allocation
+pub fn assemble(
+    ally: Allocator,
+    scope: *Scope,
+    constants: []const []const u8,
+    comptime text: []const u8
+) !FlBlock {
+    var compiled_constants = try ally.alloc(constants.len, FlValue);
+    defer ally.free();
+
+    for (constants) |constant, i| {
+        compiled_constants[i] = try evaluate_text(
+            ally,
+            scope,
+            "constant from plumbing.assemble",
+            constant,
+            null
+        );
+    }
+
+    return backend.FlBlock.assemble(ally, compiled_constants, text);
+}
 
 /// compiles an expression from start to finish
 /// writes ltype of entire ast to out_ltype if requested

@@ -17,13 +17,14 @@ pub const FlType = union(enum) {
 
     function: Function,
     list: List,
-    ltype, // the type of the expression is itself a type
+    ltype, // the type `type`
     int,
     float,
     string,
     nil,
 
-    builtin,
+    any,
+
     unknown,
 
     pub fn init_function(
@@ -86,6 +87,32 @@ pub const FlType = union(enum) {
                 break :fn_eql true;
             },
             .list => self.list.subtype.eql(other.list.subtype),
+            else => true
+        };
+    }
+
+    /// whether this type is a subset of the other type
+    pub fn matches(self: *const Self, other: *const Self) bool {
+        const tag = std.meta.activeTag(self.*);
+        const other_tag = std.meta.activeTag(other.*);
+        const tag_matches = tag == other_tag or other_tag == .any;
+
+        return tag_matches and switch (self.*) {
+            .function => fn_matches: {
+                const fun = self.function;
+                const other_fun = other.function;
+
+                // check params
+                if (fun.params.len != other_fun.params.len) return false;
+
+                for (fun.params) |*param, i| {
+                    if (!param.matches(&other_fun.params[i])) return false;
+                }
+
+                // check return types
+                break :fn_matches fun.returns.matches(other_fun.returns);
+            },
+            .list => self.list.subtype.matches(other.list.subtype),
             else => true
         };
     }

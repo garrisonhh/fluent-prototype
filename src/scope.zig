@@ -67,6 +67,7 @@ pub fn init_global(ally: Allocator) !Self {
     try bind_prim(&self, "type", type_ltype);
     try bind_prim(&self, "int", FlType{ .int = {} });
     try bind_prim(&self, "float", FlType{ .float = {} });
+    try bind_prim(&self, "any", FlType{ .any = {} });
 
     try self.bind("fn", Binding{
         .ltype = try FlType.init_function(
@@ -82,6 +83,20 @@ pub fn init_global(ally: Allocator) !Self {
             .ops = FlBlock.assemble_ops("fn_type"),
         }
     });
+
+    // compilable builtins
+    const compilable = [_][3][]const u8{
+        .{"+", "(fn [int int] int)", "iadd"},
+        .{"-", "(fn [int int] int)", "isub"},
+    };
+
+    inline for (compilable) |elem| {
+        const name = elem[0];
+        const ltype = elem[1];
+        const assembly = elem[2];
+
+        try self.assemble_bind(ally, name, ltype, assembly);
+    }
 
     if (comptime builtin.mode == .Debug) try self.display(ally, stderr);
 
@@ -109,21 +124,20 @@ pub fn bind(
     try self.map.put(name, ptr);
 }
 
-pub fn compile_bind(
+fn assemble_bind(
     self: *Self,
     ally: Allocator,
     comptime name: []const u8,
+    comptime ltype_expr: []const u8,
     comptime text: []const u8
 ) !void {
-    var ltype: FlType = undefined;
-    var block = try plumbing.compile_text(ally, self, name, text, &ltype);
-    defer ltype.deinit(ally);
-    defer block.deinit(ally);
+    var ltype_val =
+        try plumbing.evaluate_text(ally, self, name, ltype_expr, null);
+    defer ltype_val.deinit(ally);
 
-    const scope_ally = self.allocator();
     try self.bind(name, Binding{
-        .ltype = try ltype.clone(scope_ally),
-        .block = try block.clone(scope_ally),
+        .ltype = try ltype_val.ltype.clone(self.allocator()),
+        .block = plumbing.assemble_simple(text),
     });
 }
 

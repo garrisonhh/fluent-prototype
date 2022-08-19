@@ -71,12 +71,12 @@ fn type_infer(
             while (i < @minimum(function.params.len, params.len)) : (i += 1) {
                 const expected = &function.params[i];
                 const actual = &params[i].ltype;
-                if (!actual.eql(expected)) {
+                if (!actual.matches(expected)) {
                     bad_params = true;
 
                     const msg = try std.fmt.allocPrint(
                         msg_ally,
-                        "wrong parameter type: expected {}, found {}",
+                        "wrong parameter type: expected <{}>, found <{}>",
                         .{expected, actual}
                     );
                     try ctx.add_message(.err, msg, params[i].slice);
@@ -140,7 +140,7 @@ fn type_infer(
     };
 }
 
-/// semantic analysis. performs type inference.
+/// semantic analysis. performs type inference and type checking.
 pub fn analyze(
     ctx: *Context,
     scope: *Scope,

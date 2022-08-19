@@ -254,7 +254,8 @@ pub const FlBlock = struct {
     ) !FlBlock {
         return Self{
             .constants = try ally.dupe(FlValue, constants),
-            .ops = try ally.dupe(FlOp, FlBlock.assemble_ops(text)),
+            // .ops = try ally.dupe(FlOp, FlBlock.assemble_ops(text)),
+            .ops = FlBlock.assemble_ops(text),
         };
     }
 
