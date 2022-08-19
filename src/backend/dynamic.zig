@@ -539,7 +539,7 @@ pub fn compile(
     scope: *const Scope,
     lfile: *const FlFile,
     ast: *const Expr
-) !?FlBlock {
+) !FlBlock {
     var lfile_ctx = FlFile.Context.init(ally, lfile);
     defer lfile_ctx.deinit();
 
@@ -549,12 +549,10 @@ pub fn compile(
     var builder = FlBlock.Builder.init(&ctx);
     defer builder.deinit();
 
-    try compile_expr(&ctx, &builder, ast);
-
-    if (lfile_ctx.err) {
-        try lfile_ctx.print_messages();
-        return null;
-    }
+    compile_expr(&ctx, &builder, ast) catch |e| {
+        if (e == util.CompilationFailed) try lfile_ctx.print_messages();
+        return e;
+    };
 
     return try builder.to_block(ally);
 }
@@ -565,9 +563,8 @@ pub fn compile_run(
     scope: *const Scope,
     lfile: *const FlFile,
     ast: *const Expr
-) !?FlValue {
-    var block =
-        (try compile(ally, scope, lfile, ast)) orelse return null;
+) !FlValue {
+    var block = try compile(ally, scope, lfile, ast);
     defer block.deinit(ally);
 
     if (comptime builtin.mode == .Debug) {
@@ -596,27 +593,21 @@ pub fn eval(
     scope: *Scope,
     name: []const u8,
     text: []const u8
-) !?FlValue {
+) !FlValue {
+    // TODO pipelines heree
     var lfile = try FlFile.init(ally, name, text);
     defer lfile.deinit(ally);
 
     var ctx = FlFile.Context.init(ally, &lfile);
     defer ctx.deinit();
 
-    var ast = (try frontend.parse(&ctx, .expr)) orelse return null;
+    var ast = frontend.parse(&ctx, .expr) catch |e| {
+        if (e == util.CompilationFailed) try ctx.print_messages();
+        return e;
+    };
     defer ast.deinit();
 
     try frontend.analyze(&ctx, scope, &ast);
 
     return compile_run(ally, scope, &lfile, &ast.root);
-}
-
-/// panics on eval error. only for usage inside the compiler.
-pub fn internal_eval(
-    ally: Allocator,
-    scope: *Scope,
-    comptime name: []const u8,
-    comptime text: []const u8
-) !FlValue {
-    return (try eval(ally, scope, name, text)).?;
 }

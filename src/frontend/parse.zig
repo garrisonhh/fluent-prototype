@@ -12,18 +12,19 @@ const stderr = std.io.getStdErr().writer();
 
 const Error = Allocator.Error
            || util.FmtError
-           || util.Error;
+           || util.Error
+           || util.CompileFailure
+           || lex.Error;
 
 // generates ast starting at token index `from`
 // writes final index to `out_to`
 fn generate_ast_r(
-    ctx: *FlFile.Context,
-    ast: *Ast,
+    ctx: *Context,
+    ast_ally: Allocator,
     tbuf: *const TokenBuffer,
     from: usize,
     out_to: *usize
 ) Error!Expr {
-    const ast_ally = ast.allocator();
     const token = tbuf.tokens.get(from);
 
     out_to.* = from + 1; // for lists, this is modified again
@@ -48,7 +49,8 @@ fn generate_ast_r(
             const ttypes = tbuf.tokens.items(.ttype);
             var i: usize = from + 1;
             while (ttypes[i] != terminator) {
-                try children.append(try generate_ast_r(ctx, ast, tbuf, i, &i));
+                const child = try generate_ast_r(ctx, ast_ally, tbuf, i, &i);
+                try children.append(child);
             }
 
             out_to.* = i + 1;
@@ -75,22 +77,20 @@ fn generate_ast_r(
     };
 }
 
-fn err_empty_program(ctx: *FlFile.Context) Allocator.Error!void {
+fn err_empty_program(ctx: *Context) Error {
     try ctx.add_message(.err, "empty program?", ctx.lfile.text[0..0]);
+    return util.CompilationFailed;
 }
 
 fn generate_expr_ast(
-    ctx: *FlFile.Context,
-    ast: *Ast,
+    ctx: *Context,
+    ast_ally: Allocator,
     tbuf: *const TokenBuffer
-) Error!?Expr {
-    if (tbuf.tokens.len == 0) {
-        try err_empty_program(ctx);
-        return null;
-    }
+) Error!Expr {
+    if (tbuf.tokens.len == 0) return err_empty_program(ctx);
 
     var index: usize = 0;
-    const expr = try generate_ast_r(ctx, ast, tbuf, index, &index);
+    const expr = try generate_ast_r(ctx, ast_ally, tbuf, index, &index);
 
     if (index != tbuf.tokens.len) {
         const views = tbuf.tokens.items(.view);
@@ -105,7 +105,7 @@ fn generate_expr_ast(
             slice
         );
 
-        return null;
+        return util.CompilationFailed;
     }
 
     return expr;
@@ -113,23 +113,19 @@ fn generate_expr_ast(
 
 /// files are really just lists of expressions
 fn generate_file_ast(
-    ctx: *FlFile.Context,
-    ast: *Ast,
+    ctx: *Context,
+    ast_ally: Allocator,
     tbuf: *const TokenBuffer
-) Error!?Expr {
-    const ast_ally = ast.allocator();
-
-    if (tbuf.tokens.len == 0) {
-        try err_empty_program(ctx);
-        return null;
-    }
+) Error!Expr {
+    if (tbuf.tokens.len == 0) return err_empty_program(ctx);
 
     var children = std.ArrayList(Expr).init(ctx.ally);
     defer children.deinit();
 
     var index: usize = 0;
     while (index < tbuf.tokens.len) {
-        try children.append(try generate_ast_r(ctx, ast, tbuf, index, &index));
+        const child = try generate_ast_r(ctx, ast_ally, tbuf, index, &index);
+        try children.append(child);
     }
 
     const token_views = tbuf.tokens.items(.view);
@@ -162,34 +158,20 @@ pub const Ast = struct {
 };
 
 /// intakes program as an lfile and outputs an ast
-/// TODO in general factor out the pattern of using optionals, instead return
-/// an error like 'StageFailed' or something
-pub fn parse(
-    ctx: *Context,
-    to: enum{expr, file}
-) !?Ast {
+pub fn parse(ctx: *Context, to: enum{expr, file}) Error!Ast {
     // lex
     var tbuf = try lex.lex(ctx);
     defer tbuf.deinit(ctx);
 
-    try tbuf.validate(ctx);
-
-    if (ctx.err) {
-        try ctx.print_messages();
-        return null;
-    }
-
     // generate ast
-    var ast = Ast{
-        .arena = std.heap.ArenaAllocator.init(ctx.ally),
-        .root = undefined,
+    var ast_arena = std.heap.ArenaAllocator.init(ctx.ally);
+    const gen_fn = switch(to) {
+        .expr => generate_expr_ast,
+        .file => generate_file_ast,
     };
 
-    ast.root = (try switch (to) {
-        // TODO remove ast from these and just hand them an allocator
-        .expr => generate_expr_ast(ctx, &ast, &tbuf),
-        .file => generate_file_ast(ctx, &ast, &tbuf),
-    }) orelse return null;
-
-    return ast;
+    return Ast{
+        .arena = ast_arena,
+        .root = try gen_fn(ctx, ast_arena.allocator(), &tbuf),
+    };
 }

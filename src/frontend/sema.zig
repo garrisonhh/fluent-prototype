@@ -175,6 +175,7 @@ pub const Scope = struct {
         try self.bind(name, Binding{ .ltype = ltype, .block = block });
     }
 
+    // TODO make pipelines and use a compilation pipeline here
     pub fn compile_bind(
         self: *Self,
         ally: Allocator,
@@ -189,14 +190,18 @@ pub const Scope = struct {
         var ctx = Context.init(ally, &lfile);
         defer ctx.deinit();
 
-        var ast = (try parse.parse(&ctx, .expr))
-                  orelse return;
+        var ast = parse.parse(&ctx, .expr) catch |e| {
+            if (e == util.CompilationFailed) try ctx.print_messages();
+            return e;
+        };
         defer ast.deinit();
 
         try analyze(&ctx, self, &ast);
 
-        var block = (try backend.compile(ally, self, &lfile, &ast.root))
-                    orelse return;
+        var block = backend.compile(ally, self, &lfile, &ast.root) catch |e| {
+            if (e == util.CompilationFailed) try ctx.print_messages();
+            return e;
+        };
         defer block.deinit(ally);
 
         try self.bind(name, Binding{

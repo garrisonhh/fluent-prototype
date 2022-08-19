@@ -3,6 +3,11 @@ const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
 
+/// used by different stages of compiler to indicate stopping compilation and
+/// displaying context messages
+pub const CompileFailure = error {CompilationFailed};
+pub const CompilationFailed = CompileFailure.CompilationFailed;
+
 pub const FmtError = std.os.WriteError
                   || std.fmt.AllocPrintError
                   || std.fmt.BufPrintError;

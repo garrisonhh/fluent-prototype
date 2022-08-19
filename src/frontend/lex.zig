@@ -1,8 +1,13 @@
 const std = @import("std");
+const util = @import("../util/util.zig");
 const FlFile = @import("../util/file.zig");
 
 const Context = FlFile.Context;
 const Allocator = std.mem.Allocator;
+
+pub const Error = util.CompileFailure
+               || FlFile.Error
+               || Allocator.Error;
 
 const CharClass = enum {
     const Self = @This();
@@ -83,9 +88,10 @@ pub const TokenBuffer = struct {
         });
     }
 
-    fn validate_parens(self: *const Self, ctx: *Context) !void {
+    fn validate_parens(self: *const Self, ctx: *Context) Error!void {
         var level: i32 = 0;
-        var warned_unmatched_at_zero: bool = false;
+        var warned_unmatched_at_zero = false;
+        var dipped_below_zero = false;
 
         for (self.tokens.items(.ttype)) |ttype, i| {
             switch (ttype) {
@@ -120,6 +126,7 @@ pub const TokenBuffer = struct {
                             "this paren is unmatched.",
                             self.tokens.items(.view)[i]
                         );
+                        dipped_below_zero = true;
                     }
                 },
                 else => {}
@@ -133,10 +140,8 @@ pub const TokenBuffer = struct {
                 self.tokens.items(.view)[self.tokens.len - 1]
             );
         }
-    }
 
-    pub fn validate(self: *const Self, ctx: *Context) !void {
-        try self.validate_parens(ctx);
+        if (level > 0 or dipped_below_zero) return util.CompilationFailed;
     }
 
     pub fn debug(self: *const Self) void {
@@ -165,8 +170,7 @@ fn classify_char_at(str: []const u8, index: usize) CharClass {
     return classify_char(char_at(str, index));
 }
 
-/// tokenizes ctx.lfile
-pub fn lex(ctx: *Context) Allocator.Error!TokenBuffer {
+fn tokenize(ctx: *Context) Allocator.Error!TokenBuffer {
     const str = ctx.lfile.text;
     var tbuf = TokenBuffer.init();
 
@@ -233,6 +237,14 @@ pub fn lex(ctx: *Context) Allocator.Error!TokenBuffer {
             else => @panic("hit something weird in lexing")
         };
     }
+
+    return tbuf;
+}
+
+/// tokenizes ctx.lfile
+pub fn lex(ctx: *Context) Error!TokenBuffer {
+    const tbuf = try tokenize(ctx);
+    try tbuf.validate_parens(ctx);
 
     return tbuf;
 }

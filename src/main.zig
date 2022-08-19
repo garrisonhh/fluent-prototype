@@ -16,8 +16,7 @@ fn eval_repl(
     scope: *Scope,
     text: []const u8
 ) !void {
-    var result =
-        (try backend.eval(ally, scope, "stdin", text)) orelse return;
+    var result = try backend.eval(ally, scope, "stdin", text);
     defer result.deinit(ally);
 
     try stdout.print("{}\n", .{result.fmt(.{})});
