@@ -5,7 +5,7 @@ const backend = @import("../backend.zig");
 const util = @import("../util/util.zig");
 const fluent = @import("../fluent.zig");
 const Expr = @import("expr.zig");
-const FlFile = @import("../util/file.zig");
+const FlFile = @import("../file.zig");
 
 const Ast = parse.Ast;
 const Context = FlFile.Context;

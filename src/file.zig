@@ -1,5 +1,5 @@
 const std = @import("std");
-const canvas = @import("canvas.zig");
+const canvas = @import("util/canvas.zig");
 
 const stdout = std.io.getStdOut().writer();
 const stderr = std.io.getStdErr().writer();

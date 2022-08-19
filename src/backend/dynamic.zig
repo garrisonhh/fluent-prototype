@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const util = @import("../util/util.zig");
 const fluent = @import("../fluent.zig");
 const frontend = @import("../frontend.zig");
-const FlFile = @import("../util/file.zig");
+const FlFile = @import("../file.zig");
 
 const Scope = frontend.Scope;
 const Expr = frontend.Expr;

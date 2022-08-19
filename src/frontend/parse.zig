@@ -1,9 +1,8 @@
 const std = @import("std");
 const lex = @import("lex.zig");
-const fluent = @import("../fluent.zig");
 const util = @import("../util/util.zig");
 const Expr = @import("expr.zig");
-const FlFile = @import("../util/file.zig");
+const FlFile = @import("../file.zig");
 
 const Context = FlFile.Context;
 const Allocator = std.mem.Allocator;

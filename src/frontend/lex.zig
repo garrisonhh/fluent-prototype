@@ -1,6 +1,6 @@
 const std = @import("std");
 const util = @import("../util/util.zig");
-const FlFile = @import("../util/file.zig");
+const FlFile = @import("../file.zig");
 
 const Context = FlFile.Context;
 const Allocator = std.mem.Allocator;
