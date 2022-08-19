@@ -1,5 +1,6 @@
 const std = @import("std");
 const util = @import("util/util.zig");
+const canvas = @import("util/canvas.zig");
 const plumbing = @import("plumbing.zig");
 const fluent = @import("fluent.zig");
 const Scope = @import("scope.zig");
@@ -16,11 +17,18 @@ fn eval_repl(
     scope: *Scope,
     text: []const u8
 ) !void {
-    var result = plumbing.evaluate_text(ally, scope, "stdin", text, null)
+    // evaluate
+    var ltype: fluent.FlType = undefined;
+    var result = plumbing.evaluate_text(ally, scope, "stdin", text, &ltype)
         catch |e| return if (e == util.CompilationFailed) {} else e;
+    defer ltype.deinit(ally);
     defer result.deinit(ally);
 
-    try stdout.print("{}\n", .{result.fmt(.{})});
+    // display nicely
+    const color = canvas.ConsoleColor{ .fg = .green };
+    const reset = canvas.ConsoleColor{};
+
+    try stdout.print("{}<{}>{}\n{}\n", .{color, ltype, reset, result.fmt(.{})});
 }
 
 /// returns string allocated onto ally

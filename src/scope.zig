@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const util = @import("util/util.zig");
+const canvas = @import("util/canvas.zig");
 const fluent = @import("fluent.zig");
 const backend = @import("backend.zig");
 const plumbing = @import("plumbing.zig");
@@ -11,6 +12,7 @@ const Context = FlFile.Context;
 const FlType = fluent.FlType;
 const FlValue = fluent.FlValue;
 const FlBlock = backend.FlBlock;
+const stderr = std.io.getStdErr().writer();
 
 const Self = @This();
 
@@ -43,17 +45,28 @@ pub fn init_global(ally: Allocator) !Self {
     var self = Self.init(ally);
     const scope_ally = self.allocator();
 
-    // some types have to be created from scratch, like `type` and `fn`
-    // once those are created, the rest can be compiled!
     const type_ltype = FlType{ .ltype = {} };
 
-    try self.bind("type", Binding{
-        .ltype = type_ltype,
-        .block = FlBlock{
-            .constants = &.{ FlValue{ .ltype = FlType{ .ltype = {} } } },
-            .ops = FlBlock.assemble_ops("push 0")
+    const Closure = struct {
+        fn bind_prim(scope: *Self, name: []const u8, ltype: FlType) !void {
+            const constants = [_]FlValue{ FlValue{ .ltype = ltype } };
+            const block = FlBlock{
+                .constants = &constants,
+                .ops = FlBlock.assemble_ops("push 0")
+            };
+
+            try scope.bind(name, Binding{
+                .ltype = type_ltype,
+                .block = try block.clone(scope.allocator()),
+            });
         }
-    });
+    };
+    const bind_prim = Closure.bind_prim;
+
+    // primitives
+    try bind_prim(&self, "type", type_ltype);
+    try bind_prim(&self, "int", FlType{ .int = {} });
+    try bind_prim(&self, "float", FlType{ .float = {} });
 
     try self.bind("fn", Binding{
         .ltype = try FlType.init_function(
@@ -70,57 +83,7 @@ pub fn init_global(ally: Allocator) !Self {
         }
     });
 
-    // TODO add other builtins through dynamic exec
-    const compilable_builtins = comptime [_][2][]const u8{
-        .{"int", "type"},
-        .{"float", "type"},
-    };
-
-    inline for (compilable_builtins) |kv| {
-        try self.compile_bind(ally, kv[0], kv[1]);
-    }
-
-    if (comptime builtin.mode == .Debug) {
-        const canvas = @import("util/canvas.zig");
-        const stderr = std.io.getStdErr().writer();
-
-        var tc = canvas.TextCanvas.init(ally);
-        defer tc.deinit();
-        const tmp_ally = tc.temp_allocator();
-
-        try tc.add_box(canvas.TextBox.init(
-            .{ .x = 0, .y = -1 },
-            "created global scope:",
-            canvas.ConsoleColor{ .fg = .cyan }
-        ));
-
-        var entries = self.map.iterator();
-        var i: usize = 0;
-        while (entries.next()) |entry| : (i += 1) {
-            const key = entry.key_ptr.*;
-            const value = entry.value_ptr;
-
-            // print key
-            try tc.add_box(canvas.TextBox.init(
-                .{
-                    .x = -@intCast(i32, key.len + 2),
-                    .y = @intCast(i32, i)
-                },
-                try std.fmt.allocPrint(tmp_ally, "{s}: ", .{key}),
-                canvas.ConsoleColor{ .fmt = .bold }
-            ));
-
-            // print binding
-            try tc.add_box(canvas.TextBox.init(
-                .{ .x = 0, .y = @intCast(i32, i) },
-                try std.fmt.allocPrint(tmp_ally, "<{}>", .{value.*.ltype}),
-                canvas.ConsoleColor{}
-            ));
-        }
-
-        tc.print(stderr) catch unreachable;
-        stderr.writeAll("\n") catch unreachable;
-    }
+    if (comptime builtin.mode == .Debug) try self.display(ally, stderr);
 
     return self;
 }
@@ -146,29 +109,6 @@ pub fn bind(
     try self.map.put(name, ptr);
 }
 
-pub fn assemble_bind(
-    self: *Self,
-    ally: Allocator,
-    name: []const u8,
-    comptime ltype_expr: []const u8,
-    comptime constants: []const []const u8,
-    comptime assembly: []const u8
-) !void {
-    const scope_ally = self.allocator();
-    const eval = backend.internal_eval;
-
-    var ltype = (try eval(ally, self, "builtin", ltype_expr)).ltype;
-
-    var const_vals: [constants.len]FlValue = undefined;
-    inline for (constants) |text, i| {
-        const_vals[i] = try eval(ally, self, "builtin constant", text);
-    }
-
-    const block = try FlBlock.assemble(scope_ally, &const_vals, assembly);
-    try self.bind(name, Binding{ .ltype = ltype, .block = block });
-}
-
-// TODO make pipelines and use a compilation pipeline here
 pub fn compile_bind(
     self: *Self,
     ally: Allocator,
@@ -189,4 +129,43 @@ pub fn compile_bind(
 
 pub fn get(self: *const Self, key: []const u8) ?*const Binding {
     return self.map.get(key);
+}
+
+pub fn display(self: *const Self, ally: Allocator, writer: anytype) !void {
+    var tc = canvas.TextCanvas.init(ally);
+    defer tc.deinit();
+    const tmp_ally = tc.temp_allocator();
+
+    try tc.add_box(canvas.TextBox.init(
+        .{ .x = 0, .y = -1 },
+        "created global scope:",
+        canvas.ConsoleColor{ .fg = .cyan }
+    ));
+
+    var entries = self.map.iterator();
+    var i: usize = 0;
+    while (entries.next()) |entry| : (i += 1) {
+        const key = entry.key_ptr.*;
+        const value = entry.value_ptr;
+
+        // print key
+        try tc.add_box(canvas.TextBox.init(
+            .{
+                .x = -@intCast(i32, key.len + 2),
+                .y = @intCast(i32, i)
+            },
+            try std.fmt.allocPrint(tmp_ally, "{s}: ", .{key}),
+            canvas.ConsoleColor{ .fmt = .bold }
+        ));
+
+        // print binding
+        try tc.add_box(canvas.TextBox.init(
+            .{ .x = 0, .y = @intCast(i32, i) },
+            try std.fmt.allocPrint(tmp_ally, "<{}>", .{value.*.ltype}),
+            canvas.ConsoleColor{}
+        ));
+    }
+
+    try tc.print(writer);
+    try writer.writeAll("\n");
 }
