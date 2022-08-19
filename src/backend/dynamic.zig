@@ -4,8 +4,8 @@ const util = @import("../util/util.zig");
 const fluent = @import("../fluent.zig");
 const frontend = @import("../frontend.zig");
 const FlFile = @import("../file.zig");
+const Scope = @import("../scope.zig");
 
-const Scope = frontend.Scope;
 const Expr = frontend.Expr;
 const FlType = fluent.FlType;
 const FlValue = fluent.FlValue;
@@ -607,7 +607,7 @@ pub fn eval(
     };
     defer ast.deinit();
 
-    try frontend.analyze(&ctx, scope, &ast);
+    try frontend.analyze(&ctx, scope, ast.allocator(), &ast.root);
 
     return compile_run(ally, scope, &lfile, &ast.root);
 }

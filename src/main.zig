@@ -2,10 +2,10 @@ const std = @import("std");
 const frontend = @import("frontend.zig");
 const backend = @import("backend.zig");
 const fluent = @import("fluent.zig");
+const Scope = @import("scope.zig");
 
 const stdout = std.io.getStdOut().writer();
 const Allocator = std.mem.Allocator;
-const Scope = frontend.Scope;
 
 const c = @cImport({
     @cInclude("linenoise.h");
