@@ -412,17 +412,20 @@ pub const FlVm = struct {
                     )
                 });
             },
-            .list_type => @panic("TODO list_type")
+            .list_type => {
+                try self.push(FlValue{
+                    .ltype = try FlType.init_list(
+                        self.ally, &popped[0].ltype
+                    )
+                });
+            },
         }
     }
 
     pub fn execute_block(self: *Self, block: *const FlBlock) !void {
         if (comptime builtin.mode == .Debug) {
             const diff = block.find_total_diff();
-
-            if (self.stack.items.len < @intCast(usize, diff.in)) {
-                return error.StackTooSmallForBlock;
-            }
+            std.debug.assert(self.stack.items.len >= @intCast(usize, diff.in));
         }
 
         var popped: [FlOp.max_args]FlValue = undefined;

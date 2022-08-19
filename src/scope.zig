@@ -84,8 +84,9 @@ pub fn init_global(ally: Allocator) !Self {
         }
     });
 
-    // compilable builtins
+    // compilable builtins (name, type expr, stack vm assembly)
     const compilable = [_][3][]const u8{
+        .{"list", "(fn [type] type)", "list_type"},
         .{"+", "(fn [int int] int)", "iadd"},
         .{"-", "(fn [int int] int)", "isub"},
     };
