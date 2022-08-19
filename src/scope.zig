@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const util = @import("util/util.zig");
 const fluent = @import("fluent.zig");
 const backend = @import("backend.zig");
-const frontend = @import("frontend.zig");
+const plumbing = @import("plumbing.zig");
 const FlFile = @import("file.zig");
 
 const Allocator = std.mem.Allocator;
@@ -175,30 +175,14 @@ pub fn compile_bind(
     comptime name: []const u8,
     comptime text: []const u8
 ) !void {
-    const scope_ally = self.allocator();
-
-    var lfile = try FlFile.init(ally, name, text);
-    defer lfile.deinit(ally);
-
-    var ctx = Context.init(ally, &lfile);
-    defer ctx.deinit();
-
-    var ast = frontend.parse(&ctx, .expr) catch |e| {
-        if (e == util.CompilationFailed) try ctx.print_messages();
-        return e;
-    };
-    defer ast.deinit();
-
-    try frontend.analyze(&ctx, self, ast.allocator(), &ast.root);
-
-    var block = backend.compile(ally, self, &lfile, &ast.root) catch |e| {
-        if (e == util.CompilationFailed) try ctx.print_messages();
-        return e;
-    };
+    var ltype: FlType = undefined;
+    var block = try plumbing.compile_text(ally, self, name, text, &ltype);
+    defer ltype.deinit(ally);
     defer block.deinit(ally);
 
+    const scope_ally = self.allocator();
     try self.bind(name, Binding{
-        .ltype = try ast.root.ltype.clone(scope_ally),
+        .ltype = try ltype.clone(scope_ally),
         .block = try block.clone(scope_ally),
     });
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const util = @import("util/util.zig");
 const canvas = @import("util/canvas.zig");
 
 const stdout = std.io.getStdOut().writer();
@@ -142,9 +143,18 @@ pub const Context = struct {
         try self.messages.append(message);
     }
 
-    pub fn print_messages(self: *Context) !void {
+    pub fn print_messages(self: *Context) Error!void {
         try FlFile.print_messages(self.ally, self.messages.items, stderr);
         self.messages.clearAndFree();
+    }
+
+    /// prints out all messages and then passes error up the chain
+    pub fn wrap_stage(self: *Context, data: anytype) t: {
+        const info = @typeInfo(@TypeOf(data)).ErrorUnion;
+        break :t (Error || info.error_set)!info.payload;
+    } {
+        if (self.messages.items.len > 0) try self.print_messages();
+        return data;
     }
 };
 

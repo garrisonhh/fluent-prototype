@@ -1,6 +1,6 @@
 const std = @import("std");
-const frontend = @import("frontend.zig");
-const backend = @import("backend.zig");
+const util = @import("util/util.zig");
+const plumbing = @import("plumbing.zig");
 const fluent = @import("fluent.zig");
 const Scope = @import("scope.zig");
 
@@ -16,7 +16,8 @@ fn eval_repl(
     scope: *Scope,
     text: []const u8
 ) !void {
-    var result = try backend.eval(ally, scope, "stdin", text);
+    var result = plumbing.evaluate_text(ally, scope, "stdin", text, null)
+        catch |e| return if (e == util.CompilationFailed) {} else e;
     defer result.deinit(ally);
 
     try stdout.print("{}\n", .{result.fmt(.{})});

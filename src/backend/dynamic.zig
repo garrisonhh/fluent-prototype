@@ -2,17 +2,17 @@ const std = @import("std");
 const builtin = @import("builtin");
 const util = @import("../util/util.zig");
 const fluent = @import("../fluent.zig");
-const frontend = @import("../frontend.zig");
 const FlFile = @import("../file.zig");
 const Scope = @import("../scope.zig");
+const Expr = @import("../frontend.zig").Expr;
 
-const Expr = frontend.Expr;
 const FlType = fluent.FlType;
 const FlValue = fluent.FlValue;
 const Allocator = std.mem.Allocator;
 
 // TODO split up this file
 
+// TODO I can probably remove this somehow
 const Context = struct {
     const Self = @This();
 
@@ -530,84 +530,19 @@ fn compile_expr(
     }
 }
 
-// TODO compile + eval functions don't need to be in this file, probably put
-// them in their own file in src/? idk
-
-/// compiles an ast to an FlBlock allocated on ally
-pub fn compile(
-    ally: Allocator,
+/// lowers an ast to FlValues + FLOps; returns am FlBlock allocated on ctx
+pub fn lower_ast(
+    lfile_ctx: *FlFile.Context,
     scope: *const Scope,
-    lfile: *const FlFile,
     ast: *const Expr
 ) !FlBlock {
-    var lfile_ctx = FlFile.Context.init(ally, lfile);
-    defer lfile_ctx.deinit();
-
-    var ctx = Context.init(&lfile_ctx, scope);
+    var ctx = Context.init(lfile_ctx, scope);
     defer ctx.deinit();
 
     var builder = FlBlock.Builder.init(&ctx);
     defer builder.deinit();
+    try compile_expr(&ctx, &builder, ast);
 
-    compile_expr(&ctx, &builder, ast) catch |e| {
-        if (e == util.CompilationFailed) try lfile_ctx.print_messages();
-        return e;
-    };
 
-    return try builder.to_block(ally);
-}
-
-/// compiles an ast and runs it
-pub fn compile_run(
-    ally: Allocator,
-    scope: *const Scope,
-    lfile: *const FlFile,
-    ast: *const Expr
-) !FlValue {
-    var block = try compile(ally, scope, lfile, ast);
-    defer block.deinit(ally);
-
-    if (comptime builtin.mode == .Debug) {
-        std.debug.print("compiled block:\n", .{});
-        block.debug();
-    }
-
-    if (comptime builtin.mode == .Debug) {
-        const diff = block.find_total_diff();
-        std.debug.assert(diff.in == 0 and diff.out == 1);
-    }
-
-    var vm = FlVm.init(ally);
-    defer vm.deinit();
-
-    try vm.execute_block(&block);
-    std.debug.assert(vm.stack.items.len == 1);
-
-    return try vm.stack.items[0].clone(ally);
-}
-
-/// evaluates an expression from start to finish. returns 'null' and prints
-/// out error messages if any stage of compilation fails.
-pub fn eval(
-    ally: Allocator,
-    scope: *Scope,
-    name: []const u8,
-    text: []const u8
-) !FlValue {
-    // TODO pipelines heree
-    var lfile = try FlFile.init(ally, name, text);
-    defer lfile.deinit(ally);
-
-    var ctx = FlFile.Context.init(ally, &lfile);
-    defer ctx.deinit();
-
-    var ast = frontend.parse(&ctx, .expr) catch |e| {
-        if (e == util.CompilationFailed) try ctx.print_messages();
-        return e;
-    };
-    defer ast.deinit();
-
-    try frontend.analyze(&ctx, scope, ast.allocator(), &ast.root);
-
-    return compile_run(ally, scope, &lfile, &ast.root);
+    return try builder.to_block(ctx.ally);
 }

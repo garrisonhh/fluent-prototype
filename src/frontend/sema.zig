@@ -11,7 +11,8 @@ const Context = FlFile.Context;
 const FlType = fluent.FlType;
 const FlValue = fluent.FlValue;
 
-pub const Error = Allocator.Error;
+pub const Error = Allocator.Error
+               || util.CompileFailure;
 
 /// infers types from the bottom up, using scope as context
 fn type_infer(
@@ -37,7 +38,7 @@ fn type_infer(
                 break :infer_ident try binding.ltype.clone(ast_ally);
             } else {
                 try ctx.add_message(.err, "unknown identifier", expr.slice);
-                return; // TODO error
+                return util.CompilationFailed;
             }
         },
         .call => infer_call: {
@@ -48,7 +49,7 @@ fn type_infer(
                     "function call without function",
                     expr.slice
                 );
-                return; // TODO error
+                return util.CompilationFailed;
             }
 
             const fn_expr = children[0];
@@ -58,7 +59,7 @@ fn type_infer(
                     "attempted to call non-function",
                     expr.slice
                 );
-                return; // TODO error
+                return util.CompilationFailed;
             }
 
             // type check parameters
@@ -96,7 +97,7 @@ fn type_infer(
                 try ctx.add_message(.err, msg, expr.slice);
             }
 
-            if (bad_params) return; // TODO error
+            if (bad_params) return util.CompilationFailed;
 
             break :infer_call try function.returns.clone(ast_ally);
         },
@@ -118,19 +119,19 @@ fn type_infer(
 
                     const fst_note = try std.fmt.allocPrint(
                         msg_ally,
-                        "this is {}",
+                        "this is <{}>",
                         .{fst.ltype}
                     );
                     try ctx.add_message(.note, fst_note, fst.slice);
 
                     const child_note = try std.fmt.allocPrint(
                         msg_ally,
-                        "but this is {}",
+                        "but this is <{}>",
                         .{child.ltype}
                     );
                     try ctx.add_message(.note, child_note, child.slice);
 
-                    return; // TODO error
+                    return util.CompilationFailed;
                 }
             }
 
