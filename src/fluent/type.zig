@@ -16,6 +16,7 @@ pub const FlType = union(enum) {
         subtype: *Self,
     };
 
+    // basic types
     function: Function,
     list: List,
     ltype, // the type `type`
@@ -24,8 +25,8 @@ pub const FlType = union(enum) {
     string,
     nil,
 
+    // special types
     any,
-
     unknown,
 
     pub fn init_function(

@@ -4,7 +4,7 @@ const fluent = @import("../fluent.zig");
 
 const FlType = fluent.FlType;
 
-/// Expr is an intermediate AST representation
+/// Expr is the most basic AST representation
 const Self = @This();
 
 pub const Type = enum {
@@ -13,8 +13,9 @@ pub const Type = enum {
     float,
     string,
 
-    list,
     ident,
+
+    list,
     call,
     file,
 
@@ -42,7 +43,6 @@ pub fn init_sequence(tag: Type, slice: []const u8, children: []Self) Self {
 
 pub fn init_slice(tag: Type, slice: []const u8) Self {
     std.debug.assert(!tag.is_sequence());
-
     return Self{
         .etype = tag,
         .slice = slice

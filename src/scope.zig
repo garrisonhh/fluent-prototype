@@ -17,13 +17,8 @@ const stderr = std.io.getStdErr().writer();
 const Self = @This();
 
 const Binding = struct {
-    // all bindings are typed
-    ltype: FlType,
-
-    // this thing as compiled expr, currently using this for builtins. in
-    // the future I will probably also want bindings that store Exprs and/or
-    // other info
-    block: FlBlock,
+    ltype: FlType, // all bindings are typed
+    block: FlBlock, // a compiled expr
 };
 
 arena: std.heap.ArenaAllocator,
@@ -33,44 +28,35 @@ arena: std.heap.ArenaAllocator,
 // idents here, but for builtins I think it will always be unnecessary
 map: std.StringHashMap(*const Binding),
 
-pub fn init(ally: Allocator) Self {
+// when lexical scope is introduced in the ast, scopes may be stacked on top of
+// each other
+parent: ?*Self,
+
+pub fn init(ally: Allocator, parent: ?*Self) Self {
     return Self{
         .arena = std.heap.ArenaAllocator.init(ally),
         .map = std.StringHashMap(*const Binding).init(ally),
+        .parent = parent,
     };
 }
 
 /// initializes a scope with all of the necessary typing builtins
 pub fn init_global(ally: Allocator) !Self {
-    var self = Self.init(ally);
+    var self = Self.init(ally, null);
     const scope_ally = self.allocator();
 
     const type_ltype = FlType{ .ltype = {} };
 
-    const Closure = struct {
-        fn bind_prim(scope: *Self, name: []const u8, ltype: FlType) !void {
-            const constants = [_]FlValue{ FlValue{ .ltype = ltype } };
-            const block = FlBlock{
-                .constants = &constants,
-                .ops = FlBlock.assemble_ops("push 0")
-            };
-
-            try scope.bind(name, Binding{
-                .ltype = type_ltype,
-                .block = try block.clone(scope.allocator()),
-            });
-        }
-    };
-    const bind_prim = Closure.bind_prim;
-
     // primitives
-    try bind_prim(&self, "type", type_ltype);
-    try bind_prim(&self, "int", FlType{ .int = {} });
-    try bind_prim(&self, "float", FlType{ .float = {} });
-    try bind_prim(&self, "any", FlType{ .any = {} });
+    try self.bind_prim("type", type_ltype);
+    try self.bind_prim("int", FlType{ .int = {} });
+    try self.bind_prim("float", FlType{ .float = {} });
+    try self.bind_prim("any", FlType{ .any = {} });
 
-    try self.bind("fn", Binding{
-        .ltype = try FlType.init_function(
+    // `fn` can't really take any shortcuts for binding
+    try self.bind_block(
+        "fn",
+        try FlType.init_function(
             scope_ally,
             &[_]FlType{
                 try FlType.init_list(scope_ally, &type_ltype),
@@ -78,11 +64,11 @@ pub fn init_global(ally: Allocator) !Self {
             },
             &type_ltype
         ),
-        .block = FlBlock{
+        FlBlock{
             .constants = &.{},
             .ops = FlBlock.assemble_ops("fn_type"),
         }
-    });
+    );
 
     // compilable builtins (name, type expr, stack vm assembly)
     const compilable = [_][3][]const u8{
@@ -96,7 +82,7 @@ pub fn init_global(ally: Allocator) !Self {
         const ltype = elem[1];
         const assembly = elem[2];
 
-        try self.assemble_bind(ally, name, ltype, assembly);
+        try self.bind_assembly(ally, name, ltype, assembly);
     }
 
     if (comptime builtin.mode == .Debug) try self.display(ally, stderr);
@@ -113,11 +99,8 @@ fn allocator(self: *Self) Allocator {
     return self.arena.allocator();
 }
 
-pub fn bind(
-    self: *Self,
-    name: []const u8,
-    binding: Binding
-) Allocator.Error!void {
+/// copies binding onto hashmap
+fn bind(self: *Self, name: []const u8, binding: Binding) !void {
     const ally = self.allocator();
     var ptr = try ally.create(Binding);
     ptr.* = binding;
@@ -125,7 +108,30 @@ pub fn bind(
     try self.map.put(name, ptr);
 }
 
-fn assemble_bind(
+fn bind_block(
+    self: *Self,
+    name: []const u8,
+    ltype: FlType,
+    block: FlBlock
+) Allocator.Error!void {
+    try self.bind(name, Binding{ .ltype = ltype, .block = block });
+}
+
+fn bind_prim(self: *Self, name: []const u8, ltype: FlType) !void {
+    const constants = [_]FlValue{ FlValue{ .ltype = ltype } };
+    const block = FlBlock{
+        .constants = &constants,
+        .ops = FlBlock.assemble_ops("push 0")
+    };
+
+    try self.bind_block(
+        name,
+        FlType{ .ltype = {} },
+        try block.clone(self.allocator())
+    );
+}
+
+fn bind_assembly(
     self: *Self,
     ally: Allocator,
     comptime name: []const u8,
@@ -136,10 +142,11 @@ fn assemble_bind(
         try plumbing.evaluate_text(ally, self, name, ltype_expr, null);
     defer ltype_val.deinit(ally);
 
-    try self.bind(name, Binding{
-        .ltype = try ltype_val.ltype.clone(self.allocator()),
-        .block = plumbing.assemble_simple(text),
-    });
+    try self.bind_block(
+        name,
+        try ltype_val.ltype.clone(self.allocator()),
+        plumbing.assemble_simple(text)
+    );
 }
 
 pub fn get(self: *const Self, key: []const u8) ?*const Binding {
