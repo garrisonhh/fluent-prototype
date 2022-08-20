@@ -157,13 +157,48 @@ pub fn display(self: *const Self, ally: Allocator, writer: anytype) !void {
         canvas.ConsoleColor{ .fg = .cyan }
     ));
 
-    var entries = self.map.iterator();
-    var i: usize = 0;
-    while (entries.next()) |entry| : (i += 1) {
-        const key = entry.key_ptr.*;
-        const value = entry.value_ptr;
+    // nicely organize entries
+    const Entry = @TypeOf(self.map).Entry;
+    const Closure = struct {
+        /// -1 if a < b
+        fn type_cmp(a: *const FlType, b: *const FlType) i32 {
+            const tag_priority = comptime blk: {
+                var arr = std.EnumArray(FlType.Enum, i32).initFill(0);
+                arr.set(.unknown, -2);
+                arr.set(.any, -1);
+                arr.set(.ltype, 1);
+                arr.set(.function, 2);
 
-        // print key
+                break :blk arr;
+            };
+
+            return tag_priority.get(a.*) - tag_priority.get(b.*);
+        }
+
+        /// order by type first and then alphabetically
+        pub fn entry_less_than(ctx: void, a: Entry, b: Entry) bool {
+            _ = ctx;
+
+            const cmp = type_cmp(&a.value_ptr.*.ltype, &b.value_ptr.*.ltype);
+            return if (cmp == 0) std.mem.lessThan(u8, a.key_ptr.*, b.key_ptr.*)
+                   else cmp < 0;
+        }
+    };
+    const entry_less_than = Closure.entry_less_than;
+
+    var entries = std.ArrayList(Entry).init(ally);
+    defer entries.deinit();
+
+    var entry_iter = self.map.iterator();
+    while (entry_iter.next()) |entry| try entries.append(entry);
+
+    std.sort.sort(Entry, entries.items, {}, entry_less_than);
+
+    // display entries
+    for (entries.items) |*entry, i| {
+        const key = entry.key_ptr.*;
+        const value = entry.value_ptr.*;
+
         try tc.add_box(canvas.TextBox.init(
             .{
                 .x = -@intCast(i32, key.len + 2),
@@ -173,10 +208,9 @@ pub fn display(self: *const Self, ally: Allocator, writer: anytype) !void {
             canvas.ConsoleColor{ .fmt = .bold }
         ));
 
-        // print binding
         try tc.add_box(canvas.TextBox.init(
             .{ .x = 0, .y = @intCast(i32, i) },
-            try std.fmt.allocPrint(tmp_ally, "<{}>", .{value.*.ltype}),
+            try std.fmt.allocPrint(tmp_ally, "<{}>", .{value.ltype}),
             canvas.ConsoleColor{}
         ));
     }

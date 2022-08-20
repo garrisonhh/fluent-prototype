@@ -5,6 +5,7 @@ const WriteError = std.os.WriteError;
 
 pub const FlType = union(enum) {
     const Self = @This();
+    pub const Enum = @typeInfo(Self).Union.tag_type.?;
 
     pub const Function = struct {
         params: []Self,

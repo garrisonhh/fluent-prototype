@@ -8,7 +8,7 @@ const Allocator = std.mem.Allocator;
 /// eventually may be able to remove the enum as an optimization
 pub const FlValue = union(enum) {
     const Self = @This();
-    const Enum = @typeInfo(Self).Union.tag_type.?;
+    pub const Enum = @typeInfo(Self).Union.tag_type.?;
 
     comptime {
         // nil being zero means initializing empty FlValues will be faster
