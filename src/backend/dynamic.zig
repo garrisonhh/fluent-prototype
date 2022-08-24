@@ -493,14 +493,25 @@ fn compile_expr(
             const binding = ctx.scope.get(expr.slice) orelse {
                 @panic("TODO didn't find ident in scope");
             };
-            try builder.append(&binding.block);
+
+            switch (binding.data) {
+                .block => |*block| try builder.append(block),
+                .param => @panic("TODO compile param binding"),
+            }
         },
         .call => {
             const children = expr.children.?;
             if (children.len == 0) @panic("TODO empty function call");
 
-            for (children[1..]) |*child| try compile_expr(ctx, builder, child);
-            try compile_expr(ctx, builder, &children[0]);
+            // TODO this is a disgusting hack until I implement homoiconicity
+            if (std.mem.eql(u8, children[0].slice, "the")) {
+                try compile_expr(ctx, builder, &children[2]);
+            } else {
+                for (children[1..]) |*child| {
+                    try compile_expr(ctx, builder, child);
+                }
+                try compile_expr(ctx, builder, &children[0]);
+            }
         },
         .list => {
             const children = expr.children.?;

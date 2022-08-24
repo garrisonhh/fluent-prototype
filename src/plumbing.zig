@@ -1,6 +1,7 @@
 //! plumbing is where the pipelines are. lol
 
 const std = @import("std");
+const builtin = @import("builtin");
 const util = @import("util/util.zig");
 const frontend = @import("frontend.zig");
 const backend = @import("backend.zig");
@@ -62,6 +63,15 @@ pub fn compile(
     // sema
     const ast_ally = ast.allocator();
     try ctx.wrap_stage(frontend.analyze(ctx, scope, ast_ally, &ast.root));
+
+    if (builtin.mode == .Debug) {
+        const stdout = std.io.getStdOut().writer();
+
+        try stdout.print(
+            "compiled ast:\n{}\n",
+            .{ast.root.fmt(.{ .typing = .all })}
+        );
+    }
 
     // write ltype to out param
     if (out_ltype) |ptr| ptr.* = try ast.root.ltype.clone(ctx.ally);

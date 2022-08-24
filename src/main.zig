@@ -20,7 +20,7 @@ fn eval_repl(
     // evaluate
     var ltype: fluent.FlType = undefined;
     var result = plumbing.evaluate_text(ally, scope, "stdin", text, &ltype)
-        catch |e| return if (e == util.CompilationFailed) {} else e;
+       catch |e| return if (e == util.CompilationFailed) {} else e;
     defer ltype.deinit(ally);
     defer result.deinit(ally);
 

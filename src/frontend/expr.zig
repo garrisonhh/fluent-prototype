@@ -1,5 +1,6 @@
 const std = @import("std");
 const util = @import("../util/util.zig");
+const canvas = @import("../util/canvas.zig");
 const fluent = @import("../fluent.zig");
 
 const FlType = fluent.FlType;
@@ -91,7 +92,7 @@ const Fmt = struct {
         // types
         if (self.typing == .all
          or self.typing == .functions and !expr.is_flat_literal()) {
-            try std.fmt.format(writer, "{}", .{expr.ltype});
+            try writer.print("<{}> ", .{expr.ltype});
         }
 
         // data

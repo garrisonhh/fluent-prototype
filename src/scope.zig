@@ -18,7 +18,10 @@ const Self = @This();
 
 const Binding = struct {
     ltype: FlType, // all bindings are typed
-    block: FlBlock, // a compiled expr
+    data: union(enum) {
+        block: FlBlock, // a compiled expr
+        param: usize, // a function parameter index
+    },
 };
 
 arena: std.heap.ArenaAllocator,
@@ -58,7 +61,7 @@ pub fn init_global(ally: Allocator) !Self {
         "fn",
         try FlType.init_function(
             scope_ally,
-            &[_]FlType{
+            &.{
                 try FlType.init_list(scope_ally, &type_ltype),
                 type_ltype
             },
@@ -95,7 +98,7 @@ pub fn deinit(self: *Self) void {
     self.map.deinit();
 }
 
-fn allocator(self: *Self) Allocator {
+pub fn allocator(self: *Self) Allocator {
     return self.arena.allocator();
 }
 
@@ -114,7 +117,16 @@ fn bind_block(
     ltype: FlType,
     block: FlBlock
 ) Allocator.Error!void {
-    try self.bind(name, Binding{ .ltype = ltype, .block = block });
+    try self.bind(name, Binding{ .ltype = ltype, .data = .{ .block = block } });
+}
+
+pub fn bind_param(
+    self: *Self,
+    name: []const u8,
+    ltype: FlType,
+    param: usize
+) Allocator.Error!void {
+    try self.bind(name, Binding{ .ltype = ltype, .data = .{ .param = param } });
 }
 
 fn bind_prim(self: *Self, name: []const u8, ltype: FlType) !void {
@@ -150,7 +162,9 @@ fn bind_assembly(
 }
 
 pub fn get(self: *const Self, key: []const u8) ?*const Binding {
-    return self.map.get(key);
+    return if (self.map.get(key)) |got| got
+           else if (self.parent) |parent| parent.get(key)
+           else null;
 }
 
 pub fn display(self: *const Self, ally: Allocator, writer: anytype) !void {
@@ -160,7 +174,7 @@ pub fn display(self: *const Self, ally: Allocator, writer: anytype) !void {
 
     try tc.add_box(canvas.TextBox.init(
         .{ .x = 0, .y = -1 },
-        "created global scope:",
+        "scope:",
         canvas.ConsoleColor{ .fg = .cyan }
     ));
 

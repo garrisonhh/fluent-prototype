@@ -183,6 +183,11 @@ pub fn deinit(self: *Self, ally: Allocator) void {
     ally.free(self.lines);
 }
 
+// just to allow for 'file.context()' syntax
+pub fn context(self: *Self, ally: Allocator) Context {
+    return Context.init(self, ally);
+}
+
 pub fn new_message(
     self: *const Self,
     level: Message.Level,
