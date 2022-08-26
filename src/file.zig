@@ -184,8 +184,8 @@ pub fn deinit(self: *Self, ally: Allocator) void {
 }
 
 // just to allow for 'file.context()' syntax
-pub fn context(self: *Self, ally: Allocator) Context {
-    return Context.init(self, ally);
+pub fn context(self: *const Self, ally: Allocator) Context {
+    return Context.init(ally, self);
 }
 
 pub fn new_message(

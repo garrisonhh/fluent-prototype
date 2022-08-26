@@ -1,7 +1,4 @@
-//! experimenting with retooling FlValues and FlTypes in order to create
-//! homoiconic code as data
-//!
-//! TODO replace old code and integrate, as needed
+//! contains the essential representations of Fluent data
 
 const std = @import("std");
 const util = @import("../util/util.zig");
@@ -18,7 +15,7 @@ pub const Type = enum {
         std.debug.assert(@enumToInt(@This().nil) == 0);
     }
 
-    // purely axiomatic
+    // axiomatic
     nil,
     unknown,
 
@@ -109,6 +106,31 @@ pub const SExpr = union(Type) {
 
     list: []Self, // uniform type
     tuple: []Self, // varied types
+
+    pub const TranslationError = Allocator.Error || std.fmt.ParseIntError;
+
+    /// helper for from_expr
+    fn from_children(
+        ctx: *Context,
+        children: []const Expr
+    ) TranslationError![]Self {
+        const translated = try ctx.ally.alloc(Self, children.len);
+        for (children) |child, i| translated[i] = try from_expr(ctx, child);
+
+        return translated;
+    }
+
+    /// translates the raw ast into an SExpr
+    pub fn from_expr(ctx: *Context, expr: Expr) TranslationError!Self {
+        return switch (expr.etype) {
+            .nil => Self{ .nil = {} },
+            .ident => Self{ .symbol = try ctx.ally.dupe(u8, expr.slice) },
+            .int => Self{ .int = try std.fmt.parseInt(i64, expr.slice, 0) },
+            .list => Self{ .list = try from_children(ctx, expr.children.?) },
+            .call => Self{ .tuple = try from_children(ctx, expr.children.?) },
+            else => std.debug.panic("TODO: translate {s}\n", .{expr.etype})
+        };
+    }
 
     pub fn deinit(self: Self, ally: Allocator) void {
         switch (self) {
@@ -220,37 +242,3 @@ pub const SExpr = union(Type) {
         try self.format_r(writer);
     }
 };
-
-fn translate_children(
-    ctx: *Context,
-    children: []Expr
-) TranslationError![]SExpr {
-    const translated = try ctx.ally.alloc(SExpr, children.len);
-    for (children) |child, i| translated[i] = try translate_r(ctx, &child);
-
-    return translated;
-}
-
-fn translate_r(ctx: *Context, expr: *const Expr) TranslationError!SExpr {
-    return switch (expr.etype) {
-        .nil => SExpr{ .nil = {} },
-        .ident => SExpr{ .symbol = try ctx.ally.dupe(u8, expr.slice) },
-        .int => SExpr{ .int = try std.fmt.parseInt(i64, expr.slice, 0) },
-        .list => SExpr{ .list = try translate_children(ctx, expr.children.?) },
-        .call => SExpr{ .tuple = try translate_children(ctx, expr.children.?) },
-        else => {
-            std.debug.panic("TODO: translate {s}\n", .{@tagName(expr.etype)});
-        }
-    };
-}
-
-pub const TranslationError = Allocator.Error || std.fmt.ParseIntError;
-
-/// given an ast, returns an equivalent SExpr on the ctx ally
-pub fn translate(ctx: *Context, expr: *const Expr) TranslationError!SExpr {
-    const sexpr = try translate_r(ctx, expr);
-
-    // TODO sema equivalent?
-
-    return sexpr;
-}

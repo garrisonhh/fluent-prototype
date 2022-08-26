@@ -1,9 +1,6 @@
 const std = @import("std");
 const util = @import("../util/util.zig");
 const canvas = @import("../util/canvas.zig");
-const fluent = @import("../fluent.zig");
-
-const FlType = fluent.FlType;
 
 /// Expr is the most basic AST representation
 const Self = @This();
@@ -30,7 +27,6 @@ pub const Type = enum {
 
 etype: Type,
 slice: []const u8,
-ltype: FlType = FlType{ .unknown = {} },
 children: ?[]Self = null,
 
 pub fn init_sequence(tag: Type, slice: []const u8, children: []Self) Self {

@@ -150,10 +150,6 @@ pub const Ast = struct {
     pub fn deinit(self: *Self) void {
         self.arena.deinit();
     }
-
-    pub fn allocator(self: *Self) Allocator {
-        return self.arena.allocator();
-    }
 };
 
 /// intakes program as an lfile and outputs an ast
