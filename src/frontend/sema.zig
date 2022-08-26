@@ -15,6 +15,8 @@ pub const Error = Allocator.Error
                || util.FmtError
                || util.CompileFailure;
 
+// TODO replace this file with a homoiconic version
+
 fn err_expected_type(
     ctx: *Context,
     expr: *const Expr,
@@ -69,7 +71,7 @@ fn analyze_the(
 
         try vm.execute_block(&block);
 
-        break :blk vm.stack.items[0].ltype;
+        break :blk try vm.stack.items[0].ltype.clone(ast_ally);
     };
 
     if (expected) |exp_ltype| {

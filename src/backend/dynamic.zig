@@ -344,6 +344,7 @@ pub const FlVm = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        for (self.stack.items) |*value| value.deinit(self.ally);
         self.stack.deinit();
     }
 

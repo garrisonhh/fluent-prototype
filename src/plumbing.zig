@@ -9,12 +9,13 @@ const fluent = @import("fluent.zig");
 const FlFile = @import("file.zig");
 const Scope = @import("scope.zig");
 
+const stdout = std.io.getStdOut().writer();
+const Allocator = std.mem.Allocator;
 const Context = FlFile.Context;
 const FlValue = fluent.FlValue;
 const FlType = fluent.FlType;
 const Expr = frontend.Expr;
 const FlBlock = backend.FlBlock;
-const Allocator = std.mem.Allocator;
 
 /// assemble a block without any constants
 pub fn assemble_simple(comptime text: []const u8) FlBlock {
@@ -60,15 +61,25 @@ pub fn compile(
     var ast = try ctx.wrap_stage(frontend.parse(ctx, .expr));
     defer ast.deinit();
 
+    // TODO debugging vvv
+    const translate = @import("midend/translate.zig");
+
+    var sexpr = try translate.translate(ctx, &ast.root);
+    defer sexpr.deinit(ctx.ally);
+
+    var stype = try sexpr.infer_type(ctx.ally, null);
+    defer stype.deinit(ctx.ally);
+
+    try stdout.print("translated:\n<{}>\n{}\n\n", .{stype, sexpr});
+    // ^^^
+
     // sema
     const ast_ally = ast.allocator();
     try ctx.wrap_stage(frontend.analyze(ctx, scope, ast_ally, &ast.root));
 
     if (builtin.mode == .Debug) {
-        const stdout = std.io.getStdOut().writer();
-
         try stdout.print(
-            "compiled ast:\n{}\n",
+            "compiled ast:\n{}\n\n",
             .{ast.root.fmt(.{ .typing = .all })}
         );
     }
@@ -128,7 +139,7 @@ pub fn evaluate(
         return util.CompilationFailed;
     }
 
-    return stack[0];
+    return try stack[0].clone(ctx.ally);
 }
 
 /// compiles and runs an expression from text

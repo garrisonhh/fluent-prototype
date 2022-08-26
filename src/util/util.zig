@@ -35,6 +35,23 @@ pub fn slice_from_bookends(a: anytype, b: @TypeOf(a)) Error!@TypeOf(a) {
     return a.ptr[0..@ptrToInt(b.ptr) - @ptrToInt(a.ptr) + b.len];
 }
 
+/// intersperses a list of formattable items with sep, and writes with bookends
+pub fn write_join(
+    start: []const u8,
+    sep: []const u8,
+    end: []const u8,
+    list: anytype,
+    writer: anytype
+) @TypeOf(writer).Error!void {
+    try writer.writeAll(start);
+    if (list.len > 0) {
+        try writer.print("{}", .{list[0]});
+        for (list[1..]) |item| try writer.print("{s}{}", .{sep, item});
+    }
+    try writer.writeAll(end);
+}
+
+/// takes a value and shallow copies it onto an allocator
 pub fn place_on(
     ally: Allocator,
     value: anytype
