@@ -46,21 +46,10 @@ pub fn init_slice(tag: Type, slice: []const u8) Self {
     };
 }
 
-/// top-down traversal
-pub fn traverse(
-    self: *const Self,
-    ctx: anytype,
-    cb: fn(@TypeOf(ctx), *const Self) anyerror!void
-) anyerror!void {
-    try cb(ctx, self);
-
-    if (self.children) |children| {
-        for (children) |*child| try child.traverse(ctx, cb);
-    }
-}
-
-pub fn is_flat_literal(self: *const Self) bool {
-    return self.children == null;
+/// TODO only added this to make hacky stuff easier, worth removing as soon as
+/// those hacks are removed
+pub fn is_ident(self: Self, comptime ident: []const u8) bool {
+    return self.etype == .ident and std.mem.eql(u8, self.slice, ident);
 }
 
 const Fmt = struct {
@@ -87,7 +76,7 @@ const Fmt = struct {
 
         // types
         if (self.typing == .all
-         or self.typing == .functions and !expr.is_flat_literal()) {
+         or self.typing == .functions and expr == .call) {
             try writer.print("<{}> ", .{expr.ltype});
         }
 

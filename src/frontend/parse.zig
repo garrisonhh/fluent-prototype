@@ -15,9 +15,9 @@ const Error = Allocator.Error
            || util.CompileFailure
            || lex.Error;
 
-// generates ast starting at token index `from`
-// writes final index to `out_to`
-fn generate_ast_r(
+/// generates ast starting at token index `from`
+/// writes final index to `out_to`
+fn generate_ast(
     ctx: *Context,
     ast_ally: Allocator,
     tbuf: *const TokenBuffer,
@@ -48,7 +48,7 @@ fn generate_ast_r(
             const ttypes = tbuf.tokens.items(.ttype);
             var i: usize = from + 1;
             while (ttypes[i] != terminator) {
-                const child = try generate_ast_r(ctx, ast_ally, tbuf, i, &i);
+                const child = try generate_ast(ctx, ast_ally, tbuf, i, &i);
                 try children.append(child);
             }
 
@@ -89,7 +89,7 @@ fn generate_expr_ast(
     if (tbuf.tokens.len == 0) return err_empty_program(ctx);
 
     var index: usize = 0;
-    const expr = try generate_ast_r(ctx, ast_ally, tbuf, index, &index);
+    const expr = try generate_ast(ctx, ast_ally, tbuf, index, &index);
 
     if (index != tbuf.tokens.len) {
         const views = tbuf.tokens.items(.view);
@@ -123,7 +123,7 @@ fn generate_file_ast(
 
     var index: usize = 0;
     while (index < tbuf.tokens.len) {
-        const child = try generate_ast_r(ctx, ast_ally, tbuf, index, &index);
+        const child = try generate_ast(ctx, ast_ally, tbuf, index, &index);
         try children.append(child);
     }
 

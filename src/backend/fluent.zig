@@ -27,6 +27,7 @@ pub const Type = enum {
     // structured
     list,
     tuple,
+    func,
 };
 
 /// structured type representation
@@ -41,6 +42,10 @@ pub const SType = union(Type) {
 
     list: *SType, // contains subtype
     tuple: []SType, // contains ordered subtypes
+    func: struct {
+        params: []SType,
+        returns: *SType,
+    },
 
     pub fn deinit(self: Self, ally: Allocator) void {
         switch (self) {
@@ -52,8 +57,24 @@ pub const SType = union(Type) {
                 for (tuple) |child| child.deinit(ally);
                 ally.free(tuple);
             },
+            .func => |func| {
+                for (func.params) |param| param.deinit(ally);
+                ally.free(func.params);
+
+                func.returns.deinit(ally);
+            },
             else => {}
         }
+    }
+
+    fn clone_children(
+        ally: Allocator,
+        children: []Self
+    ) Allocator.Error![]Self {
+        const copied = try ally.alloc(Self, children.len);
+        for (children) |child, i| copied[i] = try child.clone(ally);
+
+        return copied;
     }
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
@@ -61,11 +82,15 @@ pub const SType = union(Type) {
             .list => |subtype| Self{
                 .list = try util.place_on(ally, try subtype.clone(ally))
             },
-            .tuple => |tuple| blk: {
-                const subtypes = try ally.alloc(Self, tuple.len);
-                for (tuple) |subtype, i| subtypes[i] = try subtype.clone(ally);
-
-                break :blk Self{ .tuple = subtypes };
+            .tuple => |tuple| Self{ .tuple = try clone_children(ally, tuple) },
+            .func => |func| Self{
+                .func = .{
+                    .params = try clone_children(ally, func.params),
+                    .returns = try util.place_on(
+                        ally,
+                        try func.returns.clone(ally)
+                    )
+                }
             },
             else => self
         };
@@ -103,15 +128,24 @@ pub const SExpr = union(Type) {
     nil,
 
     // TODO precompute a hash? store strings only once (serenity's FlyString)?
-    // many possible optimizations tbh
+    // symbols are trivially optimizable tbh
     symbol: []const u8,
     int: i64,
     stype: SType,
 
     list: []Self, // uniform type
     tuple: []Self, // varied types
+    func: struct {
+        params: []Self, // should be an array of symbols
+        body: *Self,
+    },
 
-    pub const TranslationError = Allocator.Error || std.fmt.ParseIntError;
+    pub const TranslationError =
+        Allocator.Error
+     || std.fmt.ParseIntError
+     || error {
+        BadLambdaArgs,
+    };
 
     /// helper for from_expr
     fn from_children(
@@ -131,7 +165,44 @@ pub const SExpr = union(Type) {
             .ident => Self{ .symbol = try ctx.ally.dupe(u8, expr.slice) },
             .int => Self{ .int = try std.fmt.parseInt(i64, expr.slice, 0) },
             .list => Self{ .list = try from_children(ctx, expr.children.?) },
-            .call => Self{ .tuple = try from_children(ctx, expr.children.?) },
+            .call => from_call: {
+                const children = expr.children.?;
+
+                // TODO find a better way to formalize builtins like this. I
+                // mean maybe the truth is that builtins are called 'builtins'
+                // because there isn't another way to do this, but I seriously
+                // doubt that. in this particular case I think tokenizing
+                // 'lambda' as its own token type (since it is syntax and not
+                // a function, truthfully) might turn out to be an elegant
+                // solution
+                if (children[0].is_ident("lambda")) {
+                    if (children.len != 3) {
+                        return TranslationError.BadLambdaArgs;
+                    }
+
+                    const param_expr = children[1];
+                    if (param_expr.etype != .list) {
+                        return TranslationError.BadLambdaArgs;
+                    }
+
+                    break :from_call Self{
+                        .func = .{
+                            .params = try from_children(
+                                ctx,
+                                param_expr.children.?
+                            ),
+                            .body = try util.place_on(
+                                ctx.ally,
+                                try from_expr(ctx, children[2])
+                            )
+                        }
+                    };
+                } else {
+                    break :from_call Self{
+                        .tuple = try from_children(ctx, children)
+                    };
+                }
+            },
             else => std.debug.panic("TODO: translate {s}\n", .{expr.etype})
         };
     }
@@ -179,11 +250,11 @@ pub const SExpr = union(Type) {
         self: Self,
         ally: Allocator,
         env: Env,
-        maybe_expects: ?SType
+        maybe_expects: ?*const SType
     ) (Allocator.Error || TypingError)!SType {
         // ensure the flat type is the same
         if (maybe_expects) |expects| {
-            if (self != .symbol and @as(Type, self) != @as(Type, expects)) {
+            if (self != .symbol and @as(Type, self) != @as(Type, expects.*)) {
                 return TypingError.ExpectationFailed;
             }
         }
@@ -221,11 +292,64 @@ pub const SExpr = union(Type) {
             },
             .tuple => |tuple| blk: {
                 const subtypes = try ally.alloc(SType, tuple.len);
-                for (tuple) |child, i| {
-                    subtypes[i] = try child.infer_type(ally, env, null);
+                errdefer ally.free(subtypes);
+
+                if (maybe_expects) |expects| {
+                    if (expects.* != .tuple
+                     or expects.tuple.len != tuple.len) {
+                        return TypingError.ExpectationFailed;
+                    }
+
+                    for (tuple) |child, i| {
+                        subtypes[i] = try child.infer_type(
+                            ally,
+                            env,
+                            &expects.tuple[i]
+                        );
+                    }
+                } else {
+                    for (tuple) |child, i| {
+                        subtypes[i] = try child.infer_type(ally, env, null);
+                    }
                 }
 
                 break :blk SType{ .tuple = subtypes };
+            },
+            .func => |func| blk: {
+                if (maybe_expects == null) {
+                    // function literals require expectations to infer their
+                    // type (at least at the moment, eventually I think I should
+                    // be able to infer the type of parameters based on how they
+                    // are used within the function body)
+                    return TypingError.UninferrableType;
+                }
+
+                const expects = maybe_expects.?;
+
+                if (func.params.len != func.params.len) {
+                    return TypingError.ExpectationFailed;
+                }
+
+                const takes = try ally.alloc(SType, func.params.len);
+                for (func.params) |param, i| {
+                    takes[i] = try param.infer_type(
+                        ally,
+                        env,
+                        &expects.func.params[i]
+                    );
+                }
+
+                const returns = try util.place_on(
+                    ally,
+                    try func.body.infer_type(ally, env, expects.func.returns)
+                );
+
+                break :blk SType{
+                    .func = .{
+                        .params = takes,
+                        .returns = returns
+                    }
+                };
             }
         };
     }
@@ -238,6 +362,11 @@ pub const SExpr = union(Type) {
             .stype => |stype| try writer.print("<{}>", .{stype}),
             .list => |list| try util.write_join("[", " ", "]", list, writer),
             .tuple => |tuple| try util.write_join("(", " ", ")", tuple, writer),
+            .func => |func| {
+                try writer.writeAll("(lambda ");
+                try util.write_join("[", " ", "]", func.params, writer);
+                try writer.print(" {})", .{func.body});
+            },
         }
     }
 

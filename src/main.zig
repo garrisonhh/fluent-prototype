@@ -16,7 +16,8 @@ fn repl_eval_print(ally: Allocator, env: backend.Env, text: []const u8) !void {
     var result = try plumbing.comprehend_text(ally, "repl", text);
     defer result.deinit(ally);
 
-    var stype = try result.infer_type(ally, env, null);
+    var stype = result.infer_type(ally, env, null)
+                catch backend.SType{ .nil = {} };
     defer stype.deinit(ally);
 
     // display nicely
@@ -80,7 +81,7 @@ pub fn main() !void {
     // }){};
     // defer _ = gpa.deinit();
     // const ally = gpa.allocator();
-    const ally = std.heap.c_allocator;
+    const ally = std.heap.page_allocator;
 
     var env = try backend.create_global_env(ally);
     defer env.deinit();
