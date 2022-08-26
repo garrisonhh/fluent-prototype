@@ -2,6 +2,7 @@ const std = @import("std");
 const util = @import("util/util.zig");
 const canvas = @import("util/canvas.zig");
 const plumbing = @import("plumbing.zig");
+const backend = @import("backend.zig");
 
 const stdout = std.io.getStdOut().writer();
 const Allocator = std.mem.Allocator;
@@ -10,23 +11,23 @@ const c = @cImport({
     @cInclude("linenoise.h");
 });
 
-fn eval_repl(ally: Allocator, text: []const u8) !void {
+fn repl_eval_print(ally: Allocator, env: backend.Env, text: []const u8) !void {
     // evaluate
     var result = try plumbing.comprehend_text(ally, "repl", text);
     defer result.deinit(ally);
 
-    var stype = try result.infer_type(ally, null);
+    var stype = try result.infer_type(ally, env, null);
     defer stype.deinit(ally);
 
     // display nicely
     const color = canvas.ConsoleColor{ .fg = .green };
     const reset = canvas.ConsoleColor{};
 
-    try stdout.print("{}<{}>{}\n{}\n", .{color, stype, reset, result});
+    try stdout.print("{}<{}>{}\n{}\n\n", .{color, stype, reset, result});
 }
 
 /// returns string allocated onto ally
-fn take_repl_input(ally: Allocator) ![]const u8 {
+fn repl_read(ally: Allocator) ![]const u8 {
     const INDENT = 2;
 
     var buf = std.ArrayList(u8).init(ally);
@@ -74,13 +75,19 @@ fn take_repl_input(ally: Allocator) ![]const u8 {
 }
 
 pub fn main() !void {
-    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    // var gpa = std.heap.GeneralPurposeAllocator(.{
+        // .stack_trace_frames = 1000,
+    // }){};
     // defer _ = gpa.deinit();
     // const ally = gpa.allocator();
-    const ally = std.heap.page_allocator;
+    const ally = std.heap.c_allocator;
 
+    var env = try backend.create_global_env(ally);
+    defer env.deinit();
+
+    // repl loop
     while (true) {
-        const input = try take_repl_input(ally);
+        const input = try repl_read(ally);
         defer ally.free(input);
 
         // check for empty input (exit program)
@@ -94,6 +101,6 @@ pub fn main() !void {
 
         if (is_empty) break;
 
-        try eval_repl(ally, input);
+        try repl_eval_print(ally, env, input);
     }
 }

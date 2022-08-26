@@ -4,6 +4,7 @@ const std = @import("std");
 const util = @import("../util/util.zig");
 const frontend = @import("../frontend.zig");
 const FlFile = @import("../file.zig");
+const Env = @import("env.zig");
 
 const Allocator = std.mem.Allocator;
 const Context = FlFile.Context;
@@ -17,11 +18,11 @@ pub const Type = enum {
 
     // axiomatic
     nil,
-    unknown,
 
     // simple
     symbol,
     int,
+    stype,
 
     // structured
     list,
@@ -34,9 +35,9 @@ pub const SType = union(Type) {
     const Self = @This();
 
     nil,
-    unknown,
     symbol,
     int,
+    stype,
 
     list: *SType, // contains subtype
     tuple: []SType, // contains ordered subtypes
@@ -76,6 +77,7 @@ pub const SType = union(Type) {
             .tuple => |tuple| {
                 try util.write_join("(tuple ", " ", ")", tuple, writer);
             },
+            .stype => try writer.writeAll("type"),
             else => |t| try writer.writeAll(@tagName(t)),
         }
     }
@@ -99,10 +101,12 @@ pub const SExpr = union(Type) {
     const Self = @This();
 
     nil,
-    unknown, // should only appear in typing
 
-    symbol: []const u8, // TODO precompute a hash?
+    // TODO precompute a hash? store strings only once (serenity's FlyString)?
+    // many possible optimizations tbh
+    symbol: []const u8,
     int: i64,
+    stype: SType,
 
     list: []Self, // uniform type
     tuple: []Self, // varied types
@@ -143,88 +147,95 @@ pub const SExpr = union(Type) {
         }
     }
 
-    pub const TypeInferError = error {
+    /// helper for clone
+    fn clone_children(
+        ally: Allocator,
+        children: []const Self
+    ) Allocator.Error![]Self {
+        const cloned = try ally.alloc(Self, children.len);
+        for (children) |child, i| cloned[i] = try child.clone(ally);
+
+        return cloned;
+    }
+
+    pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
+        return switch(self) {
+            .symbol => |sym| Self{ .symbol = try ally.dupe(u8, sym) },
+            .list => |list| Self{ .list = try clone_children(ally, list) },
+            .tuple => |tuple| Self{ .tuple = try clone_children(ally, tuple) },
+            else => self
+        };
+    }
+
+    pub const TypingError = error {
         ExpectationFailed,
+        UninferrableType,
     };
 
-    /// infers type based on bottom up and top down indicators. since these may
-    /// be in conflict, this performs some type checking, but there is nothing
-    /// preventing this from producing potentially incomplete types
+    /// type inference. unidirectional by default, bidirectional when an
+    /// expectation is provided.
     /// TODO nicer errors
     pub fn infer_type(
         self: Self,
         ally: Allocator,
+        env: Env,
         maybe_expects: ?SType
-    ) (Allocator.Error || TypeInferError)!SType {
+    ) (Allocator.Error || TypingError)!SType {
+        // ensure the flat type is the same
         if (maybe_expects) |expects| {
-            // bidirectional inference
-            if (self == .unknown) {
-                return try expects.clone(ally);
-            } else if (@as(Type, self) != @as(Type, expects)) {
-                return error.ExpectationFailed;
-            } else {
-                return switch (self) {
-                    .list => |list| blk: {
-                        const subtype =
-                            if (list.len == 0)
-                                try expects.list.clone(ally)
-                            else
-                                try self.list[0].infer_type(
-                                    ally,
-                                    expects.list.*
-                                );
-
-                        break :blk SType{
-                            .list = try util.place_on(ally, subtype)
-                        };
-                    },
-                    .tuple => |tuple| blk: {
-                        const subtypes = try ally.alloc(SType, tuple.len);
-                        for (tuple) |child, i| {
-                            subtypes[i] = try child.infer_type(
-                                ally,
-                                expects.tuple[i]
-                            );
-                        }
-
-                        break :blk SType{ .tuple = subtypes };
-                    },
-                    .unknown => unreachable,
-                    else => try expects.clone(ally)
-                };
+            if (self != .symbol and @as(Type, self) != @as(Type, expects)) {
+                return TypingError.ExpectationFailed;
             }
-        } else {
-            // unidirectional inference
-            return switch (self) {
-                .nil => SType{ .nil = {} },
-                .unknown => SType{ .unknown = {} },
-                .symbol => SType{ .symbol = {} },
-                .int => SType{ .int = {} },
-                .list => |list| blk: {
-                    const subtype =
-                        if (list.len == 0) SType{ .unknown = {} }
-                        else try list[0].infer_type(ally, null);
-
-                    break :blk SType{ .list = try util.place_on(ally, subtype) };
-                },
-                .tuple => |tuple| blk: {
-                    const subtypes = try ally.alloc(SType, tuple.len);
-                    for (tuple) |child, i| {
-                        subtypes[i] = try child.infer_type(ally, null);
-                    }
-
-                    break :blk SType{ .tuple = subtypes };
-                }
-            };
         }
+
+        return switch (self) {
+            .nil => SType{ .nil = {} },
+            .symbol => |sym| blk: {
+                if (env.get(sym)) |value| {
+                    // TODO cache this calculation maybe?
+                    break :blk value.infer_type(ally, env, maybe_expects);
+                } else if (maybe_expects) |expects| {
+                    break :blk try expects.clone(ally);
+                } else {
+                    break :blk TypingError.UninferrableType;
+                }
+            },
+            .int => SType{ .int = {} },
+            .stype => SType{ .stype = {} },
+            .list => |list| blk: {
+                const subtype = find_subtype: {
+                    if (list.len > 0) {
+                        break :find_subtype try list[0].infer_type(
+                            ally,
+                            env,
+                            null
+                        );
+                    } else if (maybe_expects) |expects| {
+                        break :find_subtype try expects.list.clone(ally);
+                    } else {
+                        break :blk TypingError.UninferrableType;
+                    }
+                };
+
+                break :blk SType{ .list = try util.place_on(ally, subtype) };
+            },
+            .tuple => |tuple| blk: {
+                const subtypes = try ally.alloc(SType, tuple.len);
+                for (tuple) |child, i| {
+                    subtypes[i] = try child.infer_type(ally, env, null);
+                }
+
+                break :blk SType{ .tuple = subtypes };
+            }
+        };
     }
 
     fn format_r(self: Self, writer: anytype) @TypeOf(writer).Error!void {
         switch (self) {
             .nil => try writer.writeAll("nil"),
-            .unknown => try writer.writeAll("unknown"),
             .symbol => |sym| try writer.writeAll(sym),
             .int => |n| try writer.print("{d}", .{n}),
+            .stype => |stype| try writer.print("<{}>", .{stype}),
             .list => |list| try util.write_join("[", " ", "]", list, writer),
             .tuple => |tuple| try util.write_join("(", " ", ")", tuple, writer),
         }

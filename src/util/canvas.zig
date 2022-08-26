@@ -44,7 +44,7 @@ pub const ConsoleColor = struct {
         _ = options;
 
         // ansi color code
-        const code = "\x1b[{}m";
+        const code = "\x1b[{d}m";
         try writer.print(code ** 4, .{
             0, // reset
             @enumToInt(self.fmt),
