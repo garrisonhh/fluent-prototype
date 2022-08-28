@@ -397,9 +397,7 @@ pub const SExpr = union(Type) {
 
                 // define parameters in subenv
                 for (func.params) |param, i| {
-                    try fun_env.define(param, Env.Bound{
-                        .stype = expects.func.params[i]
-                    });
+                    try fun_env.define_virtual(param, expects.func.params[i]);
                 }
 
                 // returns tolerates an `undef` return expectation

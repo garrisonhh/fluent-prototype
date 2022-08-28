@@ -18,8 +18,16 @@ const Self = @This();
 /// bound types and values must be typed, but only in certain circumstances do
 /// they need a value
 pub const Bound = struct {
+    pub const Data = union(enum) {
+        // used for stuff like function parameters, where I only really know
+        // the type
+        virtual,
+        builtin, // TODO data here. I imagine I'm storing ops
+        value: SExpr,
+    };
+
     stype: SType,
-    value: ?SExpr = null,
+    data: Data,
 };
 const Map = std.StringHashMap(Bound);
 
@@ -44,8 +52,14 @@ pub fn deinit(self: *Self) void {
     var iter = self.map.iterator();
     while (iter.next()) |entry| {
         self.ally.free(entry.key_ptr.*);
-        entry.value_ptr.stype.deinit(self.ally);
-        if (entry.value_ptr.value) |expr| expr.deinit(self.ally);
+
+        const bound = entry.value_ptr;
+        bound.stype.deinit(self.ally);
+
+        switch (bound.data) {
+            .virtual, .builtin => {},
+            .value => |value| value.deinit(self.ally)
+        }
     }
 
     self.map.deinit();
@@ -62,10 +76,32 @@ pub fn define_raw(self: *Self, symbol: []const u8, to: Bound) !void {
 pub fn define(self: *Self, symbol: []const u8, to: Bound) !void {
     const cloned = Bound{
         .stype = try to.stype.clone(self.ally),
-        .value = if (to.value) |value| try value.clone(self.ally) else null
+        .data = switch (to.data) {
+            .virtual, .builtin => to.data,
+            .value => |value| Bound.Data{ .value = try value.clone(self.ally) },
+        }
     };
 
     try self.define_raw(symbol, cloned);
+}
+
+pub fn define_virtual(self: *Self, symbol: []const u8, stype: SType) !void {
+    try self.define(symbol, Bound{
+        .stype = stype,
+        .data = .{ .virtual = {} }
+    });
+}
+
+pub fn define_value(
+    self: *Self,
+    symbol: []const u8,
+    stype: SType,
+    value: SExpr
+) !void {
+    try self.define(symbol, Bound{
+        .stype = stype,
+        .data = .{ .value = value }
+    });
 }
 
 fn get(self: Self, symbol: []const u8) ?Bound {
@@ -78,8 +114,8 @@ pub fn get_type(self: Self, symbol: []const u8) ?SType {
     return if (self.get(symbol)) |bound| bound.stype else null;
 }
 
-pub fn get_value(self: Self, symbol: []const u8) ?SExpr {
-    return if (self.get(symbol)) |bound| bound.value else null;
+pub fn get_data(self: Self, symbol: []const u8) ?Bound.Data {
+    return if (self.get(symbol)) |bound| bound.data else null;
 }
 
 /// TODO canvas repr
@@ -98,7 +134,7 @@ pub fn display(
         const bound = entry.value_ptr;
 
         try stdout.print(
-            "{}{s}{} | {}<{}>{} | {}\n",
+            "{}{s}{} | {}<{}>{} | ",
             .{
                 &ConsoleColor{ .fg = .red },
                 symbol,
@@ -106,9 +142,15 @@ pub fn display(
                 &ConsoleColor{ .fg = .green },
                 bound.stype,
                 &ConsoleColor{},
-                bound.value
             }
         );
+
+        switch (bound.data) {
+            .virtual, .builtin => try stdout.writeAll(@tagName(bound.data)),
+            .value => |value| try stdout.print("{}", .{value}),
+        }
+
+        try stdout.writeAll("\n");
     }
 
     try stdout.writeAll("\n");
