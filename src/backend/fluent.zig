@@ -10,14 +10,21 @@ const Allocator = std.mem.Allocator;
 const Context = FlFile.Context;
 const Expr = frontend.Expr;
 
+// TODO remove, debugging only
+const ConsoleColor = @import("../util/canvas.zig").ConsoleColor;
+const stdout = std.io.getStdOut().writer();
+
 /// flat type representation
 pub const Type = enum {
+    const Self = @This();
+
     comptime {
         std.debug.assert(@enumToInt(@This().nil) == 0);
     }
 
     // axiomatic
     nil,
+    undef,
 
     // simple
     symbol,
@@ -36,6 +43,7 @@ pub const SType = union(Type) {
     const Self = @This();
 
     nil,
+    undef,
     symbol,
     int,
     stype,
@@ -96,13 +104,48 @@ pub const SType = union(Type) {
         };
     }
 
+    /// checks if SType tags match
+    /// helper for `matches` and some other type inference related functions
+    fn flat_matches(self: Self, template: Self) bool {
+        return template == .undef or @as(Type, self) == @as(Type, template);
+    }
+
+    /// a unidirectional operation to determine if this type matches the
+    /// provided template
+    pub fn matches(self: Self, template: Self) bool {
+        return self.flat_matches(template) and switch (self) {
+            .list => |subtype| subtype.matches(template.list.*),
+            .tuple => |children| blk: {
+                for (children) |child, i| {
+                    if (!child.matches(template.tuple[i])) break :blk false;
+                }
+
+                break :blk true;
+            },
+            .func => |func| blk: {
+                for (func.params) |param, i| {
+                    if (!param.matches(template.func.params[i])) {
+                        break :blk false;
+                    }
+                }
+
+                break :blk func.returns.matches(template.func.returns.*);
+            },
+            else => true
+        };
+    }
+
     fn format_r(self: Self, writer: anytype) @TypeOf(writer).Error!void {
         switch (self) {
+            .stype => try writer.writeAll("type"),
             .list => |subtype| try writer.print("(list {})", .{subtype}),
             .tuple => |tuple| {
                 try util.write_join("(tuple ", " ", ")", tuple, writer);
             },
-            .stype => try writer.writeAll("type"),
+            .func => |func| {
+                try util.write_join("(fn [", " ", "]", func.params, writer);
+                try writer.print(" {})", .{func.returns});
+            },
             else => |t| try writer.writeAll(@tagName(t)),
         }
     }
@@ -126,6 +169,7 @@ pub const SExpr = union(Type) {
     const Self = @This();
 
     nil,
+    undef,
 
     // TODO precompute a hash? store strings only once (serenity's FlyString)?
     // symbols are trivially optimizable tbh
@@ -136,7 +180,7 @@ pub const SExpr = union(Type) {
     list: []Self, // uniform type
     tuple: []Self, // varied types
     func: struct {
-        params: []Self, // should be an array of symbols
+        params: []const []const u8, // an array of symbols for parameters
         body: *Self,
     },
 
@@ -185,12 +229,19 @@ pub const SExpr = union(Type) {
                         return TranslationError.BadLambdaArgs;
                     }
 
+                    const symbols = param_expr.children.?;
+                    const params = try ctx.ally.alloc([]const u8, symbols.len);
+                    for (symbols) |symbol, i| {
+                        if (symbol.etype != .ident) {
+                            return TranslationError.BadLambdaArgs;
+                        }
+
+                        params[i] = try ctx.ally.dupe(u8, symbol.slice);
+                    }
+
                     break :from_call Self{
                         .func = .{
-                            .params = try from_children(
-                                ctx,
-                                param_expr.children.?
-                            ),
+                            .params = params,
                             .body = try util.place_on(
                                 ctx.ally,
                                 try from_expr(ctx, children[2])
@@ -213,6 +264,11 @@ pub const SExpr = union(Type) {
             .list, .tuple => |children| {
                 for (children) |child| child.deinit(ally);
                 ally.free(children);
+            },
+            .func => |func| {
+                for (func.params) |param| ally.free(param);
+                ally.free(func.params);
+                func.body.deinit(ally);
             },
             else => {}
         }
@@ -241,131 +297,163 @@ pub const SExpr = union(Type) {
     pub const TypingError = error {
         ExpectationFailed,
         UninferrableType,
+        EmptyFunctionCall,
+        UnknownSymbol,
     };
 
-    /// type inference. unidirectional by default, bidirectional when an
-    /// expectation is provided.
+    /// type inference. tries to be as bidirectional as possible, but you can
+    /// escape this by passing in `SType{ .undefined = {} }` as expectation
     /// TODO nicer errors
     pub fn infer_type(
         self: Self,
         ally: Allocator,
         env: Env,
-        maybe_expects: ?*const SType
-    ) (Allocator.Error || TypingError)!SType {
-        // ensure the flat type is the same
-        if (maybe_expects) |expects| {
-            if (self != .symbol and @as(Type, self) != @as(Type, expects.*)) {
-                return TypingError.ExpectationFailed;
+        expects: SType
+    ) anyerror!SType {
+        // check the flat type
+        switch (self) {
+            .symbol, .tuple => {},
+            else => {
+                if (expects != .undef
+                and @as(Type, self) != @as(Type, expects)) {
+                    return TypingError.ExpectationFailed;
+                }
             }
         }
 
-        return switch (self) {
+        const inferred = switch (self) {
             .nil => SType{ .nil = {} },
+            .undef => unreachable,
             .symbol => |sym| blk: {
-                if (env.get(sym)) |value| {
-                    // TODO cache this calculation maybe?
-                    break :blk value.infer_type(ally, env, maybe_expects);
-                } else if (maybe_expects) |expects| {
-                    break :blk try expects.clone(ally);
-                } else {
-                    break :blk TypingError.UninferrableType;
+                const bound_stype = env.get_type(sym) orelse {
+                    return TypingError.UnknownSymbol;
+                };
+
+                if (!bound_stype.matches(expects)) {
+                    return TypingError.ExpectationFailed;
                 }
+
+                break :blk try bound_stype.clone(ally);
             },
             .int => SType{ .int = {} },
             .stype => SType{ .stype = {} },
             .list => |list| blk: {
-                const subtype = find_subtype: {
-                    if (list.len > 0) {
-                        break :find_subtype try list[0].infer_type(
-                            ally,
-                            env,
-                            null
-                        );
-                    } else if (maybe_expects) |expects| {
-                        break :find_subtype try expects.list.clone(ally);
-                    } else {
-                        break :blk TypingError.UninferrableType;
-                    }
-                };
+                const subtype =
+                    if (expects != .undef)
+                        if (list.len > 0)
+                            try list[0].infer_type(ally, env, expects.list.*)
+                        else
+                            try expects.list.clone(ally)
+                    else if (list.len > 0)
+                        try list[0].infer_type(ally, env, SType{ .undef = {} })
+                    else
+                        SType{ .undef = {} };
 
                 break :blk SType{ .list = try util.place_on(ally, subtype) };
             },
             .tuple => |tuple| blk: {
-                const subtypes = try ally.alloc(SType, tuple.len);
-                errdefer ally.free(subtypes);
+                if (tuple.len == 0) return TypingError.EmptyFunctionCall;
 
-                if (maybe_expects) |expects| {
-                    if (expects.* != .tuple
-                     or expects.tuple.len != tuple.len) {
-                        return TypingError.ExpectationFailed;
-                    }
+                // most of the function type can be inferred from context
+                const takes = try ally.alloc(SType, tuple.len - 1);
+                defer ally.free(takes);
 
-                    for (tuple) |child, i| {
-                        subtypes[i] = try child.infer_type(
-                            ally,
-                            env,
-                            &expects.tuple[i]
-                        );
-                    }
-                } else {
-                    for (tuple) |child, i| {
-                        subtypes[i] = try child.infer_type(ally, env, null);
-                    }
-                }
-
-                break :blk SType{ .tuple = subtypes };
-            },
-            .func => |func| blk: {
-                if (maybe_expects == null) {
-                    // function literals require expectations to infer their
-                    // type (at least at the moment, eventually I think I should
-                    // be able to infer the type of parameters based on how they
-                    // are used within the function body)
-                    return TypingError.UninferrableType;
-                }
-
-                const expects = maybe_expects.?;
-
-                if (func.params.len != func.params.len) {
-                    return TypingError.ExpectationFailed;
-                }
-
-                const takes = try ally.alloc(SType, func.params.len);
-                for (func.params) |param, i| {
+                for (tuple[1..]) |param, i| {
                     takes[i] = try param.infer_type(
                         ally,
                         env,
-                        &expects.func.params[i]
+                        SType{ .undef = {}}
                     );
                 }
 
+                const call_expects = SType{
+                    .func = .{
+                        .params = takes,
+                        // do I need to clone this?
+                        .returns = try util.place_on(ally, expects)
+                    }
+                };
+
+                // use inferred expectations to find the return type
+                const called_type = try tuple[0].infer_type(
+                    ally,
+                    env,
+                    call_expects
+                );
+
+                break :blk try called_type.func.returns.clone(ally);
+            },
+            .func => |func| blk: {
+                // function literals require expectations to infer their
+                // type
+                if (expects == .undef) {
+                    return TypingError.UninferrableType;
+                }
+
+                // return type can be fully checked + inferred from the body
+                // expression
+                var fun_env = try Env.init(ally, &env);
+                defer fun_env.deinit();
+
+                // define parameters in subenv
+                for (func.params) |param, i| {
+                    try fun_env.define(param, Env.Bound{
+                        .stype = expects.func.params[i]
+                    });
+                }
+
+                // returns tolerates an `undef` return expectation
                 const returns = try util.place_on(
                     ally,
-                    try func.body.infer_type(ally, env, expects.func.returns)
+                    try func.body.infer_type(
+                        ally,
+                        fun_env,
+                        expects.func.returns.*
+                    )
                 );
 
                 break :blk SType{
                     .func = .{
-                        .params = takes,
+                        .params = expects.func.params,
                         .returns = returns
                     }
                 };
             }
         };
+
+        // TODO debug remove
+        try stdout.print(
+            "INFER {}\nWITH {}<{}>{}\nFOUND {}<{}>{}\n\n",
+            .{
+                self,
+                &ConsoleColor{ .fg = .green},
+                expects,
+                &ConsoleColor{},
+                &ConsoleColor{ .fg = .green},
+                inferred,
+                &ConsoleColor{},
+            }
+        );
+
+        return inferred;
     }
 
     fn format_r(self: Self, writer: anytype) @TypeOf(writer).Error!void {
         switch (self) {
             .nil => try writer.writeAll("nil"),
+            .undef => try writer.writeAll("undef"),
             .symbol => |sym| try writer.writeAll(sym),
             .int => |n| try writer.print("{d}", .{n}),
             .stype => |stype| try writer.print("<{}>", .{stype}),
             .list => |list| try util.write_join("[", " ", "]", list, writer),
             .tuple => |tuple| try util.write_join("(", " ", ")", tuple, writer),
             .func => |func| {
-                try writer.writeAll("(lambda ");
-                try util.write_join("[", " ", "]", func.params, writer);
-                try writer.print(" {})", .{func.body});
+                try writer.writeAll("(lambda [");
+                for (func.params) |param, i| {
+                    if (i > 0) try writer.writeAll(" ");
+                    try writer.writeAll(param);
+                }
+                try writer.print("] {})", .{func.body});
             },
         }
     }

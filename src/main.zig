@@ -16,8 +16,7 @@ fn repl_eval_print(ally: Allocator, env: backend.Env, text: []const u8) !void {
     var result = try plumbing.comprehend_text(ally, "repl", text);
     defer result.deinit(ally);
 
-    var stype = result.infer_type(ally, env, null)
-                catch backend.SType{ .nil = {} };
+    var stype = try result.infer_type(ally, env, backend.SType{ .undef = {} });
     defer stype.deinit(ally);
 
     // display nicely
