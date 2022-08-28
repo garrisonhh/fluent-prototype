@@ -1,6 +1,5 @@
 const std = @import("std");
 const util = @import("../util/util.zig");
-const canvas = @import("../util/canvas.zig");
 
 /// Expr is the most basic AST representation
 const Self = @This();

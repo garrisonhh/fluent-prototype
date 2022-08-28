@@ -3,15 +3,14 @@
 //! instances own all bound keys and values.
 
 const std = @import("std");
+const kz = @import("kritzler");
 const util = @import("../util/util.zig");
-const canvas = @import("../util/canvas.zig");
 const fluent = @import("fluent.zig");
 
 const stdout = std.io.getStdOut().writer();
 const Allocator = std.mem.Allocator;
 const SExpr = fluent.SExpr;
 const SType = fluent.SType;
-const ConsoleColor = canvas.ConsoleColor;
 
 const Self = @This();
 
@@ -35,16 +34,8 @@ ally: Allocator,
 map: Map,
 parent: ?*const Self,
 
-/// only global will ever want a null parent
-pub fn init_internal(
-    ally: Allocator,
-    parent: ?*const Self
-) Allocator.Error!Self {
+pub fn init(ally: Allocator, parent: ?*const Self) Allocator.Error!Self {
     return Self{ .ally = ally, .map = Map.init(ally), .parent = parent };
-}
-
-pub fn init(ally: Allocator, parent: *const Self) Allocator.Error!Self {
-    return try init_internal(ally, parent);
 }
 
 pub fn deinit(self: *Self) void {
@@ -136,12 +127,12 @@ pub fn display(
         try stdout.print(
             "{}{s}{} | {}<{}>{} | ",
             .{
-                &ConsoleColor{ .fg = .red },
+                &kz.Color{ .fg = .red },
                 symbol,
-                &ConsoleColor{},
-                &ConsoleColor{ .fg = .green },
+                &kz.Color{},
+                &kz.Color{ .fg = .green },
                 bound.stype,
-                &ConsoleColor{},
+                &kz.Color{},
             }
         );
 

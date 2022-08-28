@@ -9,20 +9,15 @@ const Allocator = std.mem.Allocator;
 const SType = fluent.SType;
 const SExpr = fluent.SExpr;
 
-pub fn create_global_env(ally: Allocator) !Env {
-    var global = try Env.init_internal(ally, null);
+fn define_type(env: *Env, symbol: []const u8, stype: SType) !void {
+    try env.define_value(symbol, SType{ .stype = {} }, SExpr{ .stype = stype });
+}
 
-    const def_val = global.define_value;
-    try def_val(
-        "type",
-        SType{ .stype = {} },
-        SExpr{ .stype = SType{ .stype = {} } }
-    );
-    try def_val(
-        "int",
-        SType{ .stype = {} },
-        SExpr{ .stype = SType{ .int = {} } }
-    );
+pub fn create_global_env(ally: Allocator) !Env {
+    var global = try Env.init(ally, null);
+
+    try define_type(&global, "type", SType{ .stype = {} });
+    try define_type(&global, "int", SType{ .int = {} });
 
     try global.display("global env", .{});
 

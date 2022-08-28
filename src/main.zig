@@ -1,6 +1,6 @@
 const std = @import("std");
+const kz = @import("kritzler");
 const util = @import("util/util.zig");
-const canvas = @import("util/canvas.zig");
 const plumbing = @import("plumbing.zig");
 const backend = @import("backend.zig");
 
@@ -20,8 +20,8 @@ fn repl_eval_print(ally: Allocator, env: backend.Env, text: []const u8) !void {
     defer stype.deinit(ally);
 
     // display nicely
-    const color = canvas.ConsoleColor{ .fg = .green };
-    const reset = canvas.ConsoleColor{};
+    const color = kz.Color{ .fg = .green };
+    const reset = kz.Color{};
 
     try stdout.print("{}<{}>{}\n{}\n\n", .{color, stype, reset, result});
 }

@@ -1,12 +1,10 @@
 const std = @import("std");
+const kz = @import("kritzler");
 const util = @import("util/util.zig");
-const canvas = @import("util/canvas.zig");
 
 const stdout = std.io.getStdOut().writer();
 const stderr = std.io.getStdErr().writer();
 const Allocator = std.mem.Allocator;
-const TextBox = canvas.TextBox;
-const ConsoleColor = canvas.ConsoleColor;
 
 /// the FlFile abstraction allow for contextual errors.
 const Self = @This();
@@ -28,12 +26,12 @@ pub const Message = struct {
         err,
         note,
 
-        fn color(self: Level) ConsoleColor {
+        fn color(self: Level) kz.Color {
             return switch (self) {
-                .debug => ConsoleColor{ .fg = .green },
-                .warning => ConsoleColor{ .fg = .yellow },
-                .err => ConsoleColor{ .fg = .red  },
-                .note => ConsoleColor{ .fg = .cyan },
+                .debug => kz.Color{ .fg = .green },
+                .warning => kz.Color{ .fg = .yellow },
+                .err => kz.Color{ .fg = .red  },
+                .note => kz.Color{ .fg = .cyan },
             };
         }
     };
@@ -239,18 +237,15 @@ const MessageQueue = struct {
 };
 
 /// prints a line number to the canvas
-fn print_line_num(tc: *canvas.TextCanvas, y: i32, line_num: usize) !void {
-    const textbox_text = try std.fmt.allocPrint(
-        tc.temp_allocator(),
-        " {d} | ",
-        .{line_num}
-    );
+fn print_line_num(tc: *kz.Canvas, y: isize, line_num: usize) !void {
+    const textbox_text = try tc.print(" {d} | ", .{line_num});
 
-    try tc.add_box(TextBox.init(
-        .{ .x = -@intCast(i32, textbox_text.len), .y = y },
-        textbox_text,
-        ConsoleColor{ .fmt = .bold }
-    ));
+    try tc.scribble(
+        .{-@intCast(isize, textbox_text.len), y},
+        kz.Color{ .fmt = .bold },
+        "{s}",
+        .{textbox_text}
+    );
 }
 
 /// given a number of messages, print them in a nicely organized and readable
@@ -288,20 +283,20 @@ pub fn print_messages(
     }
 
     // draw and print output for each message queue
-    var tc = canvas.TextCanvas.init(ally);
+    var tc = kz.Canvas.init(ally);
     defer tc.deinit();
-    const temp_allocator = tc.temp_allocator();
 
     for (queues.values()) |queue| {
         const lfile = queue.lfile;
 
         // print the lfile name
-        try tc.add_box(TextBox.init(
-            .{ .x = 0, .y = 0 },
-            try std.fmt.allocPrint(temp_allocator, "in {s}:", .{lfile.name}),
-            ConsoleColor{ .fmt = .bold }
-        ));
-        try tc.print(writer);
+        try tc.scribble(
+            .{0, 0},
+            kz.Color{ .fmt = .bold },
+            "in {s}:",
+            .{lfile.name}
+        );
+        try tc.flush(writer);
 
         for (queue.messages.items) |msg, msg_index| {
             // ellipses between code blocks
@@ -315,53 +310,44 @@ pub fn print_messages(
             // - 1 removes trailing '\n'
             const stop_index = lfile.lines[stop_line] - 1;
 
-            try tc.add_box(TextBox.init(
-                .{ .x = 0, .y = 0 },
-                lfile.text[start_index..stop_index],
-                ConsoleColor{}
-            ));
+            try tc.scribble(
+                .{0, 0},
+                kz.Color{},
+                "{s}",
+                .{lfile.text[start_index..stop_index]}
+            );
 
             // line numbers
             var line = start_line;
             while (line < stop_line) : (line += 1) {
-                const y = @intCast(i32, line - start_line);
+                const y = @intCast(isize, line - start_line);
                 try print_line_num(&tc, y, line + 1);
             }
 
             // the message and starting arrow
             const level_color = msg.level.color();
-            const char_x = @intCast(i32, msg.loc.char);
+            const char_x = @intCast(isize, msg.loc.char);
 
-            var msg_text_box = TextBox.init(
-                .{ .x = char_x, .y = -1 },
-                msg.msg,
-                level_color
-            );
-            msg_text_box.rect.y -= msg_text_box.rect.h;
-
-            try tc.add_box(msg_text_box);
-            try tc.add_box(TextBox.init(
-                .{ .x = char_x, .y = -1 },
-                "v",
-                level_color
-            ));
+            try tc.scribble(.{char_x - 1, -1}, level_color, "{s}", .{msg.msg});
+            try tc.scribble(.{char_x, -1}, level_color, "v", .{});
 
             // the end of span arrow
             if (msg.len > 1) {
                 const stop_char = start_index + msg.loc.char
                                 + msg.len - lfile.lines[stop_line - 1] - 1;
 
-                try tc.add_box(TextBox.init(
+                try tc.scribble(
                     .{
-                        .x = @intCast(i32, stop_char),
-                        .y = @intCast(i32, msg.num_lines)
+                        @intCast(isize, stop_char),
+                        @intCast(isize, msg.num_lines)
                     },
+                    level_color,
                     "^",
-                    level_color
-                ));
+                    .{}
+                );
             }
 
-            try tc.print(writer);
+            try tc.flush(writer);
         }
     }
 }

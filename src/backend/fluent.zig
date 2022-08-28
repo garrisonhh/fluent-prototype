@@ -11,7 +11,7 @@ const Context = FlFile.Context;
 const Expr = frontend.Expr;
 
 // TODO remove, debugging only
-const ConsoleColor = @import("../util/canvas.zig").ConsoleColor;
+const Color = @import("kritzler").Color;
 const stdout = std.io.getStdOut().writer();
 
 /// flat type representation
@@ -424,12 +424,12 @@ pub const SExpr = union(Type) {
             "INFER {}\nWITH {}<{}>{}\nFOUND {}<{}>{}\n\n",
             .{
                 self,
-                &ConsoleColor{ .fg = .green},
+                &Color{ .fg = .green},
                 expects,
-                &ConsoleColor{},
-                &ConsoleColor{ .fg = .green},
+                &Color{},
+                &Color{ .fg = .green},
                 inferred,
-                &ConsoleColor{},
+                &Color{},
             }
         );
 
