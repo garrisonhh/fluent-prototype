@@ -109,40 +109,29 @@ pub fn get_data(self: Self, symbol: []const u8) ?Bound.Data {
     return if (self.get(symbol)) |bound| bound.data else null;
 }
 
-/// TODO canvas repr
-/// TODO generic Table builder for canvas (since this is a common use case)
-/// TODO even refactor canvas, fun project and useful
 pub fn display(
     self: Self,
     comptime label_fmt: []const u8,
-    comptime label_args: anytype
+    label_args: anytype
 ) !void {
-    try stdout.print(label_fmt ++ "\n", label_args);
+    var table = try kz.Table(&.{
+        .{ .title = "symbol", .fmt = "{s}", .color = kz.Color{ .fg = .red } },
+        .{ .title = "type", .fmt = "<{}>", .color = kz.Color{ .fg = .green } },
+        .{ .title = "data", .fmt = "{s}" },
+    }).init(self.ally, label_fmt, label_args);
 
     var iter = self.map.iterator();
     while (iter.next()) |entry| {
         const symbol = entry.key_ptr.*;
         const bound = entry.value_ptr;
 
-        try stdout.print(
-            "{}{s}{} | {}<{}>{} | ",
-            .{
-                &kz.Color{ .fg = .red },
-                symbol,
-                &kz.Color{},
-                &kz.Color{ .fg = .green },
-                bound.stype,
-                &kz.Color{},
-            }
-        );
+        const data = switch (bound.data) {
+            .virtual, .builtin => std.meta.tagName(bound.data),
+            .value => |value| try table.print("{}", .{value}),
+        };
 
-        switch (bound.data) {
-            .virtual, .builtin => try stdout.writeAll(@tagName(bound.data)),
-            .value => |value| try stdout.print("{}", .{value}),
-        }
-
-        try stdout.writeAll("\n");
+        try table.add_row(.{ symbol, bound.stype, data });
     }
 
-    try stdout.writeAll("\n");
+    try table.flush(stdout);
 }
