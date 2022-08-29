@@ -19,6 +19,27 @@ pub fn create_global_env(ally: Allocator) !Env {
     try define_type(&global, "type", SType{ .stype = {} });
     try define_type(&global, "int", SType{ .int = {} });
 
+    var type_stype = SType{ .stype = {} };
+    var fn_params = [_]SType{
+        SType{ .list = &type_stype },
+        type_stype
+    };
+
+    try global.define(
+        "fn",
+        Env.Bound{
+            .stype = SType{
+                .func = .{
+                    .params = &fn_params,
+                    .returns = &type_stype
+                }
+            },
+            .data = .{
+                .builtin = {}
+            }
+        }
+    );
+
     try global.display("global env", .{});
 
     return global;

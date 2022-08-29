@@ -120,18 +120,38 @@ pub fn display(
         .{ .title = "data", .fmt = "{s}" },
     }).init(self.ally, label_fmt, label_args);
 
-    var iter = self.map.iterator();
-    while (iter.next()) |entry| {
-        const symbol = entry.key_ptr.*;
-        const bound = entry.value_ptr;
+    // collect and order env's variables
+    const EnvVar = Map.Unmanaged.Entry;
+    const Closure = struct {
+        // sorts first by bound type, then alphabetically
+        fn ev_less_than(ctx: void, a: EnvVar, b: EnvVar) bool {
+            _ = ctx;
+            return @enumToInt(a.value_ptr.data) < @enumToInt(b.value_ptr.data)
+                or std.mem.lessThan(u8, a.key_ptr.*, b.key_ptr.*);
+        }
+    };
 
+    var env_vars = try self.ally.alloc(EnvVar, self.map.count());
+    defer self.ally.free(env_vars);
+
+    var i: usize = 0;
+    var iter = self.map.iterator();
+    while (iter.next()) |entry| : (i += 1) env_vars[i] = entry;
+
+    std.sort.sort(EnvVar, env_vars, {}, Closure.ev_less_than);
+
+    // add to table and flush
+    for (env_vars) |ev| {
+        const symbol = ev.key_ptr.*;
+        const bound = ev.value_ptr;
+
+        const stype = &bound.stype;
         const data = switch (bound.data) {
             .virtual, .builtin => std.meta.tagName(bound.data),
             .value => |value| try table.print("{}", .{value}),
         };
 
-        try table.add_row(.{ symbol, bound.stype, data });
+        try table.add_row(.{symbol, stype, data});
     }
-
     try table.flush(stdout);
 }
