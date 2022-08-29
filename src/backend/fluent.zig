@@ -302,7 +302,7 @@ pub const SExpr = union(Type) {
     };
 
     /// type inference. tries to be as bidirectional as possible, but you can
-    /// escape this by passing in `SType{ .undefined = {} }` as expectation
+    /// escape this by passing in `SType{ .undef = {} }` as expectation.
     /// TODO nicer errors
     pub fn infer_type(
         self: Self,
@@ -337,7 +337,7 @@ pub const SExpr = union(Type) {
             },
             .int => SType{ .int = {} },
             .stype => SType{ .stype = {} },
-            .list => |list| blk: {
+            .list => |list| infer: {
                 const subtype =
                     if (expects != .undef)
                         if (list.len > 0)
@@ -349,7 +349,14 @@ pub const SExpr = union(Type) {
                     else
                         SType{ .undef = {} };
 
-                break :blk SType{ .list = try util.place_on(ally, subtype) };
+                if (list.len > 1) {
+                    // type the rest of the list
+                    for (list[1..]) |child| {
+                        _ = try child.infer_type(ally, env, subtype);
+                    }
+                }
+
+                break :infer SType{ .list = try util.place_on(ally, subtype) };
             },
             .tuple => |tuple| blk: {
                 if (tuple.len == 0) return TypingError.EmptyFunctionCall;
@@ -369,7 +376,6 @@ pub const SExpr = union(Type) {
                 const call_expects = SType{
                     .func = .{
                         .params = takes,
-                        // do I need to clone this?
                         .returns = try util.place_on(ally, expects)
                     }
                 };
@@ -418,20 +424,6 @@ pub const SExpr = union(Type) {
                 };
             }
         };
-
-        // TODO debug remove
-        try stdout.print(
-            "INFER {}\nWITH {}<{}>{}\nFOUND {}<{}>{}\n\n",
-            .{
-                self,
-                &Color{ .fg = .green},
-                expects,
-                &Color{},
-                &Color{ .fg = .green},
-                inferred,
-                &Color{},
-            }
-        );
 
         return inferred;
     }

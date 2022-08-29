@@ -153,5 +153,6 @@ pub fn display(
 
         try table.add_row(.{symbol, stype, data});
     }
+
     try table.flush(stdout);
 }
