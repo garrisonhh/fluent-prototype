@@ -38,7 +38,7 @@ pub const Type = enum {
 };
 
 /// structured type representation
-/// expects to own all children
+/// expects to own everything it references. no cycles, no shared subtrees
 pub const SType = union(Type) {
     const Self = @This();
 
@@ -54,6 +54,33 @@ pub const SType = union(Type) {
         params: []SType,
         returns: *SType,
     },
+
+    pub fn init_list(
+        ally: Allocator,
+        subtype: SType
+    ) Allocator.Error!Self{
+        return Self{ .list = try util.place_on(ally, try subtype.clone(ally)) };
+    }
+
+    pub fn init_tuple(
+        ally: Allocator,
+        children: []const SType
+    ) Allocator.Error!Self{
+        return Self{ .tuple = try clone_slice(ally, children) };
+    }
+
+    pub fn init_func(
+        ally: Allocator,
+        params: []const SType,
+        returns: SType
+    ) Allocator.Error!Self{
+        return Self{
+            .func = .{
+                .params = try clone_slice(ally, params),
+                .returns = try util.place_on(ally, try returns.clone(ally))
+            }
+        };
+    }
 
     pub fn deinit(self: Self, ally: Allocator) void {
         switch (self) {
@@ -75,31 +102,22 @@ pub const SType = union(Type) {
         }
     }
 
-    fn clone_children(
+    pub fn clone_slice(
         ally: Allocator,
-        children: []Self
+        slice: []const Self
     ) Allocator.Error![]Self {
-        const copied = try ally.alloc(Self, children.len);
-        for (children) |child, i| copied[i] = try child.clone(ally);
+        const copied = try ally.alloc(Self, slice.len);
+        for (slice) |child, i| copied[i] = try child.clone(ally);
 
         return copied;
     }
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch (self) {
-            .list => |subtype| Self{
-                .list = try util.place_on(ally, try subtype.clone(ally))
-            },
-            .tuple => |tuple| Self{ .tuple = try clone_children(ally, tuple) },
-            .func => |func| Self{
-                .func = .{
-                    .params = try clone_children(ally, func.params),
-                    .returns = try util.place_on(
-                        ally,
-                        try func.returns.clone(ally)
-                    )
-                }
-            },
+            .list => |subtype| try Self.init_list(ally, subtype.*),
+            .tuple => |tuple| try Self.init_tuple(ally, tuple),
+            .func => |func|
+                try Self.init_func(ally, func.params, func.returns.*),
             else => self
         };
     }
@@ -164,7 +182,7 @@ pub const SType = union(Type) {
 };
 
 /// structured expression
-/// expects to own all children
+/// expects to own everything it references. no cycles, no shared subtrees
 pub const SExpr = union(Type) {
     const Self = @This();
 
@@ -275,12 +293,12 @@ pub const SExpr = union(Type) {
     }
 
     /// helper for clone
-    fn clone_children(
+    pub fn clone_slice(
         ally: Allocator,
-        children: []const Self
+        slice: []const Self
     ) Allocator.Error![]Self {
-        const cloned = try ally.alloc(Self, children.len);
-        for (children) |child, i| cloned[i] = try child.clone(ally);
+        const cloned = try ally.alloc(Self, slice.len);
+        for (slice) |child, i| cloned[i] = try child.clone(ally);
 
         return cloned;
     }
@@ -288,8 +306,8 @@ pub const SExpr = union(Type) {
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch(self) {
             .symbol => |sym| Self{ .symbol = try ally.dupe(u8, sym) },
-            .list => |list| Self{ .list = try clone_children(ally, list) },
-            .tuple => |tuple| Self{ .tuple = try clone_children(ally, tuple) },
+            .list => |list| Self{ .list = try clone_slice(ally, list) },
+            .tuple => |tuple| Self{ .tuple = try clone_slice(ally, tuple) },
             else => self
         };
     }

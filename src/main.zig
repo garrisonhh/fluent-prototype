@@ -82,6 +82,9 @@ pub fn main() !void {
     // const ally = gpa.allocator();
     const ally = std.heap.page_allocator;
 
+    // TODO REMOVE
+    try backend.test_masonry(ally);
+
     var env = try backend.create_global_env(ally);
     defer env.deinit();
 
