@@ -19,11 +19,15 @@ fn repl_eval_print(ally: Allocator, env: backend.Env, text: []const u8) !void {
     var stype = try result.infer_type(ally, env, backend.SType{ .undef = {} });
     defer stype.deinit(ally);
 
+    var ir = try backend.lower(ally, env, result);
+    defer ir.deinit(ally);
+
     // display nicely
     const color = kz.Color{ .fg = .green };
     const reset = kz.Color{};
 
     try stdout.print("{}<{}>{}\n{}\n\n", .{color, stype, reset, result});
+    try ir.display(ally, "lowered to:", .{});
 }
 
 /// returns string allocated onto ally
@@ -81,9 +85,6 @@ pub fn main() !void {
     // defer _ = gpa.deinit();
     // const ally = gpa.allocator();
     const ally = std.heap.page_allocator;
-
-    // TODO REMOVE
-    try backend.test_masonry(ally);
 
     var prelude = try backend.create_prelude(ally);
     defer prelude.deinit();

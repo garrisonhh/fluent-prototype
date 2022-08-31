@@ -3,6 +3,7 @@
 const std = @import("std");
 const fluent = @import("fluent.zig");
 const plumbing = @import("../plumbing.zig");
+const ir = @import("ir.zig");
 const Env = @import("env.zig");
 
 const Allocator = std.mem.Allocator;
@@ -10,16 +11,9 @@ const SType = fluent.SType;
 const SExpr = fluent.SExpr;
 
 /// fluent's builtin functions, used in `eval` and Env mappings
-pub const Builtin = enum {
-    func_type,
-
-    iadd,
+pub const Builtin = union(enum) {
+    opcode: ir.OpCode,
 };
-
-/// shorthand helper for create_prelude
-fn define_type(env: *Env, symbol: []const u8, stype: SType) !void {
-    try env.define_value(symbol, SType{ .stype = {} }, SExpr{ .stype = stype });
-}
 
 pub fn create_prelude(ally: Allocator) !Env {
     var prelude = try Env.init(ally, null);
@@ -28,25 +22,38 @@ pub fn create_prelude(ally: Allocator) !Env {
     defer arena.deinit();
     const tmp = arena.allocator();
 
-    try define_type(&prelude, "type", SType{ .stype = {} });
-    try define_type(&prelude, "int", SType{ .int = {} });
+    // type primitives
+    try prelude.define_type("type", SType{ .stype = {} });
+    try prelude.define_type("int", SType{ .int = {} });
 
-    try prelude.define(
-        "fn",
-        Env.Bound{
-            .stype = try SType.init_func(
-                tmp,
-                &.{
-                    try SType.init_list(tmp, SType{ .stype = {} }),
-                    SType{ .stype = {} }
-                },
-                SType{ .stype = {} }
-            ),
-            .data = .{ .builtin = .func_type }
-        }
+    // `fn`
+    const fn_type_fn =  try SType.init_func(
+        tmp,
+        &.{
+            try SType.init_list(tmp, SType{ .stype = {} }),
+            SType{ .stype = {} }
+        },
+        SType{ .stype = {} }
     );
 
-    try prelude.display("global env", .{});
+    // TODO vvv
+    _ = fn_type_fn;
+    // try prelude.define_builtin("fn", fn_type_fn, .{ .opcode = .func_type });
+
+    // math
+    const bin_int_math_op = try SType.init_func(
+        tmp,
+        &.{SType{ .int = {} }, SType{ .int = {} }},
+        SType{ .int = {} }
+    );
+
+    try prelude.define_builtin("+", bin_int_math_op, .{ .opcode = .iadd });
+    try prelude.define_builtin("-", bin_int_math_op, .{ .opcode = .isub });
+    try prelude.define_builtin("*", bin_int_math_op, .{ .opcode = .imul });
+    try prelude.define_builtin("/", bin_int_math_op, .{ .opcode = .idiv });
+    try prelude.define_builtin("%", bin_int_math_op, .{ .opcode = .imod });
+
+    try prelude.display("prelude", .{});
 
     return prelude;
 }

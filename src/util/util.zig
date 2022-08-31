@@ -19,24 +19,20 @@ pub const Error = error {
 /// coerces a tuple to a struct. for cautious use in metaprogramming.
 /// example: `coerce_tuple(struct{ a: i32, b: i32, c: i32}, .{0, 1, 2})` works!
 pub fn coerce_tuple(comptime S: type, tuple: anytype) S {
-    var s: S = undefined;
-
     const struct_fields = @typeInfo(S).Struct.fields;
     const tuple_info = @typeInfo(@TypeOf(tuple)).Struct;
-    const tuple_fields = tuple_info.fields;
 
     comptime {
         if (!tuple_info.is_tuple) {
             @compileError("coerce_tuple error: tuple arg is not a tuple.");
-        } else if (struct_fields.len != tuple_fields.len) {
+        } else if (struct_fields.len != tuple_info.fields.len) {
             @compileError("coerce_tuple error: tuple arg does not have the "
                        ++ "same number of fields as struct arg.");
         }
     }
 
-    inline for (struct_fields) |field, i| {
-        @field(s, field.name) = @field(tuple, tuple_fields[i].name);
-    }
+    var s: S = undefined;
+    inline for (struct_fields) |field, i| @field(s, field.name) = tuple[i];
 
     return s;
 }
@@ -63,7 +59,7 @@ pub fn EnumTable(comptime E: type, comptime V: type) type {
 
         values: [enum_size]V,
 
-        /// expects an array of (key, value) tuples
+        /// expects an array of (key, value) tuples. fully comptime.
         pub fn init(comptime rows: anytype) Self {
             comptime {
                 // coerce entries to an array of Self.Entry
@@ -103,8 +99,8 @@ pub fn EnumTable(comptime E: type, comptime V: type) type {
             }
         }
 
-        pub fn get(self: *const Self, key: E) *const V {
-            return &self.values[@enumToInt(key)];
+        pub fn get(self: *const Self, key: E) V {
+            return self.values[@enumToInt(key)];
         }
     };
 }

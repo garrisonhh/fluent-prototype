@@ -1,11 +1,15 @@
 //! Env allows fluent to bind symbols to values. Envs can be stacked recursively
 //! to allow for scopes within scopes.
+//!
+//! Env is used throughout both semantic analysis and ir generation stages.
+//!
 //! instances own all bound keys and values.
 
 const std = @import("std");
 const kz = @import("kritzler");
 const util = @import("../util/util.zig");
 const fluent = @import("fluent.zig");
+const ir = @import("ir.zig");
 const Builtin = @import("lang.zig").Builtin;
 
 const stdout = std.io.getStdOut().writer();
@@ -75,6 +79,7 @@ pub fn define(self: *Self, symbol: []const u8, to: Bound) !void {
     try self.define_raw(symbol, cloned);
 }
 
+/// define() helper
 pub fn define_virtual(self: *Self, symbol: []const u8, stype: SType) !void {
     try self.define(symbol, Bound{
         .stype = stype,
@@ -82,6 +87,20 @@ pub fn define_virtual(self: *Self, symbol: []const u8, stype: SType) !void {
     });
 }
 
+/// define() helper
+pub fn define_builtin(
+    self: *Self,
+    symbol: []const u8,
+    stype: SType,
+    builtin: Builtin
+) !void {
+    try self.define(symbol, Bound{
+        .stype = stype,
+        .data = .{ .builtin = builtin }
+    });
+}
+
+/// define() helper
 pub fn define_value(
     self: *Self,
     symbol: []const u8,
@@ -92,6 +111,15 @@ pub fn define_value(
         .stype = stype,
         .data = .{ .value = value }
     });
+}
+
+/// define() helper
+pub fn define_type(self: *Self, symbol: []const u8, stype: SType) !void {
+    try self.define_value(
+        symbol,
+        SType{ .stype = {} },
+        SExpr{ .stype = stype }
+    );
 }
 
 fn get(self: Self, symbol: []const u8) ?Bound {

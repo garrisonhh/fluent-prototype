@@ -130,24 +130,30 @@ pub const SType = union(Type) {
 
     /// a unidirectional operation to determine if this type matches the
     /// provided template
-    pub fn matches(self: Self, template: Self) bool {
-        return self.flat_matches(template) and switch (self) {
-            .list => |subtype| subtype.matches(template.list.*),
+    pub fn matches(self: Self, pattern: Self) bool {
+        return self.flat_matches(pattern) and switch (self) {
+            .list => |subtype| subtype.matches(pattern.list.*),
             .tuple => |children| blk: {
+                if (children.len != pattern.tuple.len) break :blk false;
+
                 for (children) |child, i| {
-                    if (!child.matches(template.tuple[i])) break :blk false;
+                    if (!child.matches(pattern.tuple[i])) break :blk false;
                 }
 
                 break :blk true;
             },
             .func => |func| blk: {
+                if (func.params.len != pattern.func.params.len) {
+                    break :blk false;
+                }
+
                 for (func.params) |param, i| {
-                    if (!param.matches(template.func.params[i])) {
+                    if (!param.matches(pattern.func.params[i])) {
                         break :blk false;
                     }
                 }
 
-                break :blk func.returns.matches(template.func.returns.*);
+                break :blk func.returns.matches(pattern.func.returns.*);
             },
             else => true
         };
