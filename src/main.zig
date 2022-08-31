@@ -85,8 +85,8 @@ pub fn main() !void {
     // TODO REMOVE
     try backend.test_masonry(ally);
 
-    var env = try backend.create_global_env(ally);
-    defer env.deinit();
+    var prelude = try backend.create_prelude(ally);
+    defer prelude.deinit();
 
     // repl loop
     while (true) {
@@ -104,6 +104,6 @@ pub fn main() !void {
 
         if (is_empty) break;
 
-        try repl_eval_print(ally, env, input);
+        try repl_eval_print(ally, prelude, input);
     }
 }

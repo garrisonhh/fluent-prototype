@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const kz = @import("kritzler");
+const util = @import("../util/util.zig");
 const fluent = @import("fluent.zig");
 
 const Allocator = std.mem.Allocator;
@@ -15,67 +16,65 @@ const SType = fluent.SType;
 const SExpr = fluent.SExpr;
 const stdout = std.io.getStdOut().writer();
 
-/// ops are the three-address-code representation of dynamic fluent code
-pub const Op = struct {
-    const Self = @This();
+pub const OpCode = enum {
+    @"const", // load a constant
 
-    // metaprogrammed table used to centralize changing data about opcodes
-    const opcodes = blk: {
-        const OpcodeData = struct {
-            name: []const u8,
-            a: FlatType,
-            b: FlatType,
-            out: FlatType,
+    // math
+    iadd,
+    isub,
+    imul,
+    idiv,
+    imod,
 
-            fn init(
-                name: []const u8,
-                a: FlatType,
-                b: FlatType,
-                out: FlatType
-            ) @This() {
-                return @This(){
-                    .name = name,
-                    .a = a,
-                    .b = b,
-                    .out = out
-                };
-            }
-        };
-
-        // 'nil' encodes 'no data'
-        // 'undef' encodes 'unchecked type'
-        const x = OpcodeData.init;
-        const table = [_]OpcodeData{
-            // loads a constant
-            x("constant", .undef, .nil, .undef),
-            x("iadd", .int, .int, .int),
-        };
-
-        break :blk table[0..];
+    pub const Class = enum {
+        unary,
+        binary,
     };
 
-    /// constructs enum from table
-    pub const Code = blk: {
-        const TypeInfo = std.builtin.TypeInfo;
+    pub const IOTypes = struct {
+        a: FlatType,
+        b: FlatType = .nil,
+        to: FlatType,
 
-        var fields: [opcodes.len]TypeInfo.EnumField = undefined;
-        inline for (opcodes) |opcode, i| {
-            fields[i] = TypeInfo.EnumField{
-                .name = opcode.name,
-                .value = i
+        fn init_unary(a: FlatType, to: FlatType) IOTypes {
+            return IOTypes{
+                .a = a,
+                .to = to
             };
         }
 
-        const enum_type = TypeInfo.Enum{
-            .layout = .Auto,
-            .tag_type = UInt,
-            .fields = &fields,
-            .decls = &.{},
-            .is_exhaustive = true,
-        };
-
-        break :blk @Type(TypeInfo{ .Enum = enum_type });
+        fn init_binary(a: FlatType, b: FlatType, to: FlatType) IOTypes {
+            return IOTypes{
+                .a = a,
+                .b = b,
+                .to = to
+            };
+        }
     };
+
+    // maps code -> iotype
+    pub const iotypes = blk: {
+        const unary = IOTypes.init_unary;
+        const binary = IOTypes.init_binary;
+
+        const Table = util.EnumTable(OpCode, IOTypes);
+
+        break :blk Table.init(.{
+            .{ .@"const", unary(.undef, .undef) },
+
+            // math
+            .{ .iadd, binary(.int, .int, .int) },
+            .{ .isub, binary(.int, .int, .int) },
+            .{ .imul, binary(.int, .int, .int) },
+            .{ .idiv, binary(.int, .int, .int) },
+            .{ .imod, binary(.int, .int, .int) },
+        });
+    };
+};
+
+/// ops are the three-address-code representation of dynamic fluent code
+pub const Op = struct {
+    const Self = @This();
 
     // used for the 4 fields, including backing int for enum
     pub const UInt = u16;
@@ -85,7 +84,7 @@ pub const Op = struct {
         std.debug.assert(@sizeOf(Self) <= 8);
     }
 
-    code: Code, // operation to perform
+    code: OpCode, // operation to perform
     a: UInt,
     b: UInt = 0,
     to: UInt, // where result is stored
@@ -100,8 +99,8 @@ pub const Op = struct {
         _ = options;
 
         switch (self.code) {
-            .constant => try writer.print("{} = const {}", .{self.to, self.a}),
-            .iadd => try writer.print(
+            .@"const" => try writer.print("{} = const {}", .{self.to, self.a}),
+            .iadd, .isub, .imul, .idiv, .imod => try writer.print(
                 "{} = {s} {} {}",
                 .{self.to, @tagName(self.code), self.a, self.b}
             ),
@@ -188,9 +187,23 @@ const Mason = struct {
     }
 
     fn append_block(self: *Self, block: Block) Allocator.Error!void {
+        // dupe inputs
         const constants = try SExpr.clone_slice(self.ally, block.constants);
         const locals = try SType.clone_slice(self.ally, block.locals);
+        const ops = try self.ally.dupe(Op, block.ops);
 
+        // adjust references
+        const constant_offset = @intCast(Op.UInt, self.constants.items.len);
+        const local_offset = @intCast(Op.UInt, self.locals.items.len);
+        _  = constant_offset;
+        _ = local_offset;
+
+        for (ops) |*op| {
+            _ = op;
+            // TODO
+        }
+
+        // add to lists
         try self.constants.appendSlice(constants);
         try self.locals.appendSlice(locals);
         try self.ops.appendSlice(block.ops);
@@ -211,8 +224,8 @@ pub fn test_masonry(ally: Allocator) !void {
             SType{ .int = {} },
         },
         .ops = &.{
-            Op{ .code = .constant, .a = 0, .to = 0 },
-            Op{ .code = .constant, .a = 1, .to = 1 },
+            Op{ .code = .@"const", .a = 0, .to = 0 },
+            Op{ .code = .@"const", .a = 1, .to = 1 },
             Op{ .code = .iadd, .a = 0, .b = 1, .to = 0 },
         },
     });

@@ -64,27 +64,40 @@ pub fn define_raw(self: *Self, symbol: []const u8, to: Bound) !void {
 
 /// clones bound and defines it.
 pub fn define(self: *Self, symbol: []const u8, to: Bound) !void {
-    const cloned = Bound{ .stype = try to.stype.clone(self.ally), .data = switch (to.data) {
-        .virtual, .builtin => to.data,
-        .value => |value| Bound.Data{ .value = try value.clone(self.ally) },
-    } };
+    const cloned = Bound{
+        .stype = try to.stype.clone(self.ally),
+        .data = switch (to.data) {
+            .virtual, .builtin => to.data,
+            .value => |value| Bound.Data{ .value = try value.clone(self.ally) },
+        }
+    };
 
     try self.define_raw(symbol, cloned);
 }
 
 pub fn define_virtual(self: *Self, symbol: []const u8, stype: SType) !void {
-    try self.define(symbol, Bound{ .stype = stype, .data = .{ .virtual = {} } });
+    try self.define(symbol, Bound{
+        .stype = stype,
+        .data = .{ .virtual = {} }
+    });
 }
 
-pub fn define_value(self: *Self, symbol: []const u8, stype: SType, value: SExpr) !void {
-    try self.define(symbol, Bound{ .stype = stype, .data = .{ .value = value } });
+pub fn define_value(
+    self: *Self,
+    symbol: []const u8,
+    stype: SType,
+    value: SExpr
+) !void {
+    try self.define(symbol, Bound{
+        .stype = stype,
+        .data = .{ .value = value }
+    });
 }
 
 fn get(self: Self, symbol: []const u8) ?Bound {
-    return if (self.map.get(symbol)) |bound| bound else if (self.parent) |parent|
-        parent.get(symbol)
-    else
-        null;
+    return if (self.map.get(symbol)) |bound| bound
+           else if (self.parent) |parent| parent.get(symbol)
+           else null;
 }
 
 pub fn get_type(self: Self, symbol: []const u8) ?SType {
@@ -95,7 +108,11 @@ pub fn get_data(self: Self, symbol: []const u8) ?Bound.Data {
     return if (self.get(symbol)) |bound| bound.data else null;
 }
 
-pub fn display(self: Self, comptime label_fmt: []const u8, label_args: anytype) !void {
+pub fn display(
+    self: Self,
+    comptime label_fmt: []const u8,
+    label_args: anytype
+) !void {
     var table = try kz.Table(&.{
         .{ .title = "symbol", .fmt = "{s}", .color = kz.Color{ .fg = .red } },
         .{ .title = "type", .fmt = "<{}>", .color = kz.Color{ .fg = .green } },
@@ -108,7 +125,8 @@ pub fn display(self: Self, comptime label_fmt: []const u8, label_args: anytype) 
         // sorts first by bound type, then alphabetically
         fn ev_less_than(ctx: void, a: EnvVar, b: EnvVar) bool {
             _ = ctx;
-            return @enumToInt(a.value_ptr.data) < @enumToInt(b.value_ptr.data) or std.mem.lessThan(u8, a.key_ptr.*, b.key_ptr.*);
+            return @enumToInt(a.value_ptr.data) < @enumToInt(b.value_ptr.data)
+                or std.mem.lessThan(u8, a.key_ptr.*, b.key_ptr.*);
         }
     };
 
@@ -129,7 +147,8 @@ pub fn display(self: Self, comptime label_fmt: []const u8, label_args: anytype) 
         const stype = &bound.stype;
         const data = switch (bound.data) {
             .virtual => "",
-            .builtin => |tag| try table.print("(builtin) {s}", .{std.meta.tagName(tag)}),
+            .builtin => |tag|
+                try table.print("(builtin) {s}", .{std.meta.tagName(tag)}),
             .value => |value| try table.print("{}", .{value}),
         };
 

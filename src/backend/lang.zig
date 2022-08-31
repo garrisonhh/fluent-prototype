@@ -16,21 +16,22 @@ pub const Builtin = enum {
     iadd,
 };
 
+/// shorthand helper for create_prelude
 fn define_type(env: *Env, symbol: []const u8, stype: SType) !void {
     try env.define_value(symbol, SType{ .stype = {} }, SExpr{ .stype = stype });
 }
 
-pub fn create_global_env(ally: Allocator) !Env {
-    var global = try Env.init(ally, null);
+pub fn create_prelude(ally: Allocator) !Env {
+    var prelude = try Env.init(ally, null);
 
     var arena = std.heap.ArenaAllocator.init(ally);
     defer arena.deinit();
     const tmp = arena.allocator();
 
-    try define_type(&global, "type", SType{ .stype = {} });
-    try define_type(&global, "int", SType{ .int = {} });
+    try define_type(&prelude, "type", SType{ .stype = {} });
+    try define_type(&prelude, "int", SType{ .int = {} });
 
-    try global.define(
+    try prelude.define(
         "fn",
         Env.Bound{
             .stype = try SType.init_func(
@@ -45,7 +46,7 @@ pub fn create_global_env(ally: Allocator) !Env {
         }
     );
 
-    try global.display("global env", .{});
+    try prelude.display("global env", .{});
 
-    return global;
+    return prelude;
 }
