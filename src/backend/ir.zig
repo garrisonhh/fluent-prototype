@@ -179,7 +179,7 @@ pub const Block = struct {
 
         // typing
         try stdout.print(
-            "{}evaluates to{} {}",
+            "{}type{} {}",
             .{&kz.Color{ .fg = .cyan }, &kz.Color{}, &kz.Color{ .fg = .green }}
         );
 
@@ -309,10 +309,8 @@ const Mason = struct {
     }
 
     fn add_op(self: *Self, op: Op) Allocator.Error!Op.UInt {
-        const index = @intCast(Op.UInt, self.ops.items.len);
         try self.ops.append(op);
-
-        return index;
+        return op.to;
     }
 };
 
@@ -335,29 +333,17 @@ fn lower_operator(
 ) anyerror!Op.UInt {
     return switch (operator.get_flow()) {
         .@"const" => unreachable,
-        .unary => |flow| blk: {
-            const op = Op{
-                .code = operator,
-                .a = try lower_expr(mason, env, params[0]),
-                .to = try mason.add_local(try flow.to.clone(mason.ally)),
-            };
-
-            _ = try mason.add_op(op);
-
-            break :blk op.to;
-        },
-        .binary => |flow| blk: {
-            const op = Op{
-                .code = operator,
-                .a = try lower_expr(mason, env, params[0]),
-                .b = try lower_expr(mason, env, params[1]),
-                .to = try mason.add_local(try flow.to.clone(mason.ally)),
-            };
-
-            _ =try mason.add_op(op);
-
-            break :blk op.to;
-        }
+        .unary => |flow| try mason.add_op(Op{
+            .code = operator,
+            .a = try lower_expr(mason, env, params[0]),
+            .to = try mason.add_local(try flow.to.clone(mason.ally)),
+        }),
+        .binary => |flow| try mason.add_op(Op{
+            .code = operator,
+            .a = try lower_expr(mason, env, params[0]),
+            .b = try lower_expr(mason, env, params[1]),
+            .to = try mason.add_local(try flow.to.clone(mason.ally)),
+        }),
     };
 }
 
