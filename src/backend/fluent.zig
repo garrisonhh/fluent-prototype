@@ -235,14 +235,6 @@ pub const SExpr = union(Type) {
             .list => Self{ .list = try from_children(ctx, expr.children.?) },
             .call => from_call: {
                 const children = expr.children.?;
-
-                // TODO find a better way to formalize builtins like this. I
-                // mean maybe the truth is that builtins are called 'builtins'
-                // because there isn't another way to do this, but I seriously
-                // doubt that. in this particular case I think tokenizing
-                // 'lambda' as its own token type (since it is syntax and not
-                // a function, truthfully) might turn out to be an elegant
-                // solution
                 if (children[0].is_ident("lambda")) {
                     if (children.len != 3) {
                         return TranslationError.BadLambdaArgs;
@@ -422,12 +414,12 @@ pub const SExpr = union(Type) {
 
                 // return type can be fully checked + inferred from the body
                 // expression
-                var fun_env = try Env.init(ally, &env);
-                defer fun_env.deinit();
+                var func_env = try Env.init(ally, &env);
+                defer func_env.deinit();
 
                 // define parameters in subenv
                 for (func.params) |param, i| {
-                    try fun_env.define_virtual(param, expects.func.params[i]);
+                    try func_env.define_param(param, expects.func.params[i], i);
                 }
 
                 // returns tolerates an `undef` return expectation
@@ -435,7 +427,7 @@ pub const SExpr = union(Type) {
                     ally,
                     try func.body.infer_type(
                         ally,
-                        fun_env,
+                        func_env,
                         expects.func.returns.*
                     )
                 );

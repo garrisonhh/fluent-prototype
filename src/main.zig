@@ -19,7 +19,7 @@ fn repl_eval_print(ally: Allocator, env: backend.Env, text: []const u8) !void {
     var stype = try result.infer_type(ally, env, backend.SType{ .undef = {} });
     defer stype.deinit(ally);
 
-    var ir = try backend.lower(ally, env, result);
+    var ir = try backend.lower_repl_expr(ally, env, result);
     defer ir.deinit(ally);
 
     // display nicely

@@ -23,11 +23,9 @@ const Self = @This();
 /// they need a value
 pub const Bound = struct {
     pub const Data = union(enum) {
-        // used for stuff like function parameters, where I only really know
-        // the type
-        virtual,
+        value: SExpr, // uncompiled values
         builtin: Builtin,
-        value: SExpr,
+        param: usize, // numbered function parameters
     };
 
     stype: SType,
@@ -53,7 +51,7 @@ pub fn deinit(self: *Self) void {
         bound.stype.deinit(self.ally);
 
         switch (bound.data) {
-            .virtual, .builtin => {},
+            .param, .builtin => {},
             .value => |value| value.deinit(self.ally),
         }
     }
@@ -71,7 +69,7 @@ pub fn define(self: *Self, symbol: []const u8, to: Bound) !void {
     const cloned = Bound{
         .stype = try to.stype.clone(self.ally),
         .data = switch (to.data) {
-            .virtual, .builtin => to.data,
+            .param, .builtin => to.data,
             .value => |value| Bound.Data{ .value = try value.clone(self.ally) },
         }
     };
@@ -80,10 +78,15 @@ pub fn define(self: *Self, symbol: []const u8, to: Bound) !void {
 }
 
 /// define() helper
-pub fn define_virtual(self: *Self, symbol: []const u8, stype: SType) !void {
+pub fn define_param(
+    self: *Self,
+    symbol: []const u8,
+    stype: SType,
+    index: usize
+) !void {
     try self.define(symbol, Bound{
         .stype = stype,
-        .data = .{ .virtual = {} }
+        .data = .{ .param = index }
     });
 }
 
@@ -153,8 +156,13 @@ pub fn display(
         // sorts first by bound type, then alphabetically
         fn ev_less_than(ctx: void, a: EnvVar, b: EnvVar) bool {
             _ = ctx;
-            return @enumToInt(a.value_ptr.data) < @enumToInt(b.value_ptr.data)
-                or std.mem.lessThan(u8, a.key_ptr.*, b.key_ptr.*);
+
+            const cmp = @intCast(isize, @enumToInt(b.value_ptr.data))
+                      - @intCast(isize, @enumToInt(a.value_ptr.data));
+
+            if (cmp > 0) return true
+            else if (cmp < 0) return false
+            else return std.mem.lessThan(u8, a.key_ptr.*, b.key_ptr.*);
         }
     };
 
@@ -174,9 +182,8 @@ pub fn display(
 
         const stype = &bound.stype;
         const data = switch (bound.data) {
-            .virtual => "",
-            .builtin => |tag|
-                try table.print("(builtin) {s}", .{std.meta.tagName(tag)}),
+            .param => |index| try table.print("param {}", .{index}),
+            .builtin => |builtin| try table.print("{}", .{builtin}),
             .value => |value| try table.print("{}", .{value}),
         };
 

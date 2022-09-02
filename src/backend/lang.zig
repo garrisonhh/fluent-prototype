@@ -12,7 +12,23 @@ const SExpr = fluent.SExpr;
 
 /// fluent's builtin functions, used in `eval` and Env mappings
 pub const Builtin = union(enum) {
+    const Self = @This();
+
     opcode: ir.OpCode,
+
+    pub fn format(
+        self: Self,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype
+    ) @TypeOf(writer).Error!void {
+        _ = fmt;
+        _ = options;
+
+        switch (self) {
+            .opcode => |code| try writer.print("opcode {s}", .{@tagName(code)}),
+        }
+    }
 };
 
 pub fn create_prelude(ally: Allocator) !Env {
@@ -27,17 +43,15 @@ pub fn create_prelude(ally: Allocator) !Env {
     try prelude.define_type("int", SType{ .int = {} });
 
     // `fn`
-    const fn_type_fn =  try SType.init_func(
-        tmp,
-        &.{
-            try SType.init_list(tmp, SType{ .stype = {} }),
-            SType{ .stype = {} }
-        },
-        SType{ .stype = {} }
-    );
+    // const fn_type_fn = try SType.init_func(
+        // tmp,
+        // &.{
+            // try SType.init_list(tmp, SType{ .stype = {} }),
+            // SType{ .stype = {} }
+        // },
+        // SType{ .stype = {} }
+    // );
 
-    // TODO vvv
-    _ = fn_type_fn;
     // try prelude.define_builtin("fn", fn_type_fn, .{ .opcode = .func_type });
 
     // math
