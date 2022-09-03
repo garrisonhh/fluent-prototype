@@ -2,6 +2,9 @@
 //! to allow for scopes within scopes.
 //!
 //! Env is used throughout both semantic analysis and ir generation stages.
+//! Fluent program compilation can be thought of as generating an Env filled
+//! with SExpr values representing the ast of the program, and then procedurally
+//! filling them out.
 //!
 //! instances own all bound keys and values.
 

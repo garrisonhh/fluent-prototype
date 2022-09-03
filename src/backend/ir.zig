@@ -22,6 +22,8 @@ pub const OpCode = enum {
     // unique
     @"const", // load a constant
     copy, // copy a local to another local
+    param, // load a local to a (virtual) parameter slot
+    call, // call a function with loaded parameters
 
     // math
     iadd,
@@ -52,7 +54,7 @@ pub const OpCode = enum {
             const int_stype = SType{ .int = {} };
             const undef_stype = SType{ .undef = {} };
 
-            const copy = Flow{
+            const unary_undef = Flow{
                 .unary = .{
                     .a = undef_stype,
                     .to = undef_stype
@@ -68,7 +70,9 @@ pub const OpCode = enum {
 
             break :blk util.EnumTable(Self, Flow).init(.{
                 .{.@"const", Flow{ .@"const" = {} }},
-                .{.copy, copy },
+                .{.copy, unary_undef},
+                .{.param, unary_undef},
+                .{.call, unary_undef},
 
                 .{.iadd, bin_int_math},
                 .{.isub, bin_int_math},
@@ -108,16 +112,24 @@ pub const Op = struct {
         _ = fmt;
         _ = options;
 
-        switch (self.code.get_flow()) {
-            .@"const" => try writer.print("l{} = c{}", .{self.to, self.a}),
-            .unary => try writer.print(
-                "l{} = {s} l{}",
-                .{self.to, @tagName(self.code), self.a}
-            ),
-            .binary => try writer.print(
-                "l{} = {s} l{} l{}",
-                .{self.to, @tagName(self.code), self.a, self.b}
-            ),
+        switch (self.code) {
+            .param => try writer.print("param {} = l{}", .{self.to, self.a}),
+            .call => try writer.print("l{} = call f{}", .{self.to, self.a}),
+            .copy => try writer.print("l{} = copy l{}", .{self.to, self.a}),
+            else => switch (self.code.get_flow()) {
+                .@"const" => try writer.print(
+                    "l{} = c{}",
+                    .{self.to, self.a}
+                ),
+                .unary => try writer.print(
+                    "l{} = {s} l{}",
+                    .{self.to, @tagName(self.code), self.a}
+                ),
+                .binary => try writer.print(
+                    "l{} = {s} l{} l{}",
+                    .{self.to, @tagName(self.code), self.a, self.b}
+                ),
+            }
         }
     }
 };
@@ -127,6 +139,8 @@ pub const Op = struct {
 pub const Block = struct {
     const Self = @This();
 
+    name: []const u8,
+
     consts: []const SExpr,
     locals: []const SType,
     ops: []const Op,
@@ -135,6 +149,7 @@ pub const Block = struct {
     output: Op.UInt, // index of the output local
 
     pub fn deinit(self: Self, ally: Allocator) void {
+        ally.free(self.name);
         ally.free(self.consts);
         ally.free(self.locals);
         ally.free(self.ops);
@@ -142,14 +157,18 @@ pub const Block = struct {
 
     pub fn display(
         self: Self,
-        ally: Allocator,
-        comptime label_fmt: []const u8,
-        label_args: anytype
+        ally: Allocator
     ) (Allocator.Error || @TypeOf(stdout).Error)!void {
-        // label
-        try stdout.print("{}", .{kz.Color{ .fg = .cyan }});
-        try stdout.print(label_fmt, label_args);
-        try stdout.print("{}\n", .{kz.Color{}});
+        try stdout.print(
+            "{}block{} {}{s}{}:\n\n",
+            .{
+                &kz.Color{ .fg = .cyan },
+                &kz.Color{},
+                &kz.Color{ .fg = .red },
+                self.name,
+                &kz.Color{}
+            }
+        );
 
         // lists
         try kz.forms.fast_list(
@@ -210,9 +229,14 @@ const Mason = struct {
     locals: std.ArrayList(SType),
     ops: std.ArrayList(Op),
 
+    name: []const u8,
     inputs: usize,
 
-    pub fn init(ally: Allocator, inputs: []const SType) Allocator.Error!Self {
+    pub fn init(
+        ally: Allocator,
+        name: []const u8,
+        inputs: []const SType
+    ) Allocator.Error!Self {
         var locals = std.ArrayList(SType).init(ally);
 
         try locals.appendSlice(try SType.clone_slice(ally, inputs));
@@ -222,6 +246,7 @@ const Mason = struct {
             .consts = std.ArrayList(SExpr).init(ally),
             .locals = locals,
             .ops = std.ArrayList(Op).init(ally),
+            .name = try ally.dupe(u8, name),
             .inputs = inputs.len,
         };
     }
@@ -229,6 +254,7 @@ const Mason = struct {
     /// take all owned memory and turn it into a block
     fn build(self: *Self, output: Op.UInt) Block {
         return Block{
+            .name = self.name,
             .consts = self.consts.toOwnedSlice(),
             .locals = self.locals.toOwnedSlice(),
             .ops = self.ops.toOwnedSlice(),
@@ -294,6 +320,7 @@ const Mason = struct {
         return block.output + local_offset;
     }
 
+    /// returns index of constant
     fn add_const(self: *Self, @"const": SExpr) Allocator.Error!Op.UInt {
         const index = @intCast(Op.UInt, self.consts.items.len);
         try self.consts.append(@"const");
@@ -301,6 +328,7 @@ const Mason = struct {
         return index;
     }
 
+    /// returns ref to local
     fn add_local(self: *Self, local: SType) Allocator.Error!Op.UInt {
         const index = @intCast(Op.UInt, self.locals.items.len);
         try self.locals.append(local);
@@ -308,6 +336,7 @@ const Mason = struct {
         return index;
     }
 
+    /// returns ref to local output of op
     fn add_op(self: *Self, op: Op) Allocator.Error!Op.UInt {
         try self.ops.append(op);
         return op.to;
@@ -315,7 +344,7 @@ const Mason = struct {
 };
 
 /// lowers the operation of loading a constant to a local
-fn lower_const(mason: *Mason, env: Env, value: SExpr) anyerror!Op.UInt {
+fn build_const(mason: *Mason, env: Env, value: SExpr) anyerror!Op.UInt {
     return try mason.add_op(Op{
         .code = .@"const",
         .a = try mason.add_const(value),
@@ -325,7 +354,7 @@ fn lower_const(mason: *Mason, env: Env, value: SExpr) anyerror!Op.UInt {
     });
 }
 
-fn lower_operator(
+fn build_operator(
     mason: *Mason,
     env: Env,
     operator: OpCode,
@@ -335,13 +364,13 @@ fn lower_operator(
         .@"const" => unreachable,
         .unary => |flow| try mason.add_op(Op{
             .code = operator,
-            .a = try lower_expr(mason, env, params[0]),
+            .a = try build_expr(mason, env, params[0]),
             .to = try mason.add_local(try flow.to.clone(mason.ally)),
         }),
         .binary => |flow| try mason.add_op(Op{
             .code = operator,
-            .a = try lower_expr(mason, env, params[0]),
-            .b = try lower_expr(mason, env, params[1]),
+            .a = try build_expr(mason, env, params[0]),
+            .b = try build_expr(mason, env, params[1]),
             .to = try mason.add_local(try flow.to.clone(mason.ally)),
         }),
     };
@@ -349,8 +378,9 @@ fn lower_operator(
 
 /// lowers function call
 /// TODO this function demonstrates that passing around expected types between
-/// lowering functions might be useful or even necessary
-fn lower_call(mason: *Mason, env: Env, expr: SExpr) anyerror!Op.UInt {
+/// lowering functions might be useful or even necessary. another solution is
+/// producing a typed AST.
+fn build_call(mason: *Mason, env: Env, expr: SExpr) anyerror!Op.UInt {
     const func = expr.tuple[0];
     const params = expr.tuple[1..];
 
@@ -360,7 +390,7 @@ fn lower_call(mason: *Mason, env: Env, expr: SExpr) anyerror!Op.UInt {
         if (bound == .builtin) {
             // builtin function/operator
             return switch (bound.builtin) {
-                .opcode => |code| try lower_operator(mason, env, code, params),
+                .opcode => |code| try build_operator(mason, env, code, params),
             };
         } else {
             std.debug.panic("TODO lower non-builtin functions", .{});
@@ -379,19 +409,18 @@ fn lower_call(mason: *Mason, env: Env, expr: SExpr) anyerror!Op.UInt {
                 SType{ .undef = {} }
             );
 
-            param_refs[i] = try lower_expr(mason, env, param);
+            param_refs[i] = try build_expr(mason, env, param);
         }
 
         // lower lambda with inferred parameter types
         const lambda = try lower_func(
             mason.ally,
             env,
+            "anonymous",
             func.func.params,
             param_types,
             func.func.body.*
         );
-
-        try lambda.display(mason.ally, "compiled lambda `{}`:", .{func});
 
         return try mason.inline_block(lambda, param_refs);
     } else {
@@ -400,14 +429,14 @@ fn lower_call(mason: *Mason, env: Env, expr: SExpr) anyerror!Op.UInt {
 }
 
 /// returns where this expr produces its value (`to`)
-fn lower_expr(mason: *Mason, env: Env, expr: SExpr) anyerror!Op.UInt {
+fn build_expr(mason: *Mason, env: Env, expr: SExpr) anyerror!Op.UInt {
     return switch (expr) {
         .nil, .int, .stype =>
-            try lower_const(mason, env, try expr.clone(mason.ally)),
-        .tuple => try lower_call(mason, env, expr),
+            try build_const(mason, env, try expr.clone(mason.ally)),
+        .tuple => try build_call(mason, env, expr),
         // TODO can/should I cache these in Env bindings?
         .symbol => |symbol| switch (env.get_data(symbol).?) {
-            .value => |value| try lower_expr(mason, env, value),
+            .value => |value| try build_expr(mason, env, value),
             .builtin => std.debug.panic("TODO lower bound builtin", .{}),
             // THIS EXPRESSION IS FUCKING BEAUTIFUL.
             .param => |index| @intCast(Op.UInt, index),
@@ -420,6 +449,7 @@ fn lower_expr(mason: *Mason, env: Env, expr: SExpr) anyerror!Op.UInt {
 fn lower_func(
     ally: Allocator,
     env: Env,
+    name: []const u8,
     param_names: []const []const u8,
     param_types: []const SType,
     body: SExpr
@@ -430,13 +460,13 @@ fn lower_func(
     var sub_env = try Env.init(ally, &env);
     defer sub_env.deinit();
 
-    for (param_names) |name, i| {
-        try sub_env.define_param(name, param_types[i], i);
+    for (param_names) |param_name, i| {
+        try sub_env.define_param(param_name, param_types[i], i);
     }
 
     // do masonry
-    var mason = try Mason.init(ally, param_types);
-    const output = try lower_expr(&mason, sub_env, body);
+    var mason = try Mason.init(ally, name, param_types);
+    const output = try build_expr(&mason, sub_env, body);
 
     return mason.build(output);
 }
@@ -448,5 +478,5 @@ fn lower_func(
 /// step to check for inferrability before lower()ing might be the optimal way
 /// to go about verifying my assumptions?
 pub fn lower_repl_expr(ally: Allocator, env: Env, expr: SExpr) !Block {
-    return try lower_func(ally, env, &.{}, &.{}, expr);
+    return try lower_func(ally, env, "repl_expr", &.{}, &.{}, expr);
 }

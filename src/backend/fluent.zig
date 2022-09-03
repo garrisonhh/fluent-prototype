@@ -10,10 +10,6 @@ const Allocator = std.mem.Allocator;
 const Context = FlFile.Context;
 const Expr = frontend.Expr;
 
-// TODO remove, debugging only
-const Color = @import("kritzler").Color;
-const stdout = std.io.getStdOut().writer();
-
 /// flat type representation
 pub const Type = enum {
     const Self = @This();
@@ -159,6 +155,7 @@ pub const SType = union(Type) {
         };
     }
 
+    // TODO format types with PascalCase
     fn format_r(self: Self, writer: anytype) @TypeOf(writer).Error!void {
         switch (self) {
             .stype => try writer.writeAll("type"),

@@ -27,7 +27,7 @@ fn repl_eval_print(ally: Allocator, env: backend.Env, text: []const u8) !void {
     const reset = kz.Color{};
 
     try stdout.print("{}<{}>{}\n{}\n\n", .{color, stype, reset, result});
-    try ir.display(ally, "lowered to:", .{});
+    try ir.display(ally);
 }
 
 /// returns string allocated onto ally
