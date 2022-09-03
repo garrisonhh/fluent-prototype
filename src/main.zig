@@ -13,21 +13,23 @@ const c = @cImport({
 
 fn repl_eval_print(ally: Allocator, env: backend.Env, text: []const u8) !void {
     // evaluate
-    var result = try plumbing.comprehend_text(ally, "repl", text);
-    defer result.deinit(ally);
+    var results = try plumbing.comprehend_text(ally, "repl", text);
+    defer {
+        for (results) |result| result.deinit(ally);
+        ally.free(results);
+    }
 
-    var stype = try result.infer_type(ally, env, backend.SType{ .undef = {} });
-    defer stype.deinit(ally);
+    _ = try backend.analyze(ally, env, results);
 
-    var ir = try backend.lower_repl_expr(ally, env, result);
-    defer ir.deinit(ally);
+    // TODO vvv
+    // for (results) |result| {
+        // var ir = try backend.lower_repl_expr(ally, env, result);
+        // defer ir.deinit(ally);
 
-    // display nicely
-    const color = kz.Color{ .fg = .green };
-    const reset = kz.Color{};
-
-    try stdout.print("{}<{}>{}\n{}\n\n", .{color, stype, reset, result});
-    try ir.display(ally);
+        // display nicely
+        // try stdout.print("{}\n\n", .{result});
+        // try ir.display(ally);
+    // }
 }
 
 /// returns string allocated onto ally

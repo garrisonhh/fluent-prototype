@@ -12,15 +12,20 @@ const Allocator = std.mem.Allocator;
 const Context = FlFile.Context;
 const SExpr = backend.SExpr;
 
+pub const ComprehensionError = frontend.Error || SExpr.TranslationError;
+
 /// given an FlFile on a context, lexes, parses, and translates to a Fluent
 /// representation
-pub fn comprehend(ctx: *Context) !SExpr {
+pub fn comprehend(ctx: *Context) ComprehensionError![]SExpr {
     // lex + parse
-    var ast = try ctx.wrap_stage(frontend.parse(ctx, .expr));
+    var ast = try ctx.wrap_stage(frontend.parse(ctx));
     defer ast.deinit();
 
     // translate to fluent
-    return try SExpr.from_expr(ctx, ast.root);
+    const exprs = try ctx.ally.alloc(SExpr, ast.exprs.len);
+    for (ast.exprs) |expr, i| exprs[i] = try SExpr.from_expr(ctx, expr);
+
+    return exprs;
 }
 
 /// comprehends without preexisting file
@@ -28,7 +33,7 @@ pub fn comprehend_text(
     ally: Allocator,
     name: []const u8,
     text: []const u8
-) !SExpr {
+) ComprehensionError![]SExpr {
     // create context
     var lfile = try FlFile.init(ally, name, text);
     defer lfile.deinit(ally);
@@ -37,5 +42,5 @@ pub fn comprehend_text(
     defer ctx.deinit();
 
     // compile
-    return try comprehend(&ctx);
+    return comprehend(&ctx);
 }

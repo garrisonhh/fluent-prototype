@@ -345,13 +345,19 @@ const Mason = struct {
 
 /// lowers the operation of loading a constant to a local
 fn build_const(mason: *Mason, env: Env, value: SExpr) anyerror!Op.UInt {
-    return try mason.add_op(Op{
-        .code = .@"const",
-        .a = try mason.add_const(value),
-        .to = try mason.add_local(
-            try value.infer_type(mason.ally, env, SType{ .undef = {} })
-        )
-    });
+    _ = mason;
+    _ = env;
+    _ = value;
+
+    @panic("TODO need to use TypedExpr.find_type()");
+
+    // return try mason.add_op(Op{
+        // .code = .@"const",
+        // .a = try mason.add_const(value),
+        // .to = try mason.add_local(
+            // try value.infer_type(mason.ally, env, SType{ .undef = {} })
+        // )
+    // });
 }
 
 fn build_operator(
@@ -381,8 +387,8 @@ fn build_operator(
 /// lowering functions might be useful or even necessary. another solution is
 /// producing a typed AST.
 fn build_call(mason: *Mason, env: Env, expr: SExpr) anyerror!Op.UInt {
-    const func = expr.tuple[0];
-    const params = expr.tuple[1..];
+    const func = expr.call[0];
+    const params = expr.call[1..];
 
     if (func == .symbol) {
         const bound = env.get_data(func.symbol).?;
@@ -431,15 +437,16 @@ fn build_call(mason: *Mason, env: Env, expr: SExpr) anyerror!Op.UInt {
 /// returns where this expr produces its value (`to`)
 fn build_expr(mason: *Mason, env: Env, expr: SExpr) anyerror!Op.UInt {
     return switch (expr) {
-        .nil, .int, .stype =>
+        .int, .stype =>
             try build_const(mason, env, try expr.clone(mason.ally)),
-        .tuple => try build_call(mason, env, expr),
+        .call => try build_call(mason, env, expr),
         // TODO can/should I cache these in Env bindings?
         .symbol => |symbol| switch (env.get_data(symbol).?) {
             .value => |value| try build_expr(mason, env, value),
             .builtin => std.debug.panic("TODO lower bound builtin", .{}),
             // THIS EXPRESSION IS FUCKING BEAUTIFUL.
             .param => |index| @intCast(Op.UInt, index),
+            else => @panic("TODO build expr with typedexprs instead")
         },
         else => std.debug.panic("TODO lower {} SExprs", .{@as(FlatType, expr)})
     };

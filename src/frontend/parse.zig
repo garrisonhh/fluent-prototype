@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 const TokenBuffer = lex.TokenBuffer;
 const stderr = std.io.getStdErr().writer();
 
-const Error = Allocator.Error
+pub const Error = Allocator.Error
            || util.FmtError
            || util.Error
            || util.CompileFailure
@@ -76,76 +76,12 @@ fn generate_ast(
     };
 }
 
-fn err_empty_program(ctx: *Context) Error {
-    try ctx.add_message(.err, "empty program?", ctx.lfile.text[0..0]);
-    return util.CompilationFailed;
-}
-
-fn generate_expr_ast(
-    ctx: *Context,
-    ast_ally: Allocator,
-    tbuf: *const TokenBuffer
-) Error!Expr {
-    if (tbuf.tokens.len == 0) return err_empty_program(ctx);
-
-    var index: usize = 0;
-    const expr = try generate_ast(ctx, ast_ally, tbuf, index, &index);
-
-    if (index != tbuf.tokens.len) {
-        const views = tbuf.tokens.items(.view);
-        const slice = try util.slice_from_bookends(
-            views[index],
-            views[tbuf.tokens.len - 1]
-        );
-
-        try ctx.add_message(
-            .err,
-            "too many tokens in expression string.",
-            slice
-        );
-
-        return util.CompilationFailed;
-    }
-
-    return expr;
-}
-
-/// files are really just lists of expressions
-fn generate_file_ast(
-    ctx: *Context,
-    ast_ally: Allocator,
-    tbuf: *const TokenBuffer
-) Error!Expr {
-    if (tbuf.tokens.len == 0) return err_empty_program(ctx);
-
-    var children = std.ArrayList(Expr).init(ctx.ally);
-    defer children.deinit();
-
-    var index: usize = 0;
-    while (index < tbuf.tokens.len) {
-        const child = try generate_ast(ctx, ast_ally, tbuf, index, &index);
-        try children.append(child);
-    }
-
-    const token_views = tbuf.tokens.items(.view);
-    const slice = try util.slice_from_bookends(
-        token_views[0],
-        token_views[token_views.len - 1]
-    );
-
-    return Expr.init_sequence(
-        .file,
-        slice,
-        try ast_ally.dupe(Expr, children.items)
-    );
-}
-
 /// the ast and the arena which backs it
 pub const Ast = struct {
     const Self = @This();
 
     arena: std.heap.ArenaAllocator,
-    root: Expr,
+    exprs: []Expr,
 
     pub fn deinit(self: *Self) void {
         self.arena.deinit();
@@ -153,20 +89,31 @@ pub const Ast = struct {
 };
 
 /// intakes program as an lfile and outputs an ast
-pub fn parse(ctx: *Context, to: enum{expr, file}) Error!Ast {
+pub fn parse(ctx: *Context) Error!Ast {
     // lex
     var tbuf = try lex.lex(ctx);
     defer tbuf.deinit(ctx);
 
     // generate ast
     var ast_arena = std.heap.ArenaAllocator.init(ctx.ally);
-    const gen_fn = switch(to) {
-        .expr => generate_expr_ast,
-        .file => generate_file_ast,
-    };
+    const ast_ally = ast_arena.allocator();
+
+    if (tbuf.tokens.len == 0) {
+        try ctx.add_message(.err, "empty program?", ctx.lfile.text[0..0]);
+        return util.CompilationFailed;
+    }
+
+    var children = std.ArrayList(Expr).init(ctx.ally);
+    defer children.deinit();
+
+    var index: usize = 0;
+    while (index < tbuf.tokens.len) {
+        const child = try generate_ast(ctx, ast_ally, &tbuf, index, &index);
+        try children.append(child);
+    }
 
     return Ast{
         .arena = ast_arena,
-        .root = try gen_fn(ctx, ast_arena.allocator(), &tbuf),
+        .exprs = try ast_ally.dupe(Expr, children.items),
     };
 }

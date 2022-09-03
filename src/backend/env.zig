@@ -12,6 +12,7 @@ const std = @import("std");
 const kz = @import("kritzler");
 const util = @import("../util/util.zig");
 const fluent = @import("fluent.zig");
+const sema = @import("sema.zig");
 const ir = @import("ir.zig");
 const Builtin = @import("lang.zig").Builtin;
 
@@ -19,6 +20,8 @@ const stdout = std.io.getStdOut().writer();
 const Allocator = std.mem.Allocator;
 const SExpr = fluent.SExpr;
 const SType = fluent.SType;
+const TypedExpr = sema.TypedExpr;
+const Block = ir.Block;
 
 const Self = @This();
 
@@ -26,9 +29,13 @@ const Self = @This();
 /// they need a value
 pub const Bound = struct {
     pub const Data = union(enum) {
-        value: SExpr, // uncompiled values
-        builtin: Builtin,
         param: usize, // numbered function parameters
+
+        value: SExpr, // pure values
+        typed: TypedExpr, // typed AST, prepared for IR lowering
+        block: Block, // IR lowered code
+
+        builtin: Builtin,
     };
 
     stype: SType,
@@ -56,6 +63,7 @@ pub fn deinit(self: *Self) void {
         switch (bound.data) {
             .param, .builtin => {},
             .value => |value| value.deinit(self.ally),
+            else => @panic("TODO deinit typedexpr and block")
         }
     }
 }
@@ -74,6 +82,8 @@ pub fn define(self: *Self, symbol: []const u8, to: Bound) !void {
         .data = switch (to.data) {
             .param, .builtin => to.data,
             .value => |value| Bound.Data{ .value = try value.clone(self.ally) },
+            .typed => @panic("TODO clone typedexpr"),
+            .block => @panic("TODO clone block"),
         }
     };
 
@@ -126,6 +136,19 @@ pub fn define_type(self: *Self, symbol: []const u8, stype: SType) !void {
         SType{ .stype = {} },
         SExpr{ .stype = stype }
     );
+}
+
+/// define() helper
+pub fn define_typed(
+    self: *Self,
+    symbol: []const u8,
+    stype: SType,
+    typed: TypedExpr
+) !void {
+    try self.define(symbol, Bound{
+        .stype = stype,
+        .data = .{ .typed = typed }
+    });
 }
 
 fn get(self: Self, symbol: []const u8) ?Bound {
@@ -186,8 +209,10 @@ pub fn display(
         const stype = &bound.stype;
         const data = switch (bound.data) {
             .param => |index| try table.print("param {}", .{index}),
-            .builtin => |builtin| try table.print("{}", .{builtin}),
             .value => |value| try table.print("{}", .{value}),
+            .typed => |typed| try table.print("{}", .{typed}),
+            .block => |block| try table.print("{}", .{block}),
+            .builtin => |builtin| try table.print("{}", .{builtin}),
         };
 
         try table.add_row(.{ symbol, stype, data });
