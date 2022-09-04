@@ -31,11 +31,31 @@ pub const TypedExpr = union(FlatType) {
     pub const TypedSymbol = struct {
         stype: SType,
         symbol: []const u8,
+
+        fn clone(
+            self: TypedSymbol,
+            ally: Allocator
+        ) Allocator.Error!TypedSymbol {
+            return TypedSymbol{
+                .stype = try self.stype.clone(ally),
+                .symbol = try ally.dupe(u8, self.symbol)
+            };
+        }
     };
 
     pub const Structured = struct {
         stype: SType,
         exprs: []Self,
+
+        fn clone(self: Structured, ally: Allocator) Allocator.Error!Structured {
+            const copied = try ally.alloc(Self, self.exprs.len);
+            for (self.exprs) |expr, i| copied[i] = try expr.clone(ally);
+
+            return Structured{
+                .stype = try self.stype.clone(ally),
+                .exprs = copied,
+            };
+        }
     };
 
     unit,
@@ -57,6 +77,38 @@ pub const TypedExpr = union(FlatType) {
         // anno needs to be executed before the body's type can be inferred
         body: *SExpr,
     },
+
+    pub fn deinit(self: Self, ally: Allocator) void {
+        switch (self) {
+            .symbol => |sym| {
+                sym.stype.deinit(ally);
+                ally.free(sym.symbol);
+            },
+            .list, .call => |meta| {
+                meta.stype.deinit(ally);
+                for (meta.exprs) |expr| expr.deinit(ally);
+                ally.free(meta.exprs);
+            },
+            .func => |func| {
+                for (func.params) |sym| {
+                    sym.stype.deinit(ally);
+                    ally.free(sym.symbol);
+                }
+                ally.free(func.params);
+
+                func.body.deinit(ally);
+                ally.destroy(func.body);
+            },
+            .def => |def| {
+                ally.free(def.symbol);
+                def.anno.deinit(ally);
+                ally.destroy(def.anno);
+                def.body.deinit(ally);
+                ally.destroy(def.body);
+            },
+            else => {}
+        }
+    }
 
     /// bidirectional type checking and inference. returns a TypedExpr tree on the
     /// ally. does not allow for conflicting information.
@@ -230,6 +282,71 @@ pub const TypedExpr = union(FlatType) {
         };
     }
 
+    /// this expr as data
+    pub fn to_sexpr(self: Self, ally: Allocator) Allocator.Error!SExpr {
+        return switch (self) {
+            .unit => SExpr{ .unit = {} },
+            .undef => SExpr{ .undef = {} },
+            .int => |n| SExpr{ .int = n },
+            .stype => |t| SExpr{ .stype = try t.clone(ally) },
+            .symbol => |sym| SExpr{ .symbol = try ally.dupe(u8, sym.symbol) },
+            .list => |list| blk: {
+                const values = try ally.alloc(SExpr, list.exprs.len);
+                for (list.exprs) |expr, i| values[i] = try expr.to_sexpr(ally);
+
+                break :blk SExpr{ .list = values };
+            },
+            .call => |call| blk: {
+                const values = try ally.alloc(SExpr, call.exprs.len);
+                for (call.exprs) |expr, i| values[i] = try expr.to_sexpr(ally);
+
+                break :blk SExpr{ .call = values };
+            },
+            .func => @panic("TODO"),
+            .def => |def| SExpr{
+                .def = .{
+                    .symbol = try ally.dupe(u8, def.symbol),
+                    .anno = try util.place_on(
+                        ally,
+                        try def.anno.to_sexpr(ally)
+                    ),
+                    .body = try util.place_on(ally, try def.body.clone(ally)),
+                }
+            },
+        };
+    }
+
+    pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
+        return switch (self) {
+            .unit, .undef, .int => self,
+            .stype => |t| Self{ .stype = try t.clone(ally) },
+            .symbol => |sym| Self{ .symbol = try sym.clone(ally) },
+            .list => |list| Self{ .list = try list.clone(ally) },
+            .call => |call| Self{ .call = try call.clone(ally) },
+            .func => |func| blk: {
+                const copied = try ally.alloc(TypedSymbol, func.params.len);
+                for (func.params) |param, i| copied[i] = try param.clone(ally);
+
+                break :blk Self{
+                    .func = .{
+                        .params = copied,
+                        .body = try util.place_on(
+                            ally,
+                            try func.body.clone(ally)
+                        ),
+                    }
+                };
+            },
+            .def => |def| Self{
+                .def = .{
+                    .symbol = try ally.dupe(u8, def.symbol),
+                    .anno = try util.place_on(ally, try def.anno.clone(ally)),
+                    .body = try util.place_on(ally, try def.body.clone(ally)),
+                }
+            },
+        };
+    }
+
     fn display_r(
         self: Self,
         canvas: *kz.Canvas,
@@ -342,9 +459,6 @@ pub fn analyze(
             sexpr,
             SType{ .undef = {} }
         );
-
-        // TODO debug output vvv
-        try exprs[i].display(ally, "from {} to", .{sexpr});
     }
 
     return TypedAst{

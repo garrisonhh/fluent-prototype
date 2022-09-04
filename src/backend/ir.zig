@@ -8,12 +8,14 @@ const std = @import("std");
 const kz = @import("kritzler");
 const util = @import("../util/util.zig");
 const fluent = @import("fluent.zig");
+const sema = @import("sema.zig");
 const Env = @import("env.zig");
 
 const Allocator = std.mem.Allocator;
 const FlatType = fluent.Type;
 const SType = fluent.SType;
 const SExpr = fluent.SExpr;
+const TypedExpr = sema.TypedExpr;
 const stdout = std.io.getStdOut().writer();
 
 pub const OpCode = enum {
@@ -171,14 +173,14 @@ pub const Block = struct {
         );
 
         // lists
-        try kz.forms.fast_list(
+        try kz.fast_list(
             ally,
-            .{ .title = "consts" },
+            .{ .title = "consts", .color = kz.Color{ .fg = .magenta } },
             self.consts,
             stdout
         );
 
-        try kz.forms.fast_list(
+        try kz.fast_list(
             ally,
             .{
                 .title = "locals",
@@ -189,7 +191,7 @@ pub const Block = struct {
             stdout
         );
 
-        try kz.forms.fast_list(
+        try kz.fast_list(
             ally,
             .{ .title = "ops" },
             self.ops,
@@ -344,27 +346,22 @@ const Mason = struct {
 };
 
 /// lowers the operation of loading a constant to a local
-fn build_const(mason: *Mason, env: Env, value: SExpr) anyerror!Op.UInt {
-    _ = mason;
-    _ = env;
-    _ = value;
+fn build_const(mason: *Mason, value: TypedExpr) anyerror!Op.UInt {
+    const expects = try value.find_type(mason.ally);
+    defer expects.deinit(mason.ally);
 
-    @panic("TODO need to use TypedExpr.find_type()");
-
-    // return try mason.add_op(Op{
-        // .code = .@"const",
-        // .a = try mason.add_const(value),
-        // .to = try mason.add_local(
-            // try value.infer_type(mason.ally, env, SType{ .undef = {} })
-        // )
-    // });
+    return try mason.add_op(Op{
+        .code = .@"const",
+        .a = try mason.add_const(try value.to_sexpr(mason.ally)),
+        .to = try mason.add_local(try value.find_type(mason.ally))
+    });
 }
 
 fn build_operator(
     mason: *Mason,
     env: Env,
     operator: OpCode,
-    params: []const SExpr
+    params: []const TypedExpr
 ) anyerror!Op.UInt {
     return switch (operator.get_flow()) {
         .@"const" => unreachable,
@@ -386,12 +383,12 @@ fn build_operator(
 /// TODO this function demonstrates that passing around expected types between
 /// lowering functions might be useful or even necessary. another solution is
 /// producing a typed AST.
-fn build_call(mason: *Mason, env: Env, expr: SExpr) anyerror!Op.UInt {
-    const func = expr.call[0];
-    const params = expr.call[1..];
+fn build_call(mason: *Mason, env: Env, expr: TypedExpr) anyerror!Op.UInt {
+    const func = expr.call.exprs[0];
+    const params = expr.call.exprs[1..];
 
     if (func == .symbol) {
-        const bound = env.get_data(func.symbol).?;
+        const bound = env.get_data(func.symbol.symbol).?;
 
         if (bound == .builtin) {
             // builtin function/operator
@@ -409,24 +406,12 @@ fn build_call(mason: *Mason, env: Env, expr: SExpr) anyerror!Op.UInt {
         defer mason.ally.free(param_refs);
 
         for (params) |param, i| {
-            param_types[i] = try param.infer_type(
-                mason.ally,
-                env,
-                SType{ .undef = {} }
-            );
-
+            param_types[i] = try param.find_type(mason.ally);
             param_refs[i] = try build_expr(mason, env, param);
         }
 
         // lower lambda with inferred parameter types
-        const lambda = try lower_func(
-            mason.ally,
-            env,
-            "anonymous",
-            func.func.params,
-            param_types,
-            func.func.body.*
-        );
+        const lambda = try lower_func(mason.ally, env, "lambda", func);
 
         return try mason.inline_block(lambda, param_refs);
     } else {
@@ -435,20 +420,26 @@ fn build_call(mason: *Mason, env: Env, expr: SExpr) anyerror!Op.UInt {
 }
 
 /// returns where this expr produces its value (`to`)
-fn build_expr(mason: *Mason, env: Env, expr: SExpr) anyerror!Op.UInt {
+fn build_expr(mason: *Mason, env: Env, expr: TypedExpr) anyerror!Op.UInt {
     return switch (expr) {
         .int, .stype =>
-            try build_const(mason, env, try expr.clone(mason.ally)),
+            try build_const(mason, try expr.clone(mason.ally)),
         .call => try build_call(mason, env, expr),
         // TODO can/should I cache these in Env bindings?
-        .symbol => |symbol| switch (env.get_data(symbol).?) {
+        .symbol => |sym| switch (env.get_data(sym.symbol).?) {
             .value => |value| try build_expr(mason, env, value),
             .builtin => std.debug.panic("TODO lower bound builtin", .{}),
             // THIS EXPRESSION IS FUCKING BEAUTIFUL.
             .param => |index| @intCast(Op.UInt, index),
-            else => @panic("TODO build expr with typedexprs instead")
+            else => |tag| std.debug.panic(
+                "TODO build_expr for {s}",
+                .{@tagName(tag)}
+            )
         },
-        else => std.debug.panic("TODO lower {} SExprs", .{@as(FlatType, expr)})
+        else => std.debug.panic(
+            "TODO lower {} TypedExprs",
+            .{@as(FlatType, expr)}
+        )
     };
 }
 
@@ -457,33 +448,37 @@ fn lower_func(
     ally: Allocator,
     env: Env,
     name: []const u8,
-    param_names: []const []const u8,
-    param_types: []const SType,
-    body: SExpr
+    fn_expr: TypedExpr
 ) anyerror!Block {
-    // construct param env
-    std.debug.assert(param_names.len == param_types.len);
+    const func = fn_expr.func;
 
+    // construct param env
     var sub_env = try Env.init(ally, &env);
     defer sub_env.deinit();
 
-    for (param_names) |param_name, i| {
-        try sub_env.define_param(param_name, param_types[i], i);
+    for (func.params) |param, i| {
+        try sub_env.define_param(param.symbol, param.stype, i);
     }
 
     // do masonry
+    const param_types = try ally.alloc(SType, func.params.len);
+    defer ally.free(param_types);
+
+    for (func.params) |param, i| param_types[i] = try param.stype.clone(ally);
+
     var mason = try Mason.init(ally, name, param_types);
-    const output = try build_expr(&mason, sub_env, body);
+    const output = try build_expr(&mason, sub_env, func.body.*);
 
     return mason.build(output);
 }
 
-/// lower a repl expression to a block
-///
-/// TODO I've been operating with the assumption that all types are inferrable
-/// with SExpr.infer_type(). instead of full semantic analysis, performing a
-/// step to check for inferrability before lower()ing might be the optimal way
-/// to go about verifying my assumptions?
-pub fn lower_repl_expr(ally: Allocator, env: Env, expr: SExpr) !Block {
-    return try lower_func(ally, env, "repl_expr", &.{}, &.{}, expr);
+/// lower a program (file or repl-level) expression to a block
+pub fn lower_expr(
+    ally: Allocator,
+    env: Env,
+    name: []const u8,
+    expr: TypedExpr
+) !Block {
+    var mason = try Mason.init(ally, name, &.{});
+    return mason.build(try build_expr(&mason, env, expr));
 }

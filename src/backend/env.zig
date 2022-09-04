@@ -30,11 +30,8 @@ const Self = @This();
 pub const Bound = struct {
     pub const Data = union(enum) {
         param: usize, // numbered function parameters
-
-        value: SExpr, // pure values
-        typed: TypedExpr, // typed AST, prepared for IR lowering
-        block: Block, // IR lowered code
-
+        value: TypedExpr,
+        block: Block,
         builtin: Builtin,
     };
 
@@ -82,7 +79,6 @@ pub fn define(self: *Self, symbol: []const u8, to: Bound) !void {
         .data = switch (to.data) {
             .param, .builtin => to.data,
             .value => |value| Bound.Data{ .value = try value.clone(self.ally) },
-            .typed => @panic("TODO clone typedexpr"),
             .block => @panic("TODO clone block"),
         }
     };
@@ -121,7 +117,7 @@ pub fn define_value(
     self: *Self,
     symbol: []const u8,
     stype: SType,
-    value: SExpr
+    value: TypedExpr
 ) !void {
     try self.define(symbol, Bound{
         .stype = stype,
@@ -134,21 +130,8 @@ pub fn define_type(self: *Self, symbol: []const u8, stype: SType) !void {
     try self.define_value(
         symbol,
         SType{ .stype = {} },
-        SExpr{ .stype = stype }
+        TypedExpr{ .stype = stype }
     );
-}
-
-/// define() helper
-pub fn define_typed(
-    self: *Self,
-    symbol: []const u8,
-    stype: SType,
-    typed: TypedExpr
-) !void {
-    try self.define(symbol, Bound{
-        .stype = stype,
-        .data = .{ .typed = typed }
-    });
 }
 
 fn get(self: Self, symbol: []const u8) ?Bound {
@@ -209,8 +192,14 @@ pub fn display(
         const stype = &bound.stype;
         const data = switch (bound.data) {
             .param => |index| try table.print("param {}", .{index}),
-            .value => |value| try table.print("{}", .{value}),
-            .typed => |typed| try table.print("{}", .{typed}),
+            .value => |value| blk: {
+                // TODO TypedExpr.format eventually. this is so hacky LMAO
+                var arena = std.heap.ArenaAllocator.init(self.ally);
+                defer arena.deinit();
+
+                const sexpr = try value.to_sexpr(arena.allocator());
+                break :blk try table.print("{}", .{sexpr});
+            },
             .block => |block| try table.print("{}", .{block}),
             .builtin => |builtin| try table.print("{}", .{builtin}),
         };
