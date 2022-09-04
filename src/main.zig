@@ -11,27 +11,6 @@ const c = @cImport({
     @cInclude("linenoise.h");
 });
 
-fn repl_eval_print(ally: Allocator, env: backend.Env, text: []const u8) !void {
-    // evaluate
-    var results = try plumbing.comprehend_text(ally, "repl", text);
-    defer {
-        for (results) |result| result.deinit(ally);
-        ally.free(results);
-    }
-
-    _ = try backend.analyze(ally, env, results);
-
-    // TODO vvv
-    // for (results) |result| {
-        // var ir = try backend.lower_repl_expr(ally, env, result);
-        // defer ir.deinit(ally);
-
-        // display nicely
-        // try stdout.print("{}\n\n", .{result});
-        // try ir.display(ally);
-    // }
-}
-
 /// returns string allocated onto ally
 fn repl_read(ally: Allocator) ![]const u8 {
     const INDENT = 2;
@@ -80,18 +59,10 @@ fn repl_read(ally: Allocator) ![]const u8 {
     return buf.toOwnedSlice();
 }
 
-pub fn main() !void {
-    // var gpa = std.heap.GeneralPurposeAllocator(.{
-        // .stack_trace_frames = 1000,
-    // }){};
-    // defer _ = gpa.deinit();
-    // const ally = gpa.allocator();
-    const ally = std.heap.page_allocator;
+fn repl(ally: Allocator, prelude: backend.Env) !void {
+    var repl_env = backend.Env.init(ally, &prelude);
+    defer repl_env.deinit();
 
-    var prelude = try backend.create_prelude(ally);
-    defer prelude.deinit();
-
-    // repl loop
     while (true) {
         const input = try repl_read(ally);
         defer ally.free(input);
@@ -107,6 +78,35 @@ pub fn main() !void {
 
         if (is_empty) break;
 
-        try repl_eval_print(ally, prelude, input);
+        // eval and print
+        var result = try plumbing.evaluate(ally, &repl_env, "repl", input);
+        defer result.deinit(ally);
+
+        try stdout.print("{}\n", .{result});
+    }
+}
+
+pub fn main() !void {
+    // var gpa = std.heap.GeneralPurposeAllocator(.{
+        // .stack_trace_frames = 1000,
+    // }){};
+    // defer _ = gpa.deinit();
+    // const ally = gpa.allocator();
+    const ally = std.heap.page_allocator;
+
+    var prelude = try backend.create_prelude(ally);
+    defer prelude.deinit();
+
+    // do language tests (I just want all of it to compile, lol)
+    const tests = [_][]const u8{
+        "(def a int (+ 1 2))",
+        "(/ (+ 45 69) 2)",
+    };
+
+    for (tests) |@"test"| {
+        var result = try plumbing.evaluate(ally, &prelude, "test", @"test");
+        defer result.deinit(ally);
+
+        try stdout.print("{}\n", .{result});
     }
 }

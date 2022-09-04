@@ -1,6 +1,5 @@
-//! semantic analysis in the Fluent compiler is the process of predeclaring
-//! everything in the global scope, and performing static type analysis on a raw
-//! SExpr tree to produce TypedExprs for IR generation
+//! semantic analysis in the Fluent compiler is the process of performing static
+//! type analysis on a raw SExpr tree to produce TypedExprs for IR generation
 
 const std = @import("std");
 const kz = @import("kritzler");
@@ -320,7 +319,7 @@ pub const TypedAst = struct {
     arena: std.heap.ArenaAllocator,
     exprs: []TypedExpr,
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: Self) void {
         self.arena.deinit();
     }
 };
