@@ -1,5 +1,7 @@
 //! run contains the high-level implementation of running a fluent program
 //! from its first SExprs to its last
+//!
+//! TODO dependency solving?
 
 const std = @import("std");
 const fluent = @import("fluent.zig");
@@ -9,6 +11,7 @@ const Vm = @import("vm.zig").Vm;
 const Env = @import("env.zig");
 
 const Allocator = std.mem.Allocator;
+const SType = fluent.SType;
 const SExpr = fluent.SExpr;
 
 pub fn run(
@@ -16,45 +19,60 @@ pub fn run(
     env: *Env,
     program: []const SExpr
 ) !SExpr {
-    // generate typed ast
-    const ast = try sema.analyze(ally, env.*, program);
-    defer ast.deinit();
-
-    for (ast.exprs) |expr| try expr.display(ally, "sema produced", .{});
-
-    // TODO dependency solver phase here
-
     // cyclically lower ast to IR
     var vm = Vm.init(ally);
-
     var last_value = SExpr{ .unit = {} };
 
-    for (ast.exprs) |expr| {
+    for (program) |sexpr| {
+        const ast = try sema.analyze(ally, env.*, sexpr, SType{ .undef = {} });
+        defer ast.deinit();
+
+        const expr = ast.root;
+
         if (expr == .def) {
-            // generate code for type
+            const def = expr.def;
+
+            // analyze type
             const label =
-                try std.fmt.allocPrint(ally, "type of {s}", .{expr.def.symbol});
+                try std.fmt.allocPrint(ally, "type of {s}", .{def.symbol});
             defer ally.free(label);
 
             const type_block =
-                try ir.lower_expr(ally, env.*, label, expr.def.anno.*);
+                try ir.lower_expr(ally, env.*, label, def.anno.*);
             defer type_block.deinit(ally);
 
-            try type_block.display(ally);
-
             // execute type
-            const stype = (try vm.execute(type_block, &.{})).stype;
+            const type_expr = try vm.execute(type_block, &.{});
+            defer type_expr.deinit(ally);
 
-            _ = stype;
-            @panic("TODO code gen for def body");
+            const stype = type_expr.stype;
 
-            // TODO define
+            // analyze body
+            const body_ast = try sema.analyze(ally, env.*, def.body.*, stype);
+            defer body_ast.deinit();
+
+            const body = body_ast.root;
+
+            const body_label =
+                try std.fmt.allocPrint(ally, "body of {s}", .{def.symbol});
+            defer ally.free(body_label);
+
+            const body_block = try ir.lower_expr(ally, env.*, body_label, body);
+            defer body_block.deinit(ally);
+
+            // execute body
+            const value = try vm.execute(body_block, &.{});
+            defer value.deinit(ally);
+
+            const analyzed = try sema.analyze(ally, env.*, value, stype);
+            defer analyzed.deinit();
+
+            // define in env
+            try env.define_value(def.symbol, stype, analyzed.root);
         } else {
             // lower expr
             const block = try ir.lower_expr(ally, env.*, "expr", expr);
             defer block.deinit(ally);
-
-            try block.display(ally);
 
             // execute
             last_value.deinit(ally);

@@ -434,35 +434,28 @@ pub const TypedAst = struct {
     const Self = @This();
 
     arena: std.heap.ArenaAllocator,
-    exprs: []TypedExpr,
+    root: TypedExpr,
 
     pub fn deinit(self: Self) void {
         self.arena.deinit();
     }
 };
 
-/// performs type checking and type inference to prepare an AST for IR lowering
+/// does type analysis, allocates resulting ast on an arena for easier memory
+/// management
 pub fn analyze(
     ally: Allocator,
     env: Env,
-    sexprs: []const SExpr
+    sexpr: SExpr,
+    expects: SType
 ) !TypedAst {
     var arena = std.heap.ArenaAllocator.init(ally);
     const ast_ally = arena.allocator();
 
-    var exprs = try ast_ally.alloc(TypedExpr, sexprs.len);
-
-    for (sexprs) |sexpr, i| {
-        exprs[i] = try TypedExpr.from_sexpr(
-            ast_ally,
-            env,
-            sexpr,
-            SType{ .undef = {} }
-        );
-    }
+    const root = try TypedExpr.from_sexpr(ast_ally, env, sexpr, expects);
 
     return TypedAst{
         .arena = arena,
-        .exprs = exprs,
+        .root = root,
     };
 }

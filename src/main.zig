@@ -100,8 +100,13 @@ pub fn main() !void {
     // do language tests (I just want all of it to compile, lol)
     const tests = [_][]const u8{
         "(/ (+ 45 69) 2)",
+
         "type",
-        "(def a int (+ 1 2))",
+
+        \\ (def a int (* 34 56))
+        \\ (def b int (+ a 1))
+        \\ (+ a b)
+        ,
     };
 
     for (tests) |@"test"| {
@@ -109,11 +114,13 @@ pub fn main() !void {
         defer result.deinit(ally);
 
         try stdout.print(
-            "{}testing:{}\n> {s}\n{}\n\n",
+            "{}test case:{}\n{s}\n\n{}returns:{}\n{}\n\n",
             .{
                 &kz.Color{ .fg = .cyan },
                 &kz.Color{},
                 @"test",
+                &kz.Color{ .fg = .cyan },
+                &kz.Color{},
                 result
             }
         );
