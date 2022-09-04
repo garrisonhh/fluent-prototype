@@ -39,8 +39,8 @@ pub fn create_prelude(ally: Allocator) !Env {
     const tmp = arena.allocator();
 
     // type primitives
-    try prelude.define_type("type", SType{ .stype = {} });
-    try prelude.define_type("int", SType{ .int = {} });
+    try prelude.define_type("Type", SType{ .stype = {} });
+    try prelude.define_type("Int", SType{ .int = {} });
 
     // `fn`
     // const fn_type_fn = try SType.init_func(

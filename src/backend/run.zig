@@ -30,15 +30,14 @@ pub fn run(
         const expr = ast.root;
 
         if (expr == .def) {
+            // TODO great starting point for optimizing arena cycles + memory
+            // usage in the backend
             const def = expr.def;
 
             // analyze type
-            const label =
-                try std.fmt.allocPrint(ally, "type of {s}", .{def.symbol});
-            defer ally.free(label);
+            const anno = def.anno.*;
 
-            const type_block =
-                try ir.lower_expr(ally, env.*, label, def.anno.*);
+            const type_block = try ir.lower_expr(ally, env.*, "def type", anno);
             defer type_block.deinit(ally);
 
             // execute type
@@ -53,11 +52,7 @@ pub fn run(
 
             const body = body_ast.root;
 
-            const body_label =
-                try std.fmt.allocPrint(ally, "body of {s}", .{def.symbol});
-            defer ally.free(body_label);
-
-            const body_block = try ir.lower_expr(ally, env.*, body_label, body);
+            const body_block = try ir.lower_expr(ally, env.*, "def body", body);
             defer body_block.deinit(ally);
 
             // execute body

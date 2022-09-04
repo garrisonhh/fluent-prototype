@@ -101,16 +101,25 @@ pub fn main() !void {
     const tests = [_][]const u8{
         "(/ (+ 45 69) 2)",
 
-        "type",
-
-        \\ (def a int (* 34 56))
-        \\ (def b int (+ a 1))
+        \\ (def a Int (* 34 56))
+        \\ (def b Int (+ a 1))
         \\ (+ a b)
+        ,
+
+        \\ (def my-add
+        \\   (Fn [Int Int] Int)
+        \\   (fn [a b]
+        \\     (+ a b)))
+        \\
+        \\ (my-add 45 56)
         ,
     };
 
     for (tests) |@"test"| {
-        var result = try plumbing.evaluate(ally, &prelude, "test", @"test");
+        var env = try backend.Env.init(ally, &prelude);
+        defer env.deinit();
+
+        var result = try plumbing.evaluate(ally, &env, "test", @"test");
         defer result.deinit(ally);
 
         try stdout.print(
@@ -124,5 +133,7 @@ pub fn main() !void {
                 result
             }
         );
+
+        try env.display("test env", .{});
     }
 }

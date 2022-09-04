@@ -162,16 +162,20 @@ pub const SType = union(Type) {
     // TODO format types with PascalCase
     fn format_r(self: Self, writer: anytype) @TypeOf(writer).Error!void {
         switch (self) {
-            .stype => try writer.writeAll("type"),
-            .list => |subtype| try writer.print("(list {})", .{subtype}),
+            .stype => try writer.writeAll("Type"),
+            .list => |subtype| try writer.print("(List {})", .{subtype}),
             .call => |call| {
-                try util.write_join("(call ", " ", ")", call, writer);
+                try util.write_join("(Call ", " ", ")", call, writer);
             },
             .func => |func| {
-                try util.write_join("(fn [", " ", "]", func.params, writer);
+                try util.write_join("(Fn [", " ", "]", func.params, writer);
                 try writer.print(" {})", .{func.returns});
             },
-            else => |t| try writer.writeAll(@tagName(t)),
+            else => |tag| {
+                const name = @tagName(tag);
+                try writer.writeByte(std.ascii.toUpper(name[0]));
+                try writer.writeAll(name[1..]);
+            }
         }
     }
 
