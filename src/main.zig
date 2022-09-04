@@ -99,14 +99,23 @@ pub fn main() !void {
 
     // do language tests (I just want all of it to compile, lol)
     const tests = [_][]const u8{
-        "(def a int (+ 1 2))",
         "(/ (+ 45 69) 2)",
+        "type",
+        "(def a int (+ 1 2))",
     };
 
     for (tests) |@"test"| {
         var result = try plumbing.evaluate(ally, &prelude, "test", @"test");
         defer result.deinit(ally);
 
-        try stdout.print("{}\n", .{result});
+        try stdout.print(
+            "{}testing:{}\n> {s}\n{}\n\n",
+            .{
+                &kz.Color{ .fg = .cyan },
+                &kz.Color{},
+                @"test",
+                result
+            }
+        );
     }
 }

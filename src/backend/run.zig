@@ -5,6 +5,7 @@ const std = @import("std");
 const fluent = @import("fluent.zig");
 const sema = @import("sema.zig");
 const ir = @import("ir.zig");
+const Vm = @import("vm.zig").Vm;
 const Env = @import("env.zig");
 
 const Allocator = std.mem.Allocator;
@@ -23,29 +24,43 @@ pub fn run(
 
     // TODO dependency solver phase here
 
-    // lower ast to IR
+    // cyclically lower ast to IR
+    var vm = Vm.init(ally);
+
+    var last_value = SExpr{ .unit = {} };
+
     for (ast.exprs) |expr| {
         if (expr == .def) {
-            const type_block = try ir.lower_expr(
-                ally,
-                env.*,
-                expr.def.symbol,
-                expr.def.anno.*
-            );
+            // generate code for type
+            const label =
+                try std.fmt.allocPrint(ally, "type of {s}", .{expr.def.symbol});
+            defer ally.free(label);
+
+            const type_block =
+                try ir.lower_expr(ally, env.*, label, expr.def.anno.*);
             defer type_block.deinit(ally);
 
-            // TODO define
-
             try type_block.display(ally);
+
+            // execute type
+            const stype = (try vm.execute(type_block, &.{})).stype;
+
+            _ = stype;
+            @panic("TODO code gen for def body");
+
+            // TODO define
         } else {
+            // lower expr
             const block = try ir.lower_expr(ally, env.*, "expr", expr);
             defer block.deinit(ally);
 
-            // TODO run?
-
             try block.display(ally);
+
+            // execute
+            last_value.deinit(ally);
+            last_value = try vm.execute(block, &.{});
         }
     }
 
-    @panic("reached end of run()");
+    return last_value;
 }
