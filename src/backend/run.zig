@@ -7,7 +7,6 @@ const std = @import("std");
 const fluent = @import("fluent.zig");
 const sema = @import("sema.zig");
 const ir = @import("ir.zig");
-const Vm = @import("vm.zig").Vm;
 const Env = @import("env.zig");
 
 const Allocator = std.mem.Allocator;
@@ -20,7 +19,6 @@ pub fn run(
     program: []const SExpr
 ) !SExpr {
     // cyclically lower ast to IR
-    var vm = Vm.init(ally);
     var last_value = SExpr{ .unit = {} };
 
     for (program) |sexpr| {
@@ -43,7 +41,7 @@ pub fn run(
             defer type_block.deinit(ally);
 
             // execute type
-            const type_expr = try vm.execute(type_block, &.{});
+            const type_expr = try env.execute(type_block, &.{});
             defer type_expr.deinit(ally);
 
             const stype = type_expr.stype;
@@ -58,7 +56,7 @@ pub fn run(
             defer body_block.deinit(ally);
 
             // execute body
-            const value = try vm.execute(body_block, &.{});
+            const value = try env.execute(body_block, &.{});
             defer value.deinit(ally);
 
             const analyzed = try sema.analyze(ally, env.*, value, stype);
@@ -73,7 +71,7 @@ pub fn run(
 
             // execute
             last_value.deinit(ally);
-            last_value = try vm.execute(block, &.{});
+            last_value = try env.execute(block, &.{});
         }
     }
 
