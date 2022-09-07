@@ -34,24 +34,27 @@ pub const Vm = struct {
     ) Allocator.Error!void {
         const a = op.a;
         const b = op.b;
-        const to = &locals[op.to];
 
-        switch (op.code) {
-            .@"const" => to.* = try block.consts[a].clone(self.ally),
-            .copy => to.* = try locals[a].clone(self.ally),
+        // op behavior
+        const res: ?SExpr = switch (op.code) {
+            .@"const" => try block.consts[a].clone(self.ally),
+            .copy => try locals[a].clone(self.ally),
 
-            .peek => to.* = try locals[a].ptr.to.clone(self.ally),
-            .poke => locals[a].ptr.to.* = try locals[b].clone(self.ally),
-            .pinc => to.* = SExpr{
+            .peek => try locals[a].ptr.to.clone(self.ally),
+            .poke => poke: {
+                locals[a].ptr.to.* = try locals[b].clone(self.ally);
+                break :poke null;
+            },
+            .pinc => SExpr{
                 .ptr = .{
                     .owns = false,
                     .to = &@ptrCast([*]SExpr, locals[a].ptr.to)[1]
                 }
             },
-            .padd => {
+            .padd => padd: {
                 const offset = @intCast(usize, locals[b].int);
 
-                to.* = SExpr{
+                break :padd SExpr{
                     .ptr = .{
                         .owns = false,
                         .to = &@ptrCast([*]SExpr, locals[a].ptr.to)[offset]
@@ -59,26 +62,26 @@ pub const Vm = struct {
                 };
             },
 
-            .alloc => {
+            .alloc => alloc: {
                 // TODO stype (locals[a]) is unused here, what do I do with it?
                 const size = @intCast(usize, locals[b].int);
                 const list = try self.ally.alloc(SExpr, size);
 
                 for (list) |*elem| elem.* = SExpr{ .undef = {} };
 
-                to.* = SExpr{ .list = list };
+                break :alloc SExpr{ .list = list };
             },
-            .index => to.* = SExpr{
+            .index => SExpr{
                 .ptr = .{
                     .owns = false,
                     .to = &locals[a].list[@intCast(usize, locals[b].int)]
                 }
             },
-            .list_ptr => to.* = SExpr{
+            .list_ptr => SExpr{
                 .ptr = .{ .owns = false, .to = &locals[a].list[0] }
             },
 
-            .@"fn" => {
+            .@"fn" => @"fn": {
                 const params = try self.ally.alloc(SType, locals[a].list.len);
                 for (locals[a].list) |expr, i| {
                     params[i] = try expr.stype.clone(self.ally);
@@ -89,22 +92,26 @@ pub const Vm = struct {
                     try locals[b].stype.clone(self.ally)
                 );
 
-                to.* = SExpr{
+                break :@"fn" SExpr{
                     .stype = SType{
                         .func = .{ .params = params, .returns = returns }
                     }
                 };
             },
 
-            .iadd => to.* = SExpr{ .int = locals[a].int + locals[b].int },
-            .isub => to.* = SExpr{ .int = locals[a].int - locals[b].int },
-            .imul => to.* = SExpr{ .int = locals[a].int * locals[b].int },
-            .idiv => to.* = SExpr{
-                .int = @divTrunc(locals[a].int, locals[b].int)
-            },
-            .imod => to.* = SExpr{ .int = @rem(locals[a].int, locals[b].int) },
+            .iadd => SExpr{ .int = locals[a].int + locals[b].int },
+            .isub => SExpr{ .int = locals[a].int - locals[b].int },
+            .imul => SExpr{ .int = locals[a].int * locals[b].int },
+            .idiv => SExpr{ .int = @divTrunc(locals[a].int, locals[b].int) },
+            .imod => SExpr{ .int = @rem(locals[a].int, locals[b].int) },
 
             else => |code| std.debug.panic("TODO do op {s}", .{@tagName(code)})
+        };
+
+        // cleanup local if replaced
+        if (res) |val| {
+            if (locals[op.to] != .undef) locals[op.to].deinit(self.ally);
+            locals[op.to] = val;
         }
     }
 

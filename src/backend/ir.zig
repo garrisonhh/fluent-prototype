@@ -146,8 +146,8 @@ pub const Op = struct {
 
     code: OpCode, // operation to perform
     a: UInt,
-    b: UInt = 0,
-    to: UInt = 0, // where result is stored
+    b: UInt = undefined,
+    to: UInt = undefined, // where result is stored
 
     pub fn format(
         self: Self,
