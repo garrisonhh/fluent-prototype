@@ -42,30 +42,26 @@ pub fn create_prelude(ally: Allocator) !Env {
     try prelude.define_type("Type", SType{ .stype = {} });
     try prelude.define_type("Int", SType{ .int = {} });
 
-    // `fn`
-    // const fn_type_fn = try SType.init_func(
-        // tmp,
-        // &.{
-            // try SType.init_list(tmp, SType{ .stype = {} }),
-            // SType{ .stype = {} }
-        // },
-        // SType{ .stype = {} }
-    // );
+    {
+        const type_type = SType{ .stype = {} };
+        const params = [_]SType{try SType.init_list(tmp, type_type), type_type};
+        const fn_type = try SType.init_func(tmp, &params, type_type);
 
-    // try prelude.define_builtin("fn", fn_type_fn, .{ .opcode = .func_type });
+        try prelude.define_builtin("Fn", fn_type, .{ .opcode = .@"fn" });
+    }
 
     // math
-    const bin_int_math_op = try SType.init_func(
-        tmp,
-        &.{SType{ .int = {} }, SType{ .int = {} }},
-        SType{ .int = {} }
-    );
+    {
+        const int_type = SType{ .int = {} };
+        const params = [_]SType{int_type, int_type};
+        const bin_math = try SType.init_func(tmp, &params, int_type);
 
-    try prelude.define_builtin("+", bin_int_math_op, .{ .opcode = .iadd });
-    try prelude.define_builtin("-", bin_int_math_op, .{ .opcode = .isub });
-    try prelude.define_builtin("*", bin_int_math_op, .{ .opcode = .imul });
-    try prelude.define_builtin("/", bin_int_math_op, .{ .opcode = .idiv });
-    try prelude.define_builtin("%", bin_int_math_op, .{ .opcode = .imod });
+        try prelude.define_builtin("+", bin_math, .{ .opcode = .iadd });
+        try prelude.define_builtin("-", bin_math, .{ .opcode = .isub });
+        try prelude.define_builtin("*", bin_math, .{ .opcode = .imul });
+        try prelude.define_builtin("/", bin_math, .{ .opcode = .idiv });
+        try prelude.define_builtin("%", bin_math, .{ .opcode = .imod });
+    }
 
     try prelude.display("prelude", .{});
 

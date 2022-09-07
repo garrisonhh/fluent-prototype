@@ -27,6 +27,8 @@ pub fn run(
         const ast = try sema.analyze(ally, env.*, sexpr, SType{ .undef = {} });
         defer ast.deinit();
 
+        // TODO must traverse TypedExpr and execute all types here
+
         const expr = ast.root;
 
         if (expr == .def) {

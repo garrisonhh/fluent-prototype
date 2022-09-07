@@ -43,16 +43,31 @@ pub const TypedExpr = union(FlatType) {
         }
     };
 
-    pub const Structured = struct {
-        stype: SType,
+    pub const List = struct {
+        subtype: SType,
         exprs: []Self,
 
-        fn clone(self: Structured, ally: Allocator) Allocator.Error!Structured {
+        fn clone(self: List, ally: Allocator) Allocator.Error!List {
             const copied = try ally.alloc(Self, self.exprs.len);
             for (self.exprs) |expr, i| copied[i] = try expr.clone(ally);
 
-            return Structured{
-                .stype = try self.stype.clone(ally),
+            return List{
+                .subtype = try self.subtype.clone(ally),
+                .exprs = copied,
+            };
+        }
+    };
+
+    pub const Call = struct {
+        returns: SType,
+        exprs: []Self,
+
+        fn clone(self: Call, ally: Allocator) Allocator.Error!Call {
+            const copied = try ally.alloc(Self, self.exprs.len);
+            for (self.exprs) |param, i| copied[i] = try param.clone(ally);
+
+            return Call{
+                .returns = try self.returns.clone(ally),
                 .exprs = copied,
             };
         }
@@ -64,9 +79,10 @@ pub const TypedExpr = union(FlatType) {
     symbol: TypedSymbol,
     int: i64,
     stype: SType,
+    ptr: *Self,
 
-    list: Structured,
-    call: Structured,
+    list: List,
+    call: Call,
     func: struct {
         params: []TypedSymbol,
         body: *Self,
@@ -84,10 +100,15 @@ pub const TypedExpr = union(FlatType) {
                 sym.stype.deinit(ally);
                 ally.free(sym.symbol);
             },
-            .list, .call => |meta| {
-                meta.stype.deinit(ally);
-                for (meta.exprs) |expr| expr.deinit(ally);
-                ally.free(meta.exprs);
+            .list => |list| {
+                list.subtype.deinit(ally);
+                for (list.exprs) |expr| expr.deinit(ally);
+                ally.free(list.exprs);
+            },
+            .call => |call| {
+                call.returns.deinit(ally);
+                for (call.exprs) |expr| expr.deinit(ally);
+                ally.free(call.exprs);
             },
             .func => |func| {
                 for (func.params) |sym| {
@@ -136,12 +157,15 @@ pub const TypedExpr = union(FlatType) {
             .stype => |t| Self{ .stype = try t.clone(ally) },
             .symbol => |sym| blk: {
                 const bound_stype = env.get_type(sym) orelse {
+                    std.debug.print("unknown symbol `{s}`\n", .{sym});
                     return TypingError.UnknownSymbol;
                 };
 
                 if (!bound_stype.matches(expects)) {
-                    // TODO remove vvv
-                    std.debug.panic("{} != {}\n", .{bound_stype, expects});
+                    std.debug.print(
+                        "`{s}` is {}, expected {}\n",
+                        .{sym, bound_stype, expects}
+                    );
 
                     return TypingError.ExpectationFailed;
                 }
@@ -178,8 +202,8 @@ pub const TypedExpr = union(FlatType) {
                     }
 
                     break :blk Self{
-                        .list = Structured{
-                            .stype = subtype,
+                        .list = List{
+                            .subtype = subtype,
                             .exprs = exprs
                         }
                     };
@@ -188,8 +212,8 @@ pub const TypedExpr = union(FlatType) {
                     if (expects == .undef) return TypingError.UninferrableType;
 
                     break :blk Self{
-                        .list = Structured{
-                            .stype = try expects.clone(ally),
+                        .list = List{
+                            .subtype = try expects.clone(ally),
                             .exprs = &.{}
                         }
                     };
@@ -226,7 +250,7 @@ pub const TypedExpr = union(FlatType) {
 
                     break :blk Self{
                         .call = .{
-                            .stype = try func_data.returns.clone(ally),
+                            .returns = try func_data.returns.clone(ally),
                             .exprs = exprs,
                         }
                     };
@@ -250,16 +274,17 @@ pub const TypedExpr = union(FlatType) {
         };
     }
 
-    /// the type of this expr when executed
+    /// determines the type of this expr when executed
     pub fn find_type(self: Self, ally: Allocator) Allocator.Error!SType {
         return switch (self) {
             .unit => SType{ .unit = {} },
             .undef => SType{ .undef = {} },
             .int => SType{ .int = {} },
             .stype => SType{ .stype = {} },
-            .symbol => |meta| try meta.stype.clone(ally),
-            .list => |meta| SType.init_list(ally, meta.stype),
-            .call => |meta| try meta.stype.clone(ally),
+            .symbol => |sym| try sym.stype.clone(ally),
+            .ptr => |sub| try SType.init_ptr(ally, try sub.find_type(ally)),
+            .list => |list| try SType.init_list(ally, list.subtype),
+            .call => |call| try call.returns.clone(ally),
             .func => |meta| blk: {
                 const param_types = try ally.alloc(SType, meta.params.len);
                 for (meta.params) |param, i| {
@@ -282,7 +307,7 @@ pub const TypedExpr = union(FlatType) {
         };
     }
 
-    /// this expr as data
+    /// converts this expr to an untyped value
     pub fn to_sexpr(self: Self, ally: Allocator) Allocator.Error!SExpr {
         return switch (self) {
             .unit => SExpr{ .unit = {} },
@@ -290,6 +315,7 @@ pub const TypedExpr = union(FlatType) {
             .int => |n| SExpr{ .int = n },
             .stype => |t| SExpr{ .stype = try t.clone(ally) },
             .symbol => |sym| SExpr{ .symbol = try ally.dupe(u8, sym.symbol) },
+            .ptr => @panic("TODO"),
             .list => |list| blk: {
                 const values = try ally.alloc(SExpr, list.exprs.len);
                 for (list.exprs) |expr, i| values[i] = try expr.to_sexpr(ally);
@@ -316,11 +342,29 @@ pub const TypedExpr = union(FlatType) {
         };
     }
 
+    /// recursively determines whether this is a data literal
+    pub fn is_literal(self: Self) bool {
+        return switch (self) {
+            .unit, .undef, .int, .stype => true,
+            .list => |data| blk: {
+                for (data.exprs) |expr| {
+                    if (!expr.is_literal()) break :blk false;
+                }
+
+                break :blk true;
+            },
+            else => false,
+        };
+    }
+
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch (self) {
             .unit, .undef, .int => self,
             .stype => |t| Self{ .stype = try t.clone(ally) },
             .symbol => |sym| Self{ .symbol = try sym.clone(ally) },
+            .ptr => |sub| Self{
+                .ptr = try util.place_on(ally, try sub.clone(ally))
+            },
             .list => |list| Self{ .list = try list.clone(ally) },
             .call => |call| Self{ .call = try call.clone(ally) },
             .func => |func| blk: {

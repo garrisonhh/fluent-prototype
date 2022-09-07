@@ -24,10 +24,29 @@ pub const OpCode = enum {
     // unique
     @"const", // load a constant
     copy, // copy a local to another local
-    param, // load a local to a (virtual) parameter slot
-    call, // call a function with loaded parameters
+    // TODO param, // load a local to a (virtual) parameter slot
+    // TODO call, // call a function with loaded parameters
+
+    // ptr ops
+    // TODO create,
+    // TODO destroy,
+    peek, // load
+    poke, // store
+    pinc,
+    padd,
+
+    // list ops
+    alloc, // takes type, size; allocates list
+    // TODO free,
+    index, // takes list, index; gets ptr to index
+    list_ptr, // cast list to ptr
+
+    // types
+    @"fn",
 
     // math
+    iinc,
+    idec,
     iadd,
     isub,
     imul,
@@ -35,52 +54,77 @@ pub const OpCode = enum {
     imod,
 
     /// metadata for how an opcode operates
-    const Flow = union(enum) {
-        /// load constant
+    /// TODO I think this is overengineered
+    const OpMeta = union(enum) {
+        // how to determine output type
+        const Output = union(enum) {
+            // absolute type
+            abs: SType,
+
+            // relative type
+            typeof_a,
+            typeof_b,
+
+            // unique behavior
+            ref, // take ref to a
+            deref, // deref a
+            list_ref,
+            list_deref,
+        };
+
+        // unary load constant
         @"const",
-        /// unary referencing locals
-        unary: struct {
-            a: SType,
-            to: SType,
-        },
-        /// binary referencing locals
-        binary: struct {
-            a: SType,
-            b: SType,
-            to: SType,
-        },
+        // unary referencing locals, stores result type
+        unary: Output,
+        // binary referencing locals, stores result type
+        binary: Output,
+        // no result type
+        unary_effect,
+        binary_effect,
     };
 
-    fn get_flow(self: Self) Flow {
+    fn get_metadata(self: Self) OpMeta {
         const flow_table = comptime blk: {
-            const int_stype = SType{ .int = {} };
-            const undef_stype = SType{ .undef = {} };
+            const Output = OpMeta.Output;
 
-            const unary_undef = Flow{
-                .unary = .{
-                    .a = undef_stype,
-                    .to = undef_stype
-                }
-            };
-            const bin_int_math = Flow{
-                .binary = .{
-                    .a = int_stype,
-                    .b = int_stype,
-                    .to = int_stype
-                },
+            const un_rel = OpMeta{ .unary = Output{ .typeof_a = {} } };
+            const un_int = OpMeta{
+                .unary = Output{ .abs = SType{ .int = {} } }
             };
 
-            break :blk util.EnumTable(Self, Flow).init(.{
-                .{.@"const", Flow{ .@"const" = {} }},
-                .{.copy, unary_undef},
-                .{.param, unary_undef},
-                .{.call, unary_undef},
+            const un_ptr_math = OpMeta{ .unary = Output{ .typeof_a = {} } };
+            const bin_ptr_math = OpMeta{ .binary = Output{ .typeof_a = {} } };
+            const list_ptr = OpMeta{ .unary = Output{ .list_ref = {} } };
 
-                .{.iadd, bin_int_math},
-                .{.isub, bin_int_math},
-                .{.imul, bin_int_math},
-                .{.idiv, bin_int_math},
-                .{.imod, bin_int_math},
+            const bin_type = OpMeta{
+                .binary = Output{ .abs = SType{ .stype = {} } }
+            };
+            const bin_int = OpMeta{
+                .binary = Output{ .abs = SType{ .int = {} } }
+            };
+
+            break :blk util.EnumTable(Self, OpMeta).init(.{
+                .{.@"const", OpMeta{ .@"const" = {} }},
+                .{.copy, un_rel},
+
+                .{.peek, OpMeta{ .unary = Output{ .deref = {} } }},
+                .{.poke, OpMeta{ .binary_effect = {} }},
+                .{.pinc, un_ptr_math},
+                .{.padd, bin_ptr_math},
+
+                .{.alloc, OpMeta{ .binary = Output{ .ref = {} } }},
+                .{.index, OpMeta{ .binary = Output{ .deref = {} } }},
+                .{.list_ptr, list_ptr},
+
+                .{.@"fn", bin_type},
+
+                .{.iinc, un_int},
+                .{.idec, un_int},
+                .{.iadd, bin_int},
+                .{.isub, bin_int},
+                .{.imul, bin_int},
+                .{.idiv, bin_int},
+                .{.imod, bin_int},
             });
         };
 
@@ -103,7 +147,7 @@ pub const Op = struct {
     code: OpCode, // operation to perform
     a: UInt,
     b: UInt = 0,
-    to: UInt, // where result is stored
+    to: UInt = 0, // where result is stored
 
     pub fn format(
         self: Self,
@@ -115,10 +159,10 @@ pub const Op = struct {
         _ = options;
 
         switch (self.code) {
-            .param => try writer.print("param {} = l{}", .{self.to, self.a}),
-            .call => try writer.print("l{} = call f{}", .{self.to, self.a}),
+            // .param => try writer.print("param {} = l{}", .{self.to, self.a}),
+            // .call => try writer.print("l{} = call f{}", .{self.to, self.a}),
             .copy => try writer.print("l{} = copy l{}", .{self.to, self.a}),
-            else => switch (self.code.get_flow()) {
+            else => switch (self.code.get_metadata()) {
                 .@"const" => try writer.print(
                     "l{} = c{}",
                     .{self.to, self.a}
@@ -130,6 +174,14 @@ pub const Op = struct {
                 .binary => try writer.print(
                     "l{} = {s} l{} l{}",
                     .{self.to, @tagName(self.code), self.a, self.b}
+                ),
+                .unary_effect => try writer.print(
+                    "{s} l{}",
+                    .{@tagName(self.code), self.a}
+                ),
+                .binary_effect => try writer.print(
+                    "{s} l{} l{}",
+                    .{@tagName(self.code), self.a, self.b}
                 ),
             }
         }
@@ -297,7 +349,7 @@ const Mason = struct {
 
         // copy ops and adjusting references along the way
         for (block.ops) |op| {
-            const adjusted = switch (op.code.get_flow()) {
+            const adjusted = switch (op.code.get_metadata()) {
                 .@"const" => Op{
                     .code = .@"const",
                     .a = op.a + const_offset,
@@ -313,6 +365,15 @@ const Mason = struct {
                     .a = op.a + local_offset,
                     .b = op.b + local_offset,
                     .to = op.to + local_offset
+                },
+                .unary_effect => Op{
+                    .code = op.code,
+                    .a = op.a + local_offset
+                },
+                .binary_effect => Op{
+                    .code = op.code,
+                    .a = op.a + local_offset,
+                    .b = op.b + local_offset
                 },
             };
 
@@ -346,6 +407,7 @@ const Mason = struct {
 };
 
 /// lowers the operation of loading a constant to a local
+/// *you don't need to copy passed in value*
 fn build_const(mason: *Mason, value: TypedExpr) anyerror!Op.UInt {
     const expects = try value.find_type(mason.ally);
     defer expects.deinit(mason.ally);
@@ -357,25 +419,46 @@ fn build_const(mason: *Mason, value: TypedExpr) anyerror!Op.UInt {
     });
 }
 
+/// helper for build_operator()
+fn operator_result(
+    ally: Allocator,
+    params: []const TypedExpr,
+    output: OpCode.OpMeta.Output
+) anyerror!SType {
+    // TODO this will cause panics until I finish executing type exprs in sema
+
+    return switch (output) {
+        .abs => |t| try t.clone(ally),
+        .typeof_a => try params[0].find_type(ally),
+        .typeof_b => try params[1].find_type(ally),
+        .ref => try SType.init_ptr(ally, params[0].stype),
+        .deref => try params[0].ptr.find_type(ally),
+        .list_ref => try SType.init_list(ally, params[0].stype),
+        .list_deref => try params[0].list.subtype.clone(ally),
+    };
+}
+
 fn build_operator(
     mason: *Mason,
     env: Env,
     operator: OpCode,
     params: []const TypedExpr
 ) anyerror!Op.UInt {
-    return switch (operator.get_flow()) {
+    const ally = mason.ally;
+    return switch (operator.get_metadata()) {
         .@"const" => unreachable,
-        .unary => |flow| try mason.add_op(Op{
+        .unary => |out| try mason.add_op(Op{
             .code = operator,
             .a = try build_expr(mason, env, params[0]),
-            .to = try mason.add_local(try flow.to.clone(mason.ally)),
+            .to = try mason.add_local(try operator_result(ally, params, out))
         }),
-        .binary => |flow| try mason.add_op(Op{
+        .binary => |out| try mason.add_op(Op{
             .code = operator,
             .a = try build_expr(mason, env, params[0]),
             .b = try build_expr(mason, env, params[1]),
-            .to = try mason.add_local(try flow.to.clone(mason.ally)),
+            .to = try mason.add_local(try operator_result(ally, params, out))
         }),
+        .unary_effect, .binary_effect => unreachable,
     };
 }
 
@@ -419,13 +502,63 @@ fn build_call(mason: *Mason, env: Env, expr: TypedExpr) anyerror!Op.UInt {
     }
 }
 
+fn build_list(mason: *Mason, env: Env, expr: TypedExpr) anyerror!Op.UInt {
+    const ally = mason.ally;
+    _ = env;
+
+    const subtype = expr.list.subtype;
+    const exprs = expr.list.exprs;
+
+    // type and size
+    const size = @intCast(i64, exprs.len);
+    const type_ref = try build_const(mason, TypedExpr{ .stype = subtype });
+    const size_ref = try build_const(mason, TypedExpr{ .int = size });
+
+    // list allocation
+    const list_type = try SType.init_list(ally, try subtype.clone(ally));
+    const list_ref = try mason.add_op(Op{
+        .code = .alloc,
+        .a = type_ref,
+        .b = size_ref,
+        .to = try mason.add_local(list_type)
+    });
+
+    // set indices
+    const ptr_type = try SType.init_ptr(ally, try subtype.clone(ally));
+    const ptr_ref = try mason.add_op(Op{
+        .code = .list_ptr,
+        .a = list_ref,
+        .to = try mason.add_local(ptr_type)
+    });
+
+    for (exprs) |child, i| {
+        // increment pointer
+        if (i > 0) {
+            _ = try mason.add_op(Op{
+                .code = .pinc,
+                .a = ptr_ref,
+                .to = ptr_ref
+            });
+        }
+
+        // poke value
+        _ = try mason.add_op(Op{
+            .code = .poke,
+            .a = ptr_ref,
+            .b = try build_expr(mason, env, child)
+        });
+    }
+
+    return list_ref;
+}
+
 /// returns where this expr produces its value (`to`)
 fn build_expr(mason: *Mason, env: Env, expr: TypedExpr) anyerror!Op.UInt {
+    if (expr.is_literal()) return try build_const(mason, expr);
+
     return switch (expr) {
-        .int, .stype =>
-            try build_const(mason, try expr.clone(mason.ally)),
-        .call => try build_call(mason, env, expr),
-        // TODO can/should I cache these in Env bindings?
+        // these are literals
+        .unit, .undef, .int, .stype => unreachable,
         .symbol => |sym| switch (env.get_data(sym.symbol).?) {
             .value => |value| try build_expr(mason, env, value),
             .builtin => std.debug.panic("TODO lower bound builtin", .{}),
@@ -436,6 +569,8 @@ fn build_expr(mason: *Mason, env: Env, expr: TypedExpr) anyerror!Op.UInt {
                 .{@tagName(tag)}
             )
         },
+        .call => try build_call(mason, env, expr),
+        .list => try build_list(mason, env, expr),
         else => std.debug.panic(
             "TODO lower {} TypedExprs",
             .{@as(FlatType, expr)}

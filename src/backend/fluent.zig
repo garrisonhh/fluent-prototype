@@ -24,6 +24,7 @@ pub const Type = enum {
     symbol,
     int,
     stype,
+    ptr,
 
     // structured
     list,
@@ -45,33 +46,35 @@ pub const SType = union(Type) {
     symbol,
     int,
     stype,
+    ptr: *Self,
 
-    list: *SType,
-    call: []SType,
+    list: *Self,
+    call: []Self,
     func: struct {
-        params: []SType,
-        returns: *SType,
+        params: []Self,
+        returns: *Self,
     },
     def,
 
-    pub fn init_list(
-        ally: Allocator,
-        subtype: SType
-    ) Allocator.Error!Self{
+    pub fn init_ptr(ally: Allocator, subtype: Self) Allocator.Error!Self {
+        return Self{ .ptr = try util.place_on(ally, try subtype.clone(ally)) };
+    }
+
+    pub fn init_list(ally: Allocator, subtype: Self) Allocator.Error!Self {
         return Self{ .list = try util.place_on(ally, try subtype.clone(ally)) };
     }
 
     pub fn init_call(
         ally: Allocator,
-        children: []const SType
+        children: []const Self
     ) Allocator.Error!Self{
         return Self{ .call = try clone_slice(ally, children) };
     }
 
     pub fn init_func(
         ally: Allocator,
-        params: []const SType,
-        returns: SType
+        params: []const Self,
+        returns: Self
     ) Allocator.Error!Self{
         return Self{
             .func = .{
@@ -83,9 +86,13 @@ pub const SType = union(Type) {
 
     pub fn deinit(self: Self, ally: Allocator) void {
         switch (self) {
-            .list => |list| {
-                list.deinit(ally);
-                ally.destroy(list);
+            .ptr => |subtype| {
+                subtype.deinit(ally);
+                ally.destroy(subtype);
+            },
+            .list => |subtype| {
+                subtype.deinit(ally);
+                ally.destroy(subtype);
             },
             .call => |call| {
                 for (call) |child| child.deinit(ally);
@@ -113,6 +120,7 @@ pub const SType = union(Type) {
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch (self) {
+            .ptr => |subtype| try Self.init_ptr(ally, subtype.*),
             .list => |subtype| try Self.init_list(ally, subtype.*),
             .call => |call| try Self.init_call(ally, call),
             .func => |func|
@@ -121,7 +129,7 @@ pub const SType = union(Type) {
         };
     }
 
-    /// checks if SType tags match
+    /// checks if Self tags match
     /// helper for `matches` and some other type inference related functions
     fn flat_matches(self: Self, pattern: Self) bool {
         return pattern == .undef or @as(Type, self) == @as(Type, pattern);
@@ -132,6 +140,7 @@ pub const SType = union(Type) {
     pub fn matches(self: Self, pattern: Self) bool {
         return pattern == .undef
             or @as(Type, self) == @as(Type, pattern) and switch (self) {
+            .ptr => |subtype| subtype.matches(pattern.ptr.*),
             .list => |subtype| subtype.matches(pattern.list.*),
             .call => |children| blk: {
                 if (children.len != pattern.call.len) break :blk false;
@@ -159,10 +168,10 @@ pub const SType = union(Type) {
         };
     }
 
-    // TODO format types with PascalCase
     fn format_r(self: Self, writer: anytype) @TypeOf(writer).Error!void {
         switch (self) {
             .stype => try writer.writeAll("Type"),
+            .ptr => |subtype| try writer.print("(Ptr {})", .{subtype}),
             .list => |subtype| try writer.print("(List {})", .{subtype}),
             .call => |call| {
                 try util.write_join("(Call ", " ", ")", call, writer);
@@ -173,6 +182,7 @@ pub const SType = union(Type) {
             },
             else => |tag| {
                 const name = @tagName(tag);
+
                 try writer.writeByte(std.ascii.toUpper(name[0]));
                 try writer.writeAll(name[1..]);
             }
@@ -205,8 +215,12 @@ pub const SExpr = union(Type) {
     int: i64,
     stype: SType,
 
-    list: []Self, // uniform type
-    call: []Self, // varied types
+    ptr: struct {
+        owns: bool,
+        to: *Self,
+    },
+    list: []Self,
+    call: []Self,
     func: struct {
         params: []const []const u8, // an array of symbols for parameters
         body: *Self,
@@ -221,7 +235,8 @@ pub const SExpr = union(Type) {
         Allocator.Error
      || std.fmt.ParseIntError
      || error {
-        BadLambda,
+        BadRef,
+        BadFn,
         BadDef,
     };
 
@@ -237,16 +252,25 @@ pub const SExpr = union(Type) {
     }
 
     /// helper for from_expr()
-    fn from_lambda(ctx: *Context, children: []Expr) TranslationError!Self {
-        if (children.len != 3) return TranslationError.BadLambda;
+    fn from_ref(ctx: *Context, expr: Expr) TranslationError!Self {
+        const children = expr.children.?;
+        if (children.len != 2) return TranslationError.BadRef;
+
+        const to = try util.place_on(ctx.ally, try from_expr(ctx, children[1]));
+        return Self{ .ptr = .{ .owns = true, .to = to } };
+    }
+
+    /// helper for from_expr()
+    fn from_fn(ctx: *Context, children: []Expr) TranslationError!Self {
+        if (children.len != 3) return TranslationError.BadFn;
 
         const param_expr = children[1];
-        if (param_expr.etype != .list) return TranslationError.BadLambda;
+        if (param_expr.etype != .list) return TranslationError.BadFn;
 
         const symbols = param_expr.children.?;
         const params = try ctx.ally.alloc([]const u8, symbols.len);
         for (symbols) |symbol, i| {
-            if (symbol.etype != .ident) return TranslationError.BadLambda;
+            if (symbol.etype != .ident) return TranslationError.BadFn;
 
             params[i] = try ctx.ally.dupe(u8, symbol.slice);
         }
@@ -291,15 +315,18 @@ pub const SExpr = union(Type) {
             .list => Self{ .list = try from_children(ctx, expr.children.?) },
             .call => from_call: {
                 const children = expr.children.?;
-                if (children[0].is_ident("lambda")) {
-                    break :from_call Self.from_lambda(ctx, children);
-                } else if (children[0].is_ident("def")) {
-                    break :from_call Self.from_def(ctx, children);
-                } else {
-                    break :from_call Self{
-                        .call = try from_children(ctx, children)
-                    };
-                }
+                const fn_expr = children[0];
+
+                // builtin functions
+                break :from_call
+                    if (fn_expr.is_ident("ref"))
+                        Self.from_ref(ctx, expr)
+                    else if (fn_expr.is_ident("fn"))
+                        Self.from_fn(ctx, children)
+                    else if (fn_expr.is_ident("def"))
+                        Self.from_def(ctx, children)
+                    else
+                        Self{ .call = try from_children(ctx, children) };
             },
             else => std.debug.panic("TODO: translate {s}\n", .{expr.etype})
         };
@@ -308,6 +335,12 @@ pub const SExpr = union(Type) {
     pub fn deinit(self: Self, ally: Allocator) void {
         switch (self) {
             .symbol => |sym| ally.free(sym),
+            .ptr => |ptr| {
+                if (ptr.owns) {
+                    ptr.to.deinit(ally);
+                    ally.destroy(ptr.to);
+                }
+            },
             .list, .call => |children| {
                 for (children) |child| child.deinit(ally);
                 ally.free(children);
@@ -338,6 +371,8 @@ pub const SExpr = union(Type) {
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch(self) {
+            // TODO is this the right behavior?
+            .ptr => |ptr| Self{ .ptr = .{ .owns = false, .to = ptr.to } },
             .symbol => |sym| Self{ .symbol = try ally.dupe(u8, sym) },
             .list => |list| Self{ .list = try clone_slice(ally, list) },
             .call => |call| Self{ .call = try clone_slice(ally, call) },
@@ -351,10 +386,11 @@ pub const SExpr = union(Type) {
             .symbol => |sym| try writer.writeAll(sym),
             .int => |n| try writer.print("{d}", .{n}),
             .stype => |stype| try writer.print("{}", .{stype}),
+            .ptr => |subtype| try writer.print("(ref {})", .{subtype}),
             .list => |list| try util.write_join("[", " ", "]", list, writer),
             .call => |call| try util.write_join("(", " ", ")", call, writer),
             .func => |func| {
-                try writer.writeAll("(lambda [");
+                try writer.writeAll("(fn [");
                 for (func.params) |param, i| {
                     if (i > 0) try writer.writeAll(" ");
                     try writer.writeAll(param);

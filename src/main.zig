@@ -101,10 +101,14 @@ pub fn main() !void {
     const tests = [_][]const u8{
         "(/ (+ 45 69) 2)",
 
+        "[1 2 3]",
+
         \\ (def a Int (* 34 56))
         \\ (def b Int (+ a 1))
         \\ (+ a b)
         ,
+
+        "(Fn [Int] Int)",
 
         \\ (def my-add
         \\   (Fn [Int Int] Int)
