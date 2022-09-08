@@ -23,6 +23,8 @@ pub const TypingError = error {
 
 pub const Error = TypingError || Allocator.Error;
 
+/// see `from_sexpr()`
+///
 /// maps 1-to-1 to SExpr in terms of structure, but contains extra type
 /// information for a more complete AST
 pub const TypedExpr = union(FlatType) {
@@ -73,6 +75,12 @@ pub const TypedExpr = union(FlatType) {
         }
     };
 
+    pub const Def = struct {
+        symbol: []const u8,
+        anno: *Self,
+        body: *SExpr,
+    };
+
     unit,
     undef,
 
@@ -87,12 +95,7 @@ pub const TypedExpr = union(FlatType) {
         params: []TypedSymbol,
         body: *Self,
     },
-    def: struct {
-        symbol: []const u8,
-        anno: *Self,
-        // anno needs to be executed before the body's type can be inferred
-        body: *SExpr,
-    },
+    def: Def,
 
     pub fn deinit(self: Self, ally: Allocator) void {
         switch (self) {
@@ -133,6 +136,8 @@ pub const TypedExpr = union(FlatType) {
 
     /// bidirectional type checking and inference. returns a TypedExpr tree on the
     /// ally. does not allow for conflicting information.
+    ///
+    /// *call externally through `analyze()`
     /// TODO nicer errors
     fn from_sexpr(
         ally: Allocator,
@@ -428,11 +433,22 @@ pub const TypedExpr = union(FlatType) {
                 try canvas.scribble(pos, sym_color, "{s}", .{sym.symbol});
             },
             .stype => |t| try canvas.scribble(pos, lit_color, "{}", .{t}),
-            .list, .call => |meta| {
+            .ptr => @panic("TODO display TypedExpr ptr"),
+            .list => |list| {
                 try canvas.scribble(pos, kz.Color{}, "{s}", .{@tagName(self)});
 
                 cursor.*[0] += INDENT;
-                for (meta.exprs) |child| {
+                for (list.exprs) |child| {
+                    cursor.*[1] += 1;
+                    try child.display_r(canvas, cursor);
+                }
+                cursor.*[0] -= INDENT;
+            },
+            .call => |call| {
+                try canvas.scribble(pos, kz.Color{}, "call", .{});
+
+                cursor.*[0] += INDENT;
+                for (call.exprs) |child| {
                     cursor.*[1] += 1;
                     try child.display_r(canvas, cursor);
                 }
@@ -474,32 +490,24 @@ pub const TypedExpr = union(FlatType) {
     }
 };
 
-pub const TypedAst = struct {
-    const Self = @This();
-
-    arena: std.heap.ArenaAllocator,
-    root: TypedExpr,
-
-    pub fn deinit(self: Self) void {
-        self.arena.deinit();
-    }
-};
-
-/// does type analysis, allocates resulting ast on an arena for easier memory
-/// management
+/// semantic analysis.
+///
+/// arena compatible
 pub fn analyze(
     ally: Allocator,
     env: Env,
     sexpr: SExpr,
-    expects: SType
-) !TypedAst {
-    var arena = std.heap.ArenaAllocator.init(ally);
-    const ast_ally = arena.allocator();
+    expects: ?SType
+) !TypedExpr {
+    const expr = TypedExpr.from_sexpr(
+        ally,
+        env,
+        sexpr,
+        expects orelse SType{ .undef = {} }
+    );
 
-    const root = try TypedExpr.from_sexpr(ast_ally, env, sexpr, expects);
+    // TODO ensure that defs are only global?
+    // TODO function + type dependency solve?
 
-    return TypedAst{
-        .arena = arena,
-        .root = root,
-    };
+    return expr;
 }

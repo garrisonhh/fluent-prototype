@@ -209,6 +209,10 @@ pub const Block = struct {
         ally.free(self.ops);
     }
 
+    pub fn output_type(self: Self) *const SType {
+        return &self.locals[self.output];
+    }
+
     pub fn display(
         self: Self,
         ally: Allocator
@@ -560,10 +564,12 @@ fn build_expr(mason: *Mason, env: Env, expr: TypedExpr) anyerror!Op.UInt {
         // these are literals
         .unit, .undef, .int, .stype => unreachable,
         .symbol => |sym| switch (env.get_data(sym.symbol).?) {
-            .value => |value| try build_expr(mason, env, value),
-            .builtin => std.debug.panic("TODO lower bound builtin", .{}),
-            // THIS EXPRESSION IS FUCKING BEAUTIFUL.
-            .param => |index| @intCast(Op.UInt, index),
+            .local => |index| @intCast(Op.UInt, index),
+            .constant => |value| try mason.add_op(Op{
+                .code = .@"const",
+                .a = try mason.add_const(value),
+                .to = try mason.add_local(try expr.find_type(mason.ally)),
+            }),
             else => |tag| std.debug.panic(
                 "TODO build_expr for {s}",
                 .{@tagName(tag)}
@@ -588,11 +594,11 @@ fn lower_func(
     const func = fn_expr.func;
 
     // construct param env
-    var sub_env = try Env.init(ally, &env);
+    var sub_env = Env.init(ally, &env);
     defer sub_env.deinit();
 
     for (func.params) |param, i| {
-        try sub_env.define_param(param.symbol, param.stype, i);
+        try sub_env.define_local(param.symbol, param.stype, i);
     }
 
     // do masonry

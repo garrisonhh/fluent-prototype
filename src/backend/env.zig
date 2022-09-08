@@ -1,12 +1,5 @@
-//! Env allows fluent to bind symbols to values. Envs can be stacked recursively
-//! to allow for scopes within scopes.
-//!
-//! Env is used throughout both semantic analysis and ir generation stages.
-//! Fluent program compilation can be thought of as generating an Env filled
-//! with SExpr values representing the ast of the program, and then procedurally
-//! filling them out.
-//!
-//! instances own all bound keys and values.
+//! Env(ironment) is where everything related to a program is stored. it also
+//! acts as a scoping mechanism.
 
 const std = @import("std");
 const kz = @import("kritzler");
@@ -29,9 +22,9 @@ const Self = @This();
 /// they need a value
 pub const Bound = struct {
     pub const Data = union(enum) {
-        param: usize, // numbered function parameters
-        value: TypedExpr,
-        block: Block,
+        local: usize, // function locals
+        constant: SExpr, // raw value
+        block: usize, // index of a block
         builtin: Builtin,
     };
 
@@ -43,12 +36,21 @@ const Map = std.StringHashMap(Bound);
 ally: Allocator,
 map: Map,
 parent: ?*const Self,
+blocks: std.ArrayList(Block), // managed by the uppermost parent
 
-pub fn init(ally: Allocator, parent: ?*const Self) Allocator.Error!Self {
-    return Self{ .ally = ally, .map = Map.init(ally), .parent = parent };
+pub fn init(ally: Allocator, parent: ?*const Self) Self {
+    const blocks = if (parent) |env| env.blocks
+                   else std.ArrayList(Block).init(ally);
+
+    return Self{
+        .ally = ally,
+        .map = Map.init(ally),
+        .parent = parent,
+        .blocks = blocks,
+    };
 }
 
-pub fn deinit(self: *Self) void {
+pub fn deinit(self: Self) void {
     // free symbols and deinit values
     var iter = self.map.iterator();
     while (iter.next()) |entry| {
@@ -58,10 +60,14 @@ pub fn deinit(self: *Self) void {
         bound.stype.deinit(self.ally);
 
         switch (bound.data) {
-            .param, .builtin => {},
-            .value => |value| value.deinit(self.ally),
-            else => @panic("TODO deinit typedexpr and block")
+            .local, .builtin, .block => {},
+            .constant => |value| value.deinit(self.ally),
         }
+    }
+
+    // deinit blocks
+    if (self.parent == null) {
+        self.blocks.deinit();
     }
 }
 
@@ -77,9 +83,10 @@ pub fn define(self: *Self, symbol: []const u8, to: Bound) !void {
     const cloned = Bound{
         .stype = try to.stype.clone(self.ally),
         .data = switch (to.data) {
-            .param, .builtin => to.data,
-            .value => |value| Bound.Data{ .value = try value.clone(self.ally) },
-            .block => @panic("TODO clone block"),
+            .local, .builtin, .block => to.data,
+            .constant => |val| Bound.Data{
+                .constant = try val.clone(self.ally)
+            },
         }
     };
 
@@ -87,7 +94,7 @@ pub fn define(self: *Self, symbol: []const u8, to: Bound) !void {
 }
 
 /// define() helper
-pub fn define_param(
+pub fn define_local(
     self: *Self,
     symbol: []const u8,
     stype: SType,
@@ -95,7 +102,7 @@ pub fn define_param(
 ) !void {
     try self.define(symbol, Bound{
         .stype = stype,
-        .data = .{ .param = index }
+        .data = .{ .local = index }
     });
 }
 
@@ -113,24 +120,24 @@ pub fn define_builtin(
 }
 
 /// define() helper
-pub fn define_value(
+pub fn define_constant(
     self: *Self,
     symbol: []const u8,
     stype: SType,
-    value: TypedExpr
+    constant: SExpr
 ) !void {
     try self.define(symbol, Bound{
         .stype = stype,
-        .data = .{ .value = value }
+        .data = .{ .constant = constant }
     });
 }
 
 /// define() helper
 pub fn define_type(self: *Self, symbol: []const u8, stype: SType) !void {
-    try self.define_value(
+    try self.define_constant(
         symbol,
         SType{ .stype = {} },
-        TypedExpr{ .stype = stype }
+        SExpr{ .stype = stype }
     );
 }
 
@@ -138,6 +145,10 @@ fn get(self: Self, symbol: []const u8) ?Bound {
     return if (self.map.get(symbol)) |bound| bound
            else if (self.parent) |parent| parent.get(symbol)
            else null;
+}
+
+pub fn contains(self: Self, symbol: []const u8) bool {
+    return self.get(symbol) != null;
 }
 
 pub fn get_type(self: Self, symbol: []const u8) ?SType {
@@ -151,21 +162,24 @@ pub fn get_data(self: Self, symbol: []const u8) ?Bound.Data {
 /// performs an operation
 fn execute_op(
     self: Self,
+    ally: Allocator,
     block: Block,
     locals: []SExpr,
     op: ir.Op
 ) Allocator.Error!void {
+    _ = self;
+
     const a = op.a;
     const b = op.b;
 
     // op behavior
     const res: ?SExpr = switch (op.code) {
-        .@"const" => try block.consts[a].clone(self.ally),
-        .copy => try locals[a].clone(self.ally),
+        .@"const" => try block.consts[a].clone(ally),
+        .copy => try locals[a].clone(ally),
 
-        .peek => try locals[a].ptr.to.clone(self.ally),
+        .peek => try locals[a].ptr.to.clone(ally),
         .poke => poke: {
-            locals[a].ptr.to.* = try locals[b].clone(self.ally);
+            locals[a].ptr.to.* = try locals[b].clone(ally);
             break :poke null;
         },
         .pinc => SExpr{
@@ -188,7 +202,7 @@ fn execute_op(
         .alloc => alloc: {
             // TODO stype (locals[a]) is unused here, what do I do with it?
             const size = @intCast(usize, locals[b].int);
-            const list = try self.ally.alloc(SExpr, size);
+            const list = try ally.alloc(SExpr, size);
 
             for (list) |*elem| elem.* = SExpr{ .undef = {} };
 
@@ -205,14 +219,14 @@ fn execute_op(
         },
 
         .@"fn" => @"fn": {
-            const params = try self.ally.alloc(SType, locals[a].list.len);
+            const params = try ally.alloc(SType, locals[a].list.len);
             for (locals[a].list) |expr, i| {
-                params[i] = try expr.stype.clone(self.ally);
+                params[i] = try expr.stype.clone(ally);
             }
 
             const returns = try util.place_on(
-                self.ally,
-                try locals[b].stype.clone(self.ally)
+                ally,
+                try locals[b].stype.clone(ally)
             );
 
             break :@"fn" SExpr{
@@ -233,7 +247,7 @@ fn execute_op(
 
     // cleanup local if replaced
     if (res) |val| {
-        if (locals[op.to] != .undef) locals[op.to].deinit(self.ally);
+        if (locals[op.to] != .undef) locals[op.to].deinit(ally);
         locals[op.to] = val;
     }
 }
@@ -241,35 +255,32 @@ fn execute_op(
 /// execute a block with inputs
 pub fn execute(
     self: Self,
+    ally: Allocator,
     block: Block,
     inputs: []const SExpr
 ) Allocator.Error!SExpr {
     std.debug.assert(inputs.len == block.inputs);
 
-    // TODO remove vvv
-    stdout.print("executing block:\n", .{}) catch {};
-    block.display(self.ally) catch {};
-
     // allocate locals
-    var locals = try self.ally.alloc(SExpr, block.locals.len);
+    var locals = try ally.alloc(SExpr, block.locals.len);
     defer {
-        for (locals) |local| local.deinit(self.ally);
-        self.ally.free(locals);
+        for (locals) |local| local.deinit(ally);
+        ally.free(locals);
     }
 
-    for (inputs) |input, i| locals[i] = try input.clone(self.ally);
+    for (inputs) |input, i| locals[i] = try input.clone(ally);
 
     // run program
     for (block.ops) |op| {
         try @call(
             .{ .modifier = .always_inline },
             self.execute_op,
-            .{block, locals, op}
+            .{ally, block, locals, op}
         );
     }
 
     // return output
-    return try locals[block.output].clone(self.ally);
+    return try locals[block.output].clone(ally);
 }
 
 pub fn display(
@@ -315,16 +326,9 @@ pub fn display(
 
         const stype = &bound.stype;
         const data = switch (bound.data) {
-            .param => |index| try table.print("param {}", .{index}),
-            .value => |value| blk: {
-                // TODO TypedExpr.format eventually. this is so hacky LMAO
-                var arena = std.heap.ArenaAllocator.init(self.ally);
-                defer arena.deinit();
-
-                const sexpr = try value.to_sexpr(arena.allocator());
-                break :blk try table.print("{}", .{sexpr});
-            },
-            .block => |block| try table.print("{}", .{block}),
+            .local => |index| try table.print("local {}", .{index}),
+            .block => |index| try table.print("block {}", .{index}),
+            .constant => |value| try table.print("{}", .{value}),
             .builtin => |builtin| try table.print("{}", .{builtin}),
         };
 

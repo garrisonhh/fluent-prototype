@@ -32,7 +32,7 @@ pub const Builtin = union(enum) {
 };
 
 pub fn create_prelude(ally: Allocator) !Env {
-    var prelude = try Env.init(ally, null);
+    var prelude = Env.init(ally, null);
 
     var arena = std.heap.ArenaAllocator.init(ally);
     defer arena.deinit();

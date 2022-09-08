@@ -120,7 +120,7 @@ pub fn main() !void {
     };
 
     for (tests) |@"test"| {
-        var env = try backend.Env.init(ally, &prelude);
+        var env = backend.Env.init(ally, &prelude);
         defer env.deinit();
 
         var result = try plumbing.evaluate(ally, &env, "test", @"test");

@@ -1,7 +1,8 @@
 //! run contains the high-level implementation of running a fluent program
 //! from its first SExprs to its last
 //!
-//! TODO dependency solving?
+//! TODO type + function dependency solving before execution? hard but necessary
+//! problem
 
 const std = @import("std");
 const fluent = @import("fluent.zig");
@@ -10,70 +11,77 @@ const ir = @import("ir.zig");
 const Env = @import("env.zig");
 
 const Allocator = std.mem.Allocator;
+const TypedExpr = sema.TypedExpr;
 const SType = fluent.SType;
 const SExpr = fluent.SExpr;
 
+// TODO I don't like that I'm manually doing defs here. maybe there is a cleaner
+// design for that?
+
+fn eval_expr(ally: Allocator, env: *Env, expr: TypedExpr) !SExpr {
+    if (expr == .def) {
+        const def = expr.def;
+
+        // eval type
+        const type_name =
+            try std.fmt.allocPrint(ally, "`{s}` type", .{def.symbol});
+        defer ally.free(type_name);
+
+        var type_block = try ir.lower_expr(ally, env.*, type_name, def.anno.*);
+        defer type_block.deinit(ally);
+
+        const type_expr = try env.execute(ally, type_block, &.{});
+        defer type_expr.deinit(ally);
+
+        const stype = type_expr.stype;
+
+        // eval value
+        const body_expr = try sema.analyze(ally, env.*, def.body.*, stype);
+        defer body_expr.deinit(ally);
+
+        const body_name =
+            try std.fmt.allocPrint(ally, "`{s}` body", .{def.symbol});
+        defer ally.free(body_name);
+
+        var block = try ir.lower_expr(ally, env.*, body_name, body_expr);
+        defer block.deinit(ally);
+
+        const value = try env.execute(ally, block, &.{});
+        defer value.deinit(ally);
+
+        // define
+        try env.define_constant(def.symbol, stype, value);
+
+        return SExpr{ .unit = {} };
+    } else {
+        // eval this
+        var block = try ir.lower_expr(ally, env.*, "expr", expr);
+        defer block.deinit(ally);
+
+        try block.display(ally);
+
+        return try env.execute(ally, block, &.{});
+    }
+}
+
+/// returns value allocated on ally
 pub fn run(
     ally: Allocator,
     env: *Env,
     program: []const SExpr
 ) !SExpr {
-    // cyclically lower ast to IR
-    var last_value = SExpr{ .unit = {} };
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const tmp = arena.allocator();
 
+    // lower and execute exprs
+    var final_value = SExpr{ .unit = {} };
     for (program) |sexpr| {
-        const ast = try sema.analyze(ally, env.*, sexpr, SType{ .undef = {} });
-        defer ast.deinit();
+        const expr = try sema.analyze(tmp, env.*, sexpr, null);
 
-        // TODO must traverse TypedExpr and execute all types here
-
-        const expr = ast.root;
-
-        if (expr == .def) {
-            // TODO great starting point for optimizing arena cycles + memory
-            // usage in the backend
-            const def = expr.def;
-
-            // analyze type
-            const anno = def.anno.*;
-
-            const type_block = try ir.lower_expr(ally, env.*, "def type", anno);
-            defer type_block.deinit(ally);
-
-            // execute type
-            const type_expr = try env.execute(type_block, &.{});
-            defer type_expr.deinit(ally);
-
-            const stype = type_expr.stype;
-
-            // analyze body
-            const body_ast = try sema.analyze(ally, env.*, def.body.*, stype);
-            defer body_ast.deinit();
-
-            const body = body_ast.root;
-
-            const body_block = try ir.lower_expr(ally, env.*, "def body", body);
-            defer body_block.deinit(ally);
-
-            // execute body
-            const value = try env.execute(body_block, &.{});
-            defer value.deinit(ally);
-
-            const analyzed = try sema.analyze(ally, env.*, value, stype);
-            defer analyzed.deinit();
-
-            // define in env
-            try env.define_value(def.symbol, stype, analyzed.root);
-        } else {
-            // lower expr
-            const block = try ir.lower_expr(ally, env.*, "expr", expr);
-            defer block.deinit(ally);
-
-            // execute
-            last_value.deinit(ally);
-            last_value = try env.execute(block, &.{});
-        }
+        final_value.deinit(ally);
+        final_value = try eval_expr(ally, env, expr);
     }
 
-    return last_value;
+    return final_value;
 }
