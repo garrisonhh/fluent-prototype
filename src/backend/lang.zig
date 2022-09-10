@@ -50,7 +50,6 @@ fn define_op(
         name,
         stype,
         Block{
-            .name = name,
             .consts = &.{},
             .locals = local_buf[0..num_params + 1],
             .ops = &[_]Op{op},

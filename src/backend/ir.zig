@@ -201,8 +201,6 @@ pub const Op = struct {
 pub const Block = struct {
     const Self = @This();
 
-    name: []const u8,
-
     consts: []const SExpr,
     locals: []const SType,
     ops: []const Op,
@@ -211,7 +209,6 @@ pub const Block = struct {
     output: Op.UInt, // index of the output local
 
     pub fn deinit(self: Self, ally: Allocator) void {
-        ally.free(self.name);
         ally.free(self.consts);
         ally.free(self.locals);
         ally.free(self.ops);
@@ -219,7 +216,6 @@ pub const Block = struct {
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return Self{
-            .name = try ally.dupe(u8, self.name),
             .consts = try SExpr.clone_slice(ally, self.consts),
             .locals = try SType.clone_slice(ally, self.locals),
             .ops = try ally.dupe(Op, self.ops),
@@ -235,66 +231,79 @@ pub const Block = struct {
 
     pub fn display(
         self: Self,
-        ally: Allocator
+        ally: Allocator,
+        comptime label_fmt: []const u8,
+        label_args: anytype
     ) (Allocator.Error || @TypeOf(stdout).Error)!void {
-        try stdout.print(
-            "{}block{} {}{s}{}:\n\n",
-            .{
-                &kz.Color{ .fg = .cyan },
-                &kz.Color{},
-                &kz.Color{ .fg = .red },
-                self.name,
-                &kz.Color{}
-            }
-        );
+        var canvas = kz.Canvas.init(ally);
+        defer canvas.deinit();
+        const tmp = canvas.arena.allocator();
 
-        // lists
-        try kz.fast_list(
-            ally,
-            .{ .title = "consts", .color = kz.Color{ .fg = .magenta } },
-            self.consts,
-            stdout
-        );
+        const label_color = kz.Color{ .fg = .red };
+        const title_color = kz.Color{ .fg = .cyan };
+        const const_color = kz.Color{ .fg = .magenta };
+        const type_color = kz.Color{ .fg = .green };
+        const op_color = kz.Color{};
 
-        try kz.fast_list(
-            ally,
-            .{
-                .title = "locals",
-                .fmt = "<{}>",
-                .color = kz.Color{ .fg = .green }
-            },
-            self.locals,
-            stdout
-        );
+        var pos = kz.Vec2{0, 0};
+        const indent: isize = 2;
+        const up = kz.Vec2{indent, 1};
+        const down = kz.Vec2{-indent, 0};
 
-        try kz.fast_list(
-            ally,
-            .{ .title = "ops" },
-            self.ops,
-            stdout
-        );
+        // title
+        try canvas.scribble(pos, label_color, label_fmt, label_args);
+        pos += up;
 
         // typing
-        try stdout.print(
-            "{}type{} {}",
-            .{&kz.Color{ .fg = .cyan }, &kz.Color{}, &kz.Color{ .fg = .green }}
-        );
-
-        if (self.inputs > 0) {
-            for (self.locals[0..self.inputs]) |local| {
-                try stdout.print("{} ", .{local});
-            }
-
-            try stdout.writeAll("-> ");
+        var tpos = pos;
+        for (self.locals[0..self.inputs]) |stype| {
+            const text = try std.fmt.allocPrint(tmp, "{s} ", .{stype});
+            try canvas.scribble(tpos, type_color, "{s}", .{text});
+            tpos[0] += @intCast(isize, text.len) + 1;
         }
 
-        try stdout.print("{}{}\n", .{self.locals[self.output], &kz.Color{}});
+        if (self.inputs > 0) {
+            try canvas.scribble(tpos, type_color, "-> ", .{});
+            tpos[0] += 3;
+        }
 
-        // output
-        try stdout.print(
-            "{}block returns{} l{}\n\n",
-            .{&kz.Color{ .fg = .cyan }, &kz.Color{}, self.output}
-        );
+        try canvas.scribble(tpos, type_color, "{}", .{self.output_type()});
+        pos[1] += 2;
+
+        // consts
+        try canvas.scribble(pos, title_color, "consts", .{});
+        pos += up;
+
+        for (self.consts) |val| {
+            try canvas.scribble(pos, const_color, "{}", .{val});
+            pos[1] += 1;
+        }
+
+        pos += down;
+
+        // locals
+        try canvas.scribble(pos, title_color, "locals", .{});
+        pos += up;
+
+        for (self.locals) |stype| {
+            try canvas.scribble(pos, type_color, "<{}>", .{stype});
+            pos[1] += 1;
+        }
+
+        pos += down;
+
+        // ops
+        try canvas.scribble(pos, title_color, "ops", .{});
+        pos += up;
+
+        for (self.ops) |op| {
+            try canvas.scribble(pos, op_color, "{}", .{op});
+            pos[1] += 1;
+        }
+
+        pos += down;
+
+        try canvas.flush(stdout);
     }
 };
 
@@ -332,7 +341,6 @@ const Mason = struct {
     /// take all owned memory and turn it into a block
     fn build(self: *Self, output: Op.UInt) Block {
         return Block{
-            .name = self.name,
             .consts = self.consts.toOwnedSlice(),
             .locals = self.locals.toOwnedSlice(),
             .ops = self.ops.toOwnedSlice(),

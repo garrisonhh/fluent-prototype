@@ -77,7 +77,7 @@ fn eval_expr(ally: Allocator, env: *Env, expr: TypedExpr) !SExpr {
         var block = try ir.lower_expr(ally, env, "expr", expr);
         defer block.deinit(ally);
 
-        try block.display(ally);
+        try block.display(ally, "expr", .{});
 
         return try env.execute(ally, block, &.{});
     }

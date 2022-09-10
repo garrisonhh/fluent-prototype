@@ -347,8 +347,7 @@ pub fn execute(
 ) Allocator.Error!SExpr {
     std.debug.assert(inputs.len == block.inputs);
 
-    stdout.print("executing block:\n", .{}) catch {};
-    block.display(ally) catch {};
+    block.display(ally, "executing block", .{}) catch {};
 
     // allocate locals
     var locals = try ally.alloc(SExpr, block.locals.len);
