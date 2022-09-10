@@ -15,10 +15,17 @@ const stdout = std.io.getStdOut().writer();
 
 pub const TypingError = error {
     ExpectationFailed,
-    UnknownSymbol,
     UninferrableType,
+    
+    // symbol lookup
+    UnknownSymbol,
+
+    // calls
     CalledNothing,
     CalledNonFunction,
+    
+    // funcs
+    FuncWithoutExpectation,
 };
 
 pub const Error = TypingError || Allocator.Error;
@@ -27,6 +34,9 @@ pub const Error = TypingError || Allocator.Error;
 ///
 /// maps 1-to-1 to SExpr in terms of structure, but contains extra type
 /// information for a more complete AST
+///
+/// TODO I should just translate ast Exprs straight to this, make SExpr more
+/// of a pure value type
 pub const TypedExpr = union(FlatType) {
     const Self = @This();
 
@@ -75,6 +85,11 @@ pub const TypedExpr = union(FlatType) {
         }
     };
 
+    pub const Func = struct {
+        params: []TypedSymbol,
+        body: *Self,
+    };
+
     pub const Def = struct {
         symbol: []const u8,
         anno: *Self,
@@ -91,10 +106,7 @@ pub const TypedExpr = union(FlatType) {
 
     list: List,
     call: Call,
-    func: struct {
-        params: []TypedSymbol,
-        body: *Self,
-    },
+    func: Func,
     def: Def,
 
     pub fn deinit(self: Self, ally: Allocator) void {
@@ -144,7 +156,7 @@ pub const TypedExpr = union(FlatType) {
         env: Env,
         expr: SExpr,
         expects: SType
-    ) Error!TypedExpr {
+    ) anyerror!TypedExpr {
         // check the flat type
         switch (expr) {
             .symbol, .call => {},
@@ -254,7 +266,7 @@ pub const TypedExpr = union(FlatType) {
                     }
 
                     break :blk Self{
-                        .call = .{
+                        .call = Call{
                             .returns = try func_data.returns.clone(ally),
                             .exprs = exprs,
                         }
@@ -263,8 +275,48 @@ pub const TypedExpr = union(FlatType) {
                     @panic("TODO non-symbol calls");
                 }
             },
+            .func => |func| blk: {
+                if (expects == .undef) {
+                    return TypingError.FuncWithoutExpectation;
+                }
+
+                const exp_func = expects.func;
+                const exp_params = exp_func.params;
+
+                if (exp_params.len != func.params.len) {
+                    return TypingError.ExpectationFailed;
+                }
+
+                // create params
+                const params = try ally.alloc(TypedSymbol, func.params.len);
+                for (func.params) |param_sym, i| {
+                    params[i] = TypedSymbol{
+                        .stype = try exp_params[i].clone(ally),
+                        .symbol = try ally.dupe(u8, param_sym),
+                    };
+                }
+
+                // translate body with defined params
+                var sub_env = Env.init(ally, &env);
+                defer sub_env.deinit();
+
+                for (params) |param, i| {
+                    try sub_env.define_local(param.symbol, param.stype, i);
+                }
+
+                const body = try util.place_on(ally, try Self.from_sexpr(
+                    ally,
+                    sub_env,
+                    func.body.*,
+                    exp_func.returns.*
+                ));
+
+                break :blk Self{
+                    .func = Func{ .params = params, .body = body }
+                };
+            },
             .def => |def| Self{
-                .def = .{
+                .def = Def{
                     .symbol = try ally.dupe(u8, def.symbol),
                     .anno = try util.place_on(ally, try Self.from_sexpr(
                         ally,

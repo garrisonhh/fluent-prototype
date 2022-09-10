@@ -17,6 +17,16 @@ const SExpr = fluent.SExpr;
 
 // TODO I don't like that I'm manually doing defs here. maybe there is a cleaner
 // design for that?
+fn eval_def(env: *Env, symbol: []const u8, stype: SType, value: SExpr) !void {
+    if (env.contains(symbol)) return error.SymbolRedef;
+
+    // functions require more compilation steps
+    if (stype == .func) {
+        @panic("TODO def fn");
+    } else {
+        try env.define_value(symbol, stype, value);
+    }
+}
 
 fn eval_expr(ally: Allocator, env: *Env, expr: TypedExpr) !SExpr {
     if (expr == .def) {
@@ -50,7 +60,7 @@ fn eval_expr(ally: Allocator, env: *Env, expr: TypedExpr) !SExpr {
         defer value.deinit(ally);
 
         // define
-        try env.define_constant(def.symbol, stype, value);
+        try env.define_value(def.symbol, stype, value);
 
         return SExpr{ .unit = {} };
     } else {

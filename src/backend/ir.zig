@@ -24,8 +24,9 @@ pub const OpCode = enum {
     // unique
     @"const", // load a constant
     copy, // copy a local to another local
-    // TODO param, // load a local to a (virtual) parameter slot
-    // TODO call, // call a function with loaded parameters
+    frame, // allocate a stack frame
+    param, // load a local to a frame slot
+    call, // call a function with loaded parameters
 
     // ptr ops
     // TODO create,
@@ -70,6 +71,7 @@ pub const OpCode = enum {
             deref, // deref a
             list_ref,
             list_deref,
+            call,
         };
 
         // unary load constant
@@ -86,6 +88,8 @@ pub const OpCode = enum {
     fn get_metadata(self: Self) OpMeta {
         const flow_table = comptime blk: {
             const Output = OpMeta.Output;
+
+            const call = OpMeta{ .unary = Output{ .call = {} } };
 
             const un_rel = OpMeta{ .unary = Output{ .typeof_a = {} } };
             const un_int = OpMeta{
@@ -106,6 +110,9 @@ pub const OpCode = enum {
             break :blk util.EnumTable(Self, OpMeta).init(.{
                 .{.@"const", OpMeta{ .@"const" = {} }},
                 .{.copy, un_rel},
+                .{.frame, OpMeta{ .unary_effect = {} }},
+                .{.param, OpMeta{ .binary_effect = {} }},
+                .{.call, call},
 
                 .{.peek, OpMeta{ .unary = Output{ .deref = {} } }},
                 .{.poke, OpMeta{ .binary_effect = {} }},
@@ -159,9 +166,10 @@ pub const Op = struct {
         _ = options;
 
         switch (self.code) {
-            // .param => try writer.print("param {} = l{}", .{self.to, self.a}),
-            // .call => try writer.print("l{} = call f{}", .{self.to, self.a}),
             .copy => try writer.print("l{} = copy l{}", .{self.to, self.a}),
+            .frame => try writer.print("frame {}", .{self.a}),
+            .param => try writer.print("param {} = l{}", .{self.a, self.b}),
+            .call => try writer.print("l{} = call b{}", .{self.to, self.a}),
             else => switch (self.code.get_metadata()) {
                 .@"const" => try writer.print(
                     "l{} = c{}",
@@ -209,6 +217,18 @@ pub const Block = struct {
         ally.free(self.ops);
     }
 
+    pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
+        return Self{
+            .name = try ally.dupe(u8, self.name),
+            .consts = try SExpr.clone_slice(ally, self.consts),
+            .locals = try SType.clone_slice(ally, self.locals),
+            .ops = try ally.dupe(Op, self.ops),
+            .inputs = self.inputs,
+            .output = self.output
+        };
+    }
+
+    // returns const ref to output type
     pub fn output_type(self: Self) *const SType {
         return &self.locals[self.output];
     }
@@ -323,6 +343,8 @@ const Mason = struct {
 
     /// inlines a block given a slice of locals to use as parameters.
     /// returns adjusted output ref.
+    ///
+    /// TODO use this again for single-call functions
     fn inline_block(
         self: *Self,
         block: Block,
@@ -411,7 +433,7 @@ const Mason = struct {
 };
 
 /// lowers the operation of loading a constant to a local
-/// *you don't need to copy passed in value*
+/// *you don't need to clone the passed in value*
 fn build_const(mason: *Mason, value: TypedExpr) anyerror!Op.UInt {
     const expects = try value.find_type(mason.ally);
     defer expects.deinit(mason.ally);
@@ -430,6 +452,7 @@ fn operator_result(
     output: OpCode.OpMeta.Output
 ) anyerror!SType {
     // TODO this will cause panics until I finish executing type exprs in sema
+    // (assumes that all exprs that return `stype` are also raw stypes)
 
     return switch (output) {
         .abs => |t| try t.clone(ally),
@@ -439,71 +462,57 @@ fn operator_result(
         .deref => try params[0].ptr.find_type(ally),
         .list_ref => try SType.init_list(ally, params[0].stype),
         .list_deref => try params[0].list.subtype.clone(ally),
+        .call => unreachable
     };
 }
 
-fn build_operator(
+fn build_symbol(
     mason: *Mason,
     env: Env,
-    operator: OpCode,
-    params: []const TypedExpr
+    sym: TypedExpr.TypedSymbol
 ) anyerror!Op.UInt {
-    const ally = mason.ally;
-    return switch (operator.get_metadata()) {
-        .@"const" => unreachable,
-        .unary => |out| try mason.add_op(Op{
-            .code = operator,
-            .a = try build_expr(mason, env, params[0]),
-            .to = try mason.add_local(try operator_result(ally, params, out))
+    return switch (env.get_data(sym.symbol).?) {
+        .local, .block => |index| @intCast(Op.UInt, index),
+        .value => |value| try mason.add_op(Op{
+            .code = .@"const",
+            .a = try mason.add_const(value),
+            .to = try mason.add_local(try sym.stype.clone(mason.ally)),
         }),
-        .binary => |out| try mason.add_op(Op{
-            .code = operator,
-            .a = try build_expr(mason, env, params[0]),
-            .b = try build_expr(mason, env, params[1]),
-            .to = try mason.add_local(try operator_result(ally, params, out))
-        }),
-        .unary_effect, .binary_effect => unreachable,
     };
 }
 
 /// lowers function call
-/// TODO this function demonstrates that passing around expected types between
-/// lowering functions might be useful or even necessary. another solution is
-/// producing a typed AST.
 fn build_call(mason: *Mason, env: Env, expr: TypedExpr) anyerror!Op.UInt {
-    const func = expr.call.exprs[0];
+    // lower call exprs
+    const block_ref = try build_expr(mason, env, expr.call.exprs[0]);
+
     const params = expr.call.exprs[1..];
-
-    if (func == .symbol) {
-        const bound = env.get_data(func.symbol.symbol).?;
-
-        if (bound == .builtin) {
-            // builtin function/operator
-            return switch (bound.builtin) {
-                .opcode => |code| try build_operator(mason, env, code, params),
-            };
-        } else {
-            std.debug.panic("TODO lower non-builtin functions", .{});
-        }
-    } else if (func == .func) {
-        // determine parameter types for inference + lower parameters
-        var param_types = try mason.ally.alloc(SType, params.len);
-        var param_refs = try mason.ally.alloc(Op.UInt, params.len);
-        defer mason.ally.free(param_types);
-        defer mason.ally.free(param_refs);
-
-        for (params) |param, i| {
-            param_types[i] = try param.find_type(mason.ally);
-            param_refs[i] = try build_expr(mason, env, param);
-        }
-
-        // lower lambda with inferred parameter types
-        const lambda = try lower_func(mason.ally, env, "lambda", func);
-
-        return try mason.inline_block(lambda, param_refs);
-    } else {
-        unreachable;
+    const param_refs = try mason.ally.alloc(Op.UInt, params.len);
+    for (params) |param, i| {
+        param_refs[i] = try build_expr(mason, env, param);
     }
+
+    // lower call
+    _ = try mason.add_op(Op{
+        .code = .frame,
+        .a = @intCast(Op.UInt, env.blocks.items[block_ref].locals.len)
+    });
+
+    for (param_refs) |ref, i| {
+        _ = try mason.add_op(Op{
+            .code = .param,
+            .a = @intCast(Op.UInt, i),
+            .b = ref
+        });
+    }
+
+    const block_type = env.blocks.items[block_ref].output_type();
+
+    return try mason.add_op(Op{
+        .code = .call,
+        .a = block_ref,
+        .to = try mason.add_local(try block_type.clone(mason.ally))
+    });
 }
 
 fn build_list(mason: *Mason, env: Env, expr: TypedExpr) anyerror!Op.UInt {
@@ -563,24 +572,13 @@ fn build_expr(mason: *Mason, env: Env, expr: TypedExpr) anyerror!Op.UInt {
     return switch (expr) {
         // these are literals
         .unit, .undef, .int, .stype => unreachable,
-        .symbol => |sym| switch (env.get_data(sym.symbol).?) {
-            .local => |index| @intCast(Op.UInt, index),
-            .constant => |value| try mason.add_op(Op{
-                .code = .@"const",
-                .a = try mason.add_const(value),
-                .to = try mason.add_local(try expr.find_type(mason.ally)),
-            }),
-            else => |tag| std.debug.panic(
-                "TODO build_expr for {s}",
-                .{@tagName(tag)}
-            )
-        },
+        // def is pure syntax
+        .def => unreachable,
+        .symbol => |sym| try build_symbol(mason, env, sym),
         .call => try build_call(mason, env, expr),
         .list => try build_list(mason, env, expr),
-        else => std.debug.panic(
-            "TODO lower {} TypedExprs",
-            .{@as(FlatType, expr)}
-        )
+        .func => @panic("TODO try build_func(mason, env, expr)"),
+        else => std.debug.panic("TODO lower {s} TypedExprs", .{@tagName(expr)})
     };
 }
 

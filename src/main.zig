@@ -137,7 +137,5 @@ pub fn main() !void {
                 result
             }
         );
-
-        try env.display("test env", .{});
     }
 }

@@ -9,27 +9,56 @@ const Env = @import("env.zig");
 const Allocator = std.mem.Allocator;
 const SType = fluent.SType;
 const SExpr = fluent.SExpr;
+const Op = ir.Op;
+const OpCode = ir.OpCode;
+const Block = ir.Block;
 
-/// fluent's builtin functions, used in `eval` and Env mappings
-pub const Builtin = union(enum) {
-    const Self = @This();
+/// helper for builtin operators
+fn define_op(
+    env: *Env,
+    name: []const u8,
+    stype: SType,
+    opcode: OpCode
+) !void {
+    std.debug.assert(stype == .func);
 
-    opcode: ir.OpCode,
+    // figure out locals
+    var num_params = stype.func.params.len;
+    var local_buf: [256]SType = undefined;
+    for (stype.func.params) |param, i| local_buf[i] = param;
 
-    pub fn format(
-        self: Self,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype
-    ) @TypeOf(writer).Error!void {
-        _ = fmt;
-        _ = options;
+    local_buf[num_params] = stype.func.returns.*;
 
-        switch (self) {
-            .opcode => |code| try writer.print("opcode {s}", .{@tagName(code)}),
+    // figure out op
+    const op = switch (num_params) {
+        1 => Op{
+            .code = opcode,
+            .a = 0,
+            .to = 1
+        },
+        2 => Op{
+            .code = opcode,
+            .a = 0,
+            .b = 1,
+            .to = 2
+        },
+        else => unreachable
+    };
+
+    // create block and define
+    try env.define_block(
+        name,
+        stype,
+        Block{
+            .name = name,
+            .consts = &.{},
+            .locals = local_buf[0..num_params + 1],
+            .ops = &[_]Op{op},
+            .inputs = num_params,
+            .output = op.to
         }
-    }
-};
+    );
+}
 
 pub fn create_prelude(ally: Allocator) !Env {
     var prelude = Env.init(ally, null);
@@ -38,29 +67,31 @@ pub fn create_prelude(ally: Allocator) !Env {
     defer arena.deinit();
     const tmp = arena.allocator();
 
+    // consts
+    const type_type = SType{ .stype = {} };
+    const int_type = SType{ .int = {} };
+
     // type primitives
-    try prelude.define_type("Type", SType{ .stype = {} });
-    try prelude.define_type("Int", SType{ .int = {} });
+    try prelude.define_type("Type", type_type);
+    try prelude.define_type("Int", int_type);
 
     {
-        const type_type = SType{ .stype = {} };
         const params = [_]SType{try SType.init_list(tmp, type_type), type_type};
         const fn_type = try SType.init_func(tmp, &params, type_type);
 
-        try prelude.define_builtin("Fn", fn_type, .{ .opcode = .@"fn" });
+        try define_op(&prelude, "Fn", fn_type, .@"fn");
     }
 
     // math
     {
-        const int_type = SType{ .int = {} };
         const params = [_]SType{int_type, int_type};
-        const bin_math = try SType.init_func(tmp, &params, int_type);
+        const bin_imath_type = try SType.init_func(tmp, &params, int_type);
 
-        try prelude.define_builtin("+", bin_math, .{ .opcode = .iadd });
-        try prelude.define_builtin("-", bin_math, .{ .opcode = .isub });
-        try prelude.define_builtin("*", bin_math, .{ .opcode = .imul });
-        try prelude.define_builtin("/", bin_math, .{ .opcode = .idiv });
-        try prelude.define_builtin("%", bin_math, .{ .opcode = .imod });
+        try define_op(&prelude, "+", bin_imath_type, .iadd);
+        try define_op(&prelude, "-", bin_imath_type, .isub);
+        try define_op(&prelude, "*", bin_imath_type, .imul);
+        try define_op(&prelude, "/", bin_imath_type, .idiv);
+        try define_op(&prelude, "%", bin_imath_type, .imod);
     }
 
     try prelude.display("prelude", .{});
