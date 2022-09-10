@@ -37,6 +37,8 @@ map: Map,
 parent: ?*const Self,
 blocks: std.ArrayList(Block), // managed by the uppermost parent
 
+anon_counter: usize = 0,
+
 pub fn init(ally: Allocator, parent: ?*const Self) Self {
     const blocks = if (parent) |env| env.blocks
                    else std.ArrayList(Block).init(ally);
@@ -129,12 +131,13 @@ pub fn define_type(self: *Self, symbol: []const u8, stype: SType) !void {
 }
 
 /// define() helper
+/// returns block index
 pub fn define_block(
     self: *Self,
     symbol: []const u8,
     stype: SType,
     block: Block
-) !void {
+) !usize {
     const index = self.blocks.items.len;
     try self.blocks.append(try block.clone(self.ally));
 
@@ -142,6 +145,8 @@ pub fn define_block(
         .stype = stype,
         .data = .{ .block = index }
     });
+
+    return index;
 }
 
 fn get(self: Self, symbol: []const u8) ?Bound {
@@ -160,6 +165,21 @@ pub fn get_type(self: Self, symbol: []const u8) ?SType {
 
 pub fn get_data(self: Self, symbol: []const u8) ?Bound.Data {
     return if (self.get(symbol)) |bound| bound.data else null;
+}
+
+/// returns a unique anonymous function name
+/// *returned symbol is owned by caller*
+pub fn next_anon_func_name(
+    self: *Self
+) (std.fmt.AllocPrintError || Allocator.Error)![]const u8 {
+    const sym = try std.fmt.allocPrint(
+        self.ally,
+        ".anonymous{}",
+        .{self.anon_counter}
+    );
+    self.anon_counter += 1;
+
+    return sym;
 }
 
 /// state management for execution
@@ -326,6 +346,9 @@ pub fn execute(
     inputs: []const SExpr
 ) Allocator.Error!SExpr {
     std.debug.assert(inputs.len == block.inputs);
+
+    stdout.print("executing block:\n", .{}) catch {};
+    block.display(ally) catch {};
 
     // allocate locals
     var locals = try ally.alloc(SExpr, block.locals.len);

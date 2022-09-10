@@ -46,7 +46,7 @@ fn define_op(
     };
 
     // create block and define
-    try env.define_block(
+    _ = try env.define_block(
         name,
         stype,
         Block{

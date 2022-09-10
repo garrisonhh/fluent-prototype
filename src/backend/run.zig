@@ -37,7 +37,7 @@ fn eval_expr(ally: Allocator, env: *Env, expr: TypedExpr) !SExpr {
             try std.fmt.allocPrint(ally, "`{s}` type", .{def.symbol});
         defer ally.free(type_name);
 
-        var type_block = try ir.lower_expr(ally, env.*, type_name, def.anno.*);
+        var type_block = try ir.lower_expr(ally, env, type_name, def.anno.*);
         defer type_block.deinit(ally);
 
         const type_expr = try env.execute(ally, type_block, &.{});
@@ -53,19 +53,28 @@ fn eval_expr(ally: Allocator, env: *Env, expr: TypedExpr) !SExpr {
             try std.fmt.allocPrint(ally, "`{s}` body", .{def.symbol});
         defer ally.free(body_name);
 
-        var block = try ir.lower_expr(ally, env.*, body_name, body_expr);
-        defer block.deinit(ally);
+        // TODO functions as values
+        if (stype == .func) {
+            // fn
+            var block = try ir.lower_func(ally, env, body_name, body_expr);
+            defer block.deinit(ally);
 
-        const value = try env.execute(ally, block, &.{});
-        defer value.deinit(ally);
+            _ = try env.define_block(def.symbol, stype, block);
+        } else {
+            // value
+            var block = try ir.lower_expr(ally, env, body_name, body_expr);
+            defer block.deinit(ally);
 
-        // define
-        try env.define_value(def.symbol, stype, value);
+            const value = try env.execute(ally, block, &.{});
+            defer value.deinit(ally);
+
+            try env.define_value(def.symbol, stype, value);
+        }
 
         return SExpr{ .unit = {} };
     } else {
         // eval this
-        var block = try ir.lower_expr(ally, env.*, "expr", expr);
+        var block = try ir.lower_expr(ally, env, "expr", expr);
         defer block.deinit(ally);
 
         try block.display(ally);

@@ -468,7 +468,7 @@ fn operator_result(
 
 fn build_symbol(
     mason: *Mason,
-    env: Env,
+    env: *Env,
     sym: TypedExpr.TypedSymbol
 ) anyerror!Op.UInt {
     return switch (env.get_data(sym.symbol).?) {
@@ -482,7 +482,7 @@ fn build_symbol(
 }
 
 /// lowers function call
-fn build_call(mason: *Mason, env: Env, expr: TypedExpr) anyerror!Op.UInt {
+fn build_call(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
     // lower call exprs
     const block_ref = try build_expr(mason, env, expr.call.exprs[0]);
 
@@ -515,7 +515,7 @@ fn build_call(mason: *Mason, env: Env, expr: TypedExpr) anyerror!Op.UInt {
     });
 }
 
-fn build_list(mason: *Mason, env: Env, expr: TypedExpr) anyerror!Op.UInt {
+fn build_list(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
     const ally = mason.ally;
     _ = env;
 
@@ -565,8 +565,27 @@ fn build_list(mason: *Mason, env: Env, expr: TypedExpr) anyerror!Op.UInt {
     return list_ref;
 }
 
+/// returns block ref
+/// TODO unsure how this will work with function as value semantics. I think I
+/// will have to implement transitioning SExprs to only values, and storing
+/// the function index as the data
+fn build_func(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
+    const name = try env.next_anon_func_name();
+    defer mason.ally.free(name);
+
+    const block = try lower_func(mason.ally, env, name, expr);
+    defer block.deinit(mason.ally);
+
+    const stype = try expr.find_type(mason.ally);
+    defer stype.deinit(mason.ally);
+
+    const index = try env.define_block(name, stype, block);
+
+    return @intCast(Op.UInt, index);
+}
+
 /// returns where this expr produces its value (`to`)
-fn build_expr(mason: *Mason, env: Env, expr: TypedExpr) anyerror!Op.UInt {
+fn build_expr(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
     if (expr.is_literal()) return try build_const(mason, expr);
 
     return switch (expr) {
@@ -577,22 +596,23 @@ fn build_expr(mason: *Mason, env: Env, expr: TypedExpr) anyerror!Op.UInt {
         .symbol => |sym| try build_symbol(mason, env, sym),
         .call => try build_call(mason, env, expr),
         .list => try build_list(mason, env, expr),
-        .func => @panic("TODO try build_func(mason, env, expr)"),
+        .func => try build_func(mason, env, expr),
         else => std.debug.panic("TODO lower {s} TypedExprs", .{@tagName(expr)})
     };
 }
 
 /// lowers a function to a block
-fn lower_func(
+/// TODO once functions as values exists, this can be private
+pub fn lower_func(
     ally: Allocator,
-    env: Env,
+    env: *Env,
     name: []const u8,
     fn_expr: TypedExpr
 ) anyerror!Block {
     const func = fn_expr.func;
 
     // construct param env
-    var sub_env = Env.init(ally, &env);
+    var sub_env = Env.init(ally, env);
     defer sub_env.deinit();
 
     for (func.params) |param, i| {
@@ -606,7 +626,7 @@ fn lower_func(
     for (func.params) |param, i| param_types[i] = try param.stype.clone(ally);
 
     var mason = try Mason.init(ally, name, param_types);
-    const output = try build_expr(&mason, sub_env, func.body.*);
+    const output = try build_expr(&mason, &sub_env, func.body.*);
 
     return mason.build(output);
 }
@@ -614,7 +634,7 @@ fn lower_func(
 /// lower a program (file or repl-level) expression to a block
 pub fn lower_expr(
     ally: Allocator,
-    env: Env,
+    env: *Env,
     name: []const u8,
     expr: TypedExpr
 ) !Block {

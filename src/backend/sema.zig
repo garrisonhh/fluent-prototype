@@ -16,14 +16,14 @@ const stdout = std.io.getStdOut().writer();
 pub const TypingError = error {
     ExpectationFailed,
     UninferrableType,
-    
+
     // symbol lookup
     UnknownSymbol,
 
     // calls
     CalledNothing,
     CalledNonFunction,
-    
+
     // funcs
     FuncWithoutExpectation,
 };
@@ -455,6 +455,7 @@ pub const TypedExpr = union(FlatType) {
     ) anyerror!void {
         const INDENT = 4;
         const pos = cursor.*;
+        const tmp = canvas.arena.allocator();
 
         // type
         const type_msg = try canvas.print(
@@ -506,7 +507,29 @@ pub const TypedExpr = union(FlatType) {
                 }
                 cursor.*[0] -= INDENT;
             },
-            .func => @panic("TODO display func"),
+            .func => |func| {
+                // write params to a buffer manually. lmao
+                // TODO retool kritzler now that I've used it a while :)
+                var chars: usize = 1;
+                for (func.params) |sym| chars += sym.symbol.len + 1;
+
+                var buf = try tmp.alloc(u8, chars);
+                var i: usize = 1;
+
+                buf[0] = '[';
+                for (func.params) |sym| {
+                    std.mem.copy(u8, buf[i..], sym.symbol);
+                    buf[i + sym.symbol.len] = ' ';
+                    i += sym.symbol.len + 1;
+                }
+                buf[i - 1] = ']';
+
+                // scribble
+                try canvas.scribble(pos, kz.Color{}, "fn {s}", .{buf});
+                cursor.* += kz.Vec2{INDENT, 1};
+                try func.body.display_r(canvas, cursor);
+                cursor.*[0] -= INDENT;
+            },
             .def => |meta| {
                 try canvas.scribble(pos, kz.Color{}, "def {s}", .{meta.symbol});
 
