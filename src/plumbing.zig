@@ -37,7 +37,7 @@ pub fn comprehend(
     // translate to fluent
     const exprs = try ctx.ally.alloc(TypedExpr, ast.exprs.len);
     for (ast.exprs) |expr, i| {
-        exprs[i] = try TypedExpr.from_expr(ally, env, expr, null);
+        exprs[i] = try backend.analyze(ally, env, expr, null);
     }
 
     return exprs;

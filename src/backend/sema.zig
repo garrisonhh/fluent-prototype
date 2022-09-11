@@ -151,140 +151,6 @@ pub const TypedExpr = union(enum) {
         }
     }
 
-    fn from_list(
-        ally: Allocator,
-        env: Env,
-        children: []AstExpr,
-        expects: ?Pattern
-    ) Error!Self {
-        if (children.len == 0) {
-            // empty list
-            const subtype =
-                if (try Pattern.to_type(ally, expects)) |stype| stype
-                else Type{ .undef = {} };
-
-            return Self{ .list = List{ .subtype = subtype, .exprs = &.{} } };
-        } else {
-            const exprs = try ally.alloc(Self, children.len);
-
-            // type first element to get subtype expectations
-            if (expects) |pat| {
-                if (pat != .list) return SemaError.ExpectationFailed;
-
-                const exp_sub = Pattern.unwrap(pat.list);
-                exprs[0] = try Self.from_expr(ally, env, children[0], exp_sub);
-            } else {
-                exprs[0] = try Self.from_expr(ally, env, children[0], null);
-            }
-
-            const fst_type = try exprs[0].find_type(ally);
-            defer fst_type.deinit(ally);
-
-            // type the rest of the elements
-            const fst_pat = try Pattern.from_type(ally, fst_type);
-            defer fst_pat.deinit(ally);
-
-            for (children[1..]) |child, i| {
-                exprs[i + 1] = try Self.from_expr(ally, env, child, fst_pat);
-            }
-
-            return Self{
-                .list = List{
-                    .subtype = try exprs[0].find_type(ally),
-                    .exprs = exprs
-                }
-            };
-        }
-    }
-
-    fn from_call(
-        ally: Allocator,
-        env: Env,
-        children: []AstExpr,
-        expects: ?Pattern
-    ) Error!Self {
-        _ = expects; // TODO
-
-        const exprs = try ally.alloc(Self, children.len);
-
-        // fn
-        exprs[0] = try Self.from_expr(ally, env, children[0], null);
-
-        const fn_type = try exprs[0].find_type(ally);
-        defer fn_type.deinit(ally);
-
-        // params
-        for (children[1..]) |child, i| {
-            const ptype = fn_type.func.params[i];
-            const ppat = try Pattern.from_type(ally, ptype);
-            defer ppat.deinit(ally);
-
-            exprs[i + 1] = try Self.from_expr(ally, env, child, ppat);
-        }
-
-        const returns = try fn_type.func.returns.clone(ally);
-
-        return Self{
-            .call = Call{
-                .returns = returns,
-                .exprs = exprs
-            }
-        };
-    }
-
-    /// bidirectional type checking and inference on the raw AST. returns a
-    /// TypedExpr tree on the ally. errors on any conflicting information.
-    ///
-    /// *call externally through `analyze()`
-    /// TODO nicer errors
-    pub fn from_expr(
-        ally: Allocator,
-        env: Env,
-        ast_expr: AstExpr,
-        expects: ?Pattern
-    ) Error!Self {
-        _ = env;
-        _ = expects;
-
-        // translate
-        const expr = switch (ast_expr.etype) {
-            .unit => Self{ .unit = {} },
-            .float => @panic("TODO floats"),
-            .string => @panic("TODO strings"),
-            .symbol => symbol: {
-                const symbol = ast_expr.slice;
-                const stype = env.get_type(symbol) orelse {
-                    return SemaError.UnknownSymbol;
-                };
-
-                break :symbol Self{
-                    .symbol = TypedSymbol{
-                        .stype = try stype.clone(ally),
-                        .symbol = try ally.dupe(u8, symbol)
-                    }
-                };
-            },
-            .int => Self{
-                .int = std.fmt.parseInt(i64, ast_expr.slice, 0) catch {
-                    return SemaError.BadInt;
-                }
-             },
-            .list => try from_list(ally, env, ast_expr.children.?, expects),
-            .call => try from_call(ally, env, ast_expr.children.?, expects),
-            .file => @panic("I use the `file` etype?")
-        };
-
-        // final type check
-        const stype = try expr.find_type(ally);
-        defer stype.deinit(ally);
-
-        if (!stype.matches(expects)) {
-            return SemaError.ExpectationFailed;
-        }
-
-        return expr;
-    }
-
     /// determines the type of this expr when executed
     ///
     /// *I want this to stay incredibly trivial*
@@ -405,7 +271,7 @@ pub const TypedExpr = union(enum) {
 
         try canvas.scribble(
             pos + kz.Vec2{-@intCast(isize, type_msg.len) - 1, 0},
-            kz.Color{ .fg = .green, .fmt = .bold },
+            kz.Color{ .fmt = .bold },
             "{s}",
             .{type_msg}
         );
@@ -426,7 +292,6 @@ pub const TypedExpr = union(enum) {
                 try canvas.scribble(pos, sym_color, "{s}", .{sym.symbol});
             },
             .stype => |t| try canvas.scribble(pos, lit_color, "{}", .{t}),
-            .ptr => @panic("TODO display TypedExpr ptr"),
             .list => |list| {
                 try canvas.scribble(pos, kz.Color{}, "{s}", .{@tagName(self)});
 
@@ -505,6 +370,134 @@ pub const TypedExpr = union(enum) {
     }
 };
 
+fn translate_list(
+    ally: Allocator,
+    env: Env,
+    children: []AstExpr,
+    expects: ?Pattern
+) Error!TypedExpr {
+    if (children.len == 0) {
+        // empty list
+        const subtype =
+            if (try Pattern.to_type(ally, expects)) |stype| stype
+            else Type{ .undef = {} };
+
+        return TypedExpr{
+            .list = TypedExpr.List{ .subtype = subtype, .exprs = &.{} }
+        };
+    } else {
+        const exprs = try ally.alloc(TypedExpr, children.len);
+
+        // type first element to get subtype expectations
+        if (expects) |pat| {
+            if (pat != .list) return SemaError.ExpectationFailed;
+
+            const exp_sub = Pattern.unwrap(pat.list);
+            exprs[0] = try translate(ally, env, children[0], exp_sub);
+        } else {
+            exprs[0] = try translate(ally, env, children[0], null);
+        }
+
+        const fst_type = try exprs[0].find_type(ally);
+        defer fst_type.deinit(ally);
+
+        // type the rest of the elements
+        const fst_pat = try Pattern.from_type(ally, fst_type);
+        defer fst_pat.deinit(ally);
+
+        for (children[1..]) |child, i| {
+            exprs[i + 1] = try translate(ally, env, child, fst_pat);
+        }
+
+        return TypedExpr{
+            .list = TypedExpr.List{
+                .subtype = try exprs[0].find_type(ally),
+                .exprs = exprs
+            }
+        };
+    }
+}
+
+fn translate_call(
+    ally: Allocator,
+    env: Env,
+    children: []AstExpr,
+    expects: ?Pattern
+) Error!TypedExpr {
+    _ = expects; // TODO
+
+    const exprs = try ally.alloc(TypedExpr, children.len);
+
+    // fn
+    exprs[0] = try translate(ally, env, children[0], null);
+
+    const fn_type = try exprs[0].find_type(ally);
+    defer fn_type.deinit(ally);
+
+    // params
+    for (children[1..]) |child, i| {
+        const ptype = fn_type.func.params[i];
+        const ppat = try Pattern.from_type(ally, ptype);
+        defer ppat.deinit(ally);
+
+        exprs[i + 1] = try translate(ally, env, child, ppat);
+    }
+
+    const returns = try fn_type.func.returns.clone(ally);
+
+    return TypedExpr{
+        .call = TypedExpr.Call{
+            .returns = returns,
+            .exprs = exprs
+        }
+    };
+}
+
+fn translate(
+    ally: Allocator,
+    env: Env,
+    ast_expr: AstExpr,
+    expects: ?Pattern
+) Error!TypedExpr {
+    // initial translation
+    const expr = switch (ast_expr.etype) {
+        .unit => TypedExpr{ .unit = {} },
+        .float => @panic("TODO floats"),
+        .string => @panic("TODO strings"),
+        .symbol => symbol: {
+            const symbol = ast_expr.slice;
+            const stype = env.get_type(symbol) orelse {
+                return SemaError.UnknownSymbol;
+            };
+
+            break :symbol TypedExpr{
+                .symbol = TypedExpr.TypedSymbol{
+                    .stype = try stype.clone(ally),
+                    .symbol = try ally.dupe(u8, symbol)
+                }
+            };
+        },
+        .int => TypedExpr{
+            .int = std.fmt.parseInt(i64, ast_expr.slice, 0) catch {
+                return SemaError.BadInt;
+            }
+         },
+        .list => try translate_list(ally, env, ast_expr.children.?, expects),
+        .call => try translate_call(ally, env, ast_expr.children.?, expects),
+        .file => @panic("I use the `file` etype?")
+    };
+
+    // final type check
+    const stype = try expr.find_type(ally);
+    defer stype.deinit(ally);
+
+    if (!stype.matches(expects)) {
+        return SemaError.ExpectationFailed;
+    }
+
+    return expr;
+}
+
 /// semantic analysis.
 ///
 /// arena compatible
@@ -514,12 +507,10 @@ pub fn analyze(
     ast_expr: AstExpr,
     expects: ?Type
 ) !TypedExpr {
-    const expr = TypedExpr.from_expr(
-        ally,
-        env,
-        ast_expr,
-        expects orelse Type{ .undef = {} }
-    );
+    const pat = if (expects) |stype| try Pattern.from_type(ally, stype)
+                else null;
+
+    const expr = try translate(ally, env, ast_expr, pat);
 
     try expr.display(ally, "analyzed", .{});
 
