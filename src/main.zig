@@ -103,17 +103,17 @@ pub fn main() !void {
 
         "[1 2 3]",
 
-        \\ (def a Int (* 34 56))
-        \\ (def b Int (+ a 1))
+        "(Fn [Int] Int)",
+
+        \\ (def a Int
+        \\   (* 34 56))
+        \\ (def b Int
+        \\   (+ a 1))
         \\ (+ a b)
         ,
 
-        "(Fn [Int] Int)",
-
-        \\ (def my-add
-        \\   (Fn [Int Int] Int)
-        \\   (fn [a b]
-        \\     (+ a b)))
+        \\ (def my-add (Fn [Int Int] Int)
+        \\   (fn [a b] (+ a b)))
         \\
         \\ (my-add 45 56)
         ,
@@ -123,7 +123,13 @@ pub fn main() !void {
         var env = backend.Env.init(ally, &prelude);
         defer env.deinit();
 
-        var result = try plumbing.evaluate(ally, &env, "test", @"test");
+        var result = plumbing.evaluate(ally, &env, "test", @"test") catch |e| {
+            try stdout.print(
+                "{}test failed with {}{}:\n{s}\n\n",
+                .{&kz.Color{ .fg = .red }, e, &kz.Color{}, @"test"}
+            );
+            continue;
+        };
         defer result.deinit(ally);
 
         try stdout.print(
