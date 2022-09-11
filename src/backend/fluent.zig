@@ -120,14 +120,12 @@ pub const Type = union(FlatType) {
             .list => |of| of.matches(Pattern.unwrap(pat.list)),
             .func => |func| func: {
                 // match params
-                if (pat.func.params) |param_pats| {
-                    if (func.params.len != param_pats.len) {
-                        break :func false;
-                    }
+                if (func.params.len != pat.func.params.len) {
+                    break :func false;
+                }
 
-                    for (func.params) |param, i| {
-                        if (!param.matches(param_pats[i])) break :func false;
-                    }
+                for (func.params) |param, i| {
+                    if (!param.matches(pat.func.params[i])) break :func false;
                 }
 
                 // match returns
@@ -182,7 +180,7 @@ pub const Pattern = union(FlatType) {
 
     list: ?*Self,
     func: struct {
-        params: ?[]Self,
+        params: []Self,
         returns: ?*Self,
     },
 
@@ -196,12 +194,12 @@ pub const Pattern = union(FlatType) {
 
     pub fn init_func(
         ally: Allocator,
-        params: ?[]const Self,
+        params: []const Self,
         returns: ?Self
     ) Allocator.Error!Self {
         return Self{
             .func = .{
-                .params = try clone_opt_slice(ally, params),
+                .params = try clone_slice(ally, params),
                 .returns = try clone_opt(ally, returns),
             }
         };
@@ -212,9 +210,7 @@ pub const Pattern = union(FlatType) {
             .undef, .unit, .int, .stype => {},
             .ptr, .list => |of| if (of) |pat| pat.deinit(ally),
             .func => |func| {
-                if (func.params) |params| {
-                    for (params) |param| param.deinit(ally);
-                }
+                for (func.params) |param| param.deinit(ally);
                 if (func.returns) |returns| returns.deinit(ally);
             }
         }
@@ -250,6 +246,48 @@ pub const Pattern = union(FlatType) {
         };
     }
 
+    /// if pattern is incomplete, returns null
+    pub fn to_type(ally: Allocator, opt_pat: ?Pattern) Allocator.Error!?Type {
+        const pat = opt_pat orelse return null;
+
+        return switch (pat) {
+            .undef => Type{ .undef = {} },
+            .unit => Type{ .unit = {} },
+            .int => Type{ .int = {} },
+            .stype => Type{ .stype = {} },
+            .ptr => |to| ptr: {
+                const sub = (try Pattern.to_type(ally, Pattern.unwrap(to)))
+                            orelse return null;
+                break :ptr Type{ .ptr = try util.place_on(ally, sub) };
+            },
+            .list => |of| list: {
+                const sub = (try Pattern.to_type(ally, Pattern.unwrap(of)))
+                            orelse return null;
+                break :list Type{ .list = try util.place_on(ally, sub) };
+            },
+            .func => |func| func: {
+                const returns = (try Pattern.to_type(
+                    ally,
+                    Pattern.unwrap(func.returns)
+                )) orelse return null;
+
+                const params = try ally.alloc(Type, func.params.len);
+                for (func.params) |param_pat, i| {
+                    params[i] = (try Pattern.to_type(ally, param_pat)) orelse {
+                        return null;
+                    };
+                }
+
+                break :func Type{
+                    .func = .{
+                        .params = params,
+                        .returns = try util.place_on(ally, returns)
+                    }
+                };
+            },
+        };
+    }
+
     pub fn unwrap(opt_ptr: ?*Self) ?Self {
         return if (opt_ptr) |ptr| ptr.* else null;
     }
@@ -257,7 +295,7 @@ pub const Pattern = union(FlatType) {
     pub fn clone_opt(
         ally: Allocator,
         opt: ?Self
-    ) Allocator.Error!*?Self {
+    ) Allocator.Error!?*Self {
         if (opt) |pat| {
             return try util.place_on(ally, try pat.clone(ally));
         } else {
@@ -271,17 +309,6 @@ pub const Pattern = union(FlatType) {
     ) Allocator.Error!?*Self {
         if (opt) |pat| {
             return try util.place_on(ally, pat.clone(ally));
-        } else {
-            return null;
-        }
-    }
-
-    pub fn clone_opt_slice(
-        ally: Allocator,
-        opt: ?[]const Self
-    ) Allocator.Error!?[]Self {
-        if (opt) |pat| {
-            return try util.place_on(ally, try pat.clone_slice(ally));
         } else {
             return null;
         }
@@ -304,7 +331,7 @@ pub const Pattern = union(FlatType) {
             .list => |list| Self{ .list = try clone_opt_ptr(ally, list) },
             .func => |func| Self{
                 .func = .{
-                    .params = try clone_opt_slice(ally, func.params),
+                    .params = try clone_slice(ally, func.params),
                     .returns = try clone_opt_ptr(ally, func.returns)
                 }
             },

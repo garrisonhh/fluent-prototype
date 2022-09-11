@@ -16,9 +16,12 @@ const Value = fluent.Value;
 const AstExpr = frontend.AstExpr;
 const stdout = std.io.getStdOut().writer();
 
-pub const TypingError = error {
+pub const SemaError = error {
     ExpectationFailed,
     UninferrableType,
+
+    // parsing
+    BadInt,
 
     // symbol lookup
     UnknownSymbol,
@@ -31,7 +34,7 @@ pub const TypingError = error {
     FuncWithoutExpectation,
 };
 
-pub const Error = TypingError || Allocator.Error;
+pub const Error = SemaError || Allocator.Error;
 
 /// see `from_sexpr()`
 ///
@@ -148,6 +151,87 @@ pub const TypedExpr = union(enum) {
         }
     }
 
+    fn from_list(
+        ally: Allocator,
+        env: Env,
+        children: []AstExpr,
+        expects: ?Pattern
+    ) Error!Self {
+        if (children.len == 0) {
+            // empty list
+            const subtype =
+                if (try Pattern.to_type(ally, expects)) |stype| stype
+                else Type{ .undef = {} };
+
+            return Self{ .list = List{ .subtype = subtype, .exprs = &.{} } };
+        } else {
+            const exprs = try ally.alloc(Self, children.len);
+
+            // type first element to get subtype expectations
+            if (expects) |pat| {
+                if (pat != .list) return SemaError.ExpectationFailed;
+
+                const exp_sub = Pattern.unwrap(pat.list);
+                exprs[0] = try Self.from_expr(ally, env, children[0], exp_sub);
+            } else {
+                exprs[0] = try Self.from_expr(ally, env, children[0], null);
+            }
+
+            const fst_type = try exprs[0].find_type(ally);
+            defer fst_type.deinit(ally);
+
+            // type the rest of the elements
+            const fst_pat = try Pattern.from_type(ally, fst_type);
+            defer fst_pat.deinit(ally);
+
+            for (children[1..]) |child, i| {
+                exprs[i + 1] = try Self.from_expr(ally, env, child, fst_pat);
+            }
+
+            return Self{
+                .list = List{
+                    .subtype = try exprs[0].find_type(ally),
+                    .exprs = exprs
+                }
+            };
+        }
+    }
+
+    fn from_call(
+        ally: Allocator,
+        env: Env,
+        children: []AstExpr,
+        expects: ?Pattern
+    ) Error!Self {
+        _ = expects; // TODO
+
+        const exprs = try ally.alloc(Self, children.len);
+
+        // fn
+        exprs[0] = try Self.from_expr(ally, env, children[0], null);
+
+        const fn_type = try exprs[0].find_type(ally);
+        defer fn_type.deinit(ally);
+
+        // params
+        for (children[1..]) |child, i| {
+            const ptype = fn_type.func.params[i];
+            const ppat = try Pattern.from_type(ally, ptype);
+            defer ppat.deinit(ally);
+
+            exprs[i + 1] = try Self.from_expr(ally, env, child, ppat);
+        }
+
+        const returns = try fn_type.func.returns.clone(ally);
+
+        return Self{
+            .call = Call{
+                .returns = returns,
+                .exprs = exprs
+            }
+        };
+    }
+
     /// bidirectional type checking and inference on the raw AST. returns a
     /// TypedExpr tree on the ally. errors on any conflicting information.
     ///
@@ -158,16 +242,19 @@ pub const TypedExpr = union(enum) {
         env: Env,
         ast_expr: AstExpr,
         expects: ?Pattern
-    ) anyerror!Self {
+    ) Error!Self {
         _ = env;
         _ = expects;
 
+        // translate
         const expr = switch (ast_expr.etype) {
             .unit => Self{ .unit = {} },
+            .float => @panic("TODO floats"),
+            .string => @panic("TODO strings"),
             .symbol => symbol: {
                 const symbol = ast_expr.slice;
                 const stype = env.get_type(symbol) orelse {
-                    return TypingError.UnknownSymbol;
+                    return SemaError.UnknownSymbol;
                 };
 
                 break :symbol Self{
@@ -177,41 +264,14 @@ pub const TypedExpr = union(enum) {
                     }
                 };
             },
-            .int => Self{ .int = try std.fmt.parseInt(i64, ast_expr.slice, 0) },
-            .call => call: {
-                // TODO expectations here
-
-                const children = ast_expr.children.?;
-                const exprs = try ally.alloc(Self, children.len);
-
-                // fn
-                exprs[0] = try Self.from_expr(ally, env, children[0], null);
-
-                const fn_type = try exprs[0].find_type(ally);
-                defer fn_type.deinit(ally);
-
-                // params
-                for (children[1..]) |child, i| {
-                    const ptype = fn_type.func.params[i];
-                    const ppat = try Pattern.from_type(ally, ptype);
-                    defer ppat.deinit(ally);
-
-                    exprs[i + 1] = try Self.from_expr(ally, env, child, ppat);
+            .int => Self{
+                .int = std.fmt.parseInt(i64, ast_expr.slice, 0) catch {
+                    return SemaError.BadInt;
                 }
-
-                const returns = try fn_type.func.returns.clone(ally);
-
-                break :call Self{
-                    .call = Call{
-                        .returns = returns,
-                        .exprs = exprs
-                    }
-                };
-            },
-            else => std.debug.panic(
-                "TODO from_expr of {s}",
-                .{@tagName(ast_expr.etype)}
-            )
+             },
+            .list => try from_list(ally, env, ast_expr.children.?, expects),
+            .call => try from_call(ally, env, ast_expr.children.?, expects),
+            .file => @panic("I use the `file` etype?")
         };
 
         // final type check
@@ -219,7 +279,7 @@ pub const TypedExpr = union(enum) {
         defer stype.deinit(ally);
 
         if (!stype.matches(expects)) {
-            return TypingError.ExpectationFailed;
+            return SemaError.ExpectationFailed;
         }
 
         return expr;
