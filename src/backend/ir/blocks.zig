@@ -5,8 +5,8 @@ const fluent = @import("../fluent.zig");
 const ops = @import("ops.zig");
 
 const Allocator = std.mem.Allocator;
-const SType = fluent.SType;
-const SExpr = fluent.SExpr;
+const SType = fluent.Type;
+const SExpr = fluent.Value;
 const Op = ops.Op;
 const OpCode = ops.OpCode;
 const stdout = std.io.getStdOut().writer();

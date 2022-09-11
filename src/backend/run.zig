@@ -12,8 +12,8 @@ const Env = @import("env.zig");
 
 const Allocator = std.mem.Allocator;
 const TypedExpr = sema.TypedExpr;
-const SType = fluent.SType;
-const SExpr = fluent.SExpr;
+const SType = fluent.Type;
+const SExpr = fluent.Value;
 
 // TODO I don't like that I'm manually doing defs here. maybe there is a cleaner
 // design for that?
@@ -30,48 +30,50 @@ fn eval_def(env: *Env, symbol: []const u8, stype: SType, value: SExpr) !void {
 
 fn eval_expr(ally: Allocator, env: *Env, expr: TypedExpr) !SExpr {
     if (expr == .def) {
-        const def = expr.def;
+        @panic("TODO");
+
+        // const def = expr.def;
 
         // eval type
-        const type_name =
-            try std.fmt.allocPrint(ally, "`{s}` type", .{def.symbol});
-        defer ally.free(type_name);
+        // const type_name =
+            // try std.fmt.allocPrint(ally, "`{s}` type", .{def.symbol});
+        // defer ally.free(type_name);
 
-        var type_block = try ir.lower_expr(ally, env, type_name, def.anno.*);
-        defer type_block.deinit(ally);
+        // var type_block = try ir.lower_expr(ally, env, type_name, def.anno.*);
+        // defer type_block.deinit(ally);
 
-        const type_expr = try env.execute(ally, type_block, &.{});
-        defer type_expr.deinit(ally);
+        // const type_expr = try env.execute(ally, type_block, &.{});
+        // defer type_expr.deinit(ally);
 
-        const stype = type_expr.stype;
+        // const stype = type_expr.stype;
 
         // eval value
-        const body_expr = try sema.analyze(ally, env.*, def.body.*, stype);
-        defer body_expr.deinit(ally);
+        // const body_expr = try sema.analyze(ally, env.*, def.body.*, stype);
+        // defer body_expr.deinit(ally);
 
-        const body_name =
-            try std.fmt.allocPrint(ally, "`{s}` body", .{def.symbol});
-        defer ally.free(body_name);
+        // const body_name =
+            // try std.fmt.allocPrint(ally, "`{s}` body", .{def.symbol});
+        // defer ally.free(body_name);
 
         // TODO functions as values
-        if (stype == .func) {
+        // if (stype == .func) {
             // fn
-            var block = try ir.lower_func(ally, env, body_name, body_expr);
-            defer block.deinit(ally);
+            // var block = try ir.lower_func(ally, env, body_name, body_expr);
+            // defer block.deinit(ally);
 
-            _ = try env.define_block(def.symbol, stype, block);
-        } else {
+            // _ = try env.define_block(def.symbol, stype, block);
+        // } else {
             // value
-            var block = try ir.lower_expr(ally, env, body_name, body_expr);
-            defer block.deinit(ally);
+            // var block = try ir.lower_expr(ally, env, body_name, body_expr);
+            // defer block.deinit(ally);
 
-            const value = try env.execute(ally, block, &.{});
-            defer value.deinit(ally);
+            // const value = try env.execute(ally, block, &.{});
+            // defer value.deinit(ally);
 
-            try env.define_value(def.symbol, stype, value);
-        }
+            // try env.define_value(def.symbol, stype, value);
+        // }
 
-        return SExpr{ .unit = {} };
+        // return SExpr{ .unit = {} };
     } else {
         // eval this
         var block = try ir.lower_expr(ally, env, "expr", expr);
@@ -85,17 +87,11 @@ fn eval_expr(ally: Allocator, env: *Env, expr: TypedExpr) !SExpr {
 pub fn run(
     ally: Allocator,
     env: *Env,
-    program: []const SExpr
+    program: []const TypedExpr
 ) !SExpr {
-    var arena = std.heap.ArenaAllocator.init(ally);
-    defer arena.deinit();
-    const tmp = arena.allocator();
-
     // lower and execute exprs
     var final_value = SExpr{ .unit = {} };
-    for (program) |sexpr| {
-        const expr = try sema.analyze(tmp, env.*, sexpr, null);
-
+    for (program) |expr| {
         final_value.deinit(ally);
         final_value = try eval_expr(ally, env, expr);
     }

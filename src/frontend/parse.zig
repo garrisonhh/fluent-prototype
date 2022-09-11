@@ -66,7 +66,7 @@ fn generate_ast(
                 try ast_ally.dupe(Expr, children.items)
             );
         },
-        .ident => Expr.init_slice(.ident, token.view),
+        .ident => Expr.init_slice(.symbol, token.view),
         .integer => Expr.init_slice(.int, token.view),
         .float => Expr.init_slice(.float, token.view),
         .string => Expr.init_slice(.string, token.view),

@@ -5,12 +5,15 @@ const std = @import("std");
 const kz = @import("kritzler");
 const util = @import("../util/util.zig");
 const fluent = @import("fluent.zig");
+const frontend = @import("../frontend.zig");
 const Env = @import("env.zig");
 
 const Allocator = std.mem.Allocator;
-const FlatType = fluent.Type;
-const SType = fluent.SType;
-const SExpr = fluent.SExpr;
+const FlatType = fluent.FlatType;
+const Type = fluent.Type;
+const Pattern = fluent.Pattern;
+const Value = fluent.Value;
+const AstExpr = frontend.AstExpr;
 const stdout = std.io.getStdOut().writer();
 
 pub const TypingError = error {
@@ -37,11 +40,11 @@ pub const Error = TypingError || Allocator.Error;
 ///
 /// TODO I should just translate ast Exprs straight to this, make SExpr more
 /// of a pure value type
-pub const TypedExpr = union(FlatType) {
+pub const TypedExpr = union(enum) {
     const Self = @This();
 
     pub const TypedSymbol = struct {
-        stype: SType,
+        stype: Type,
         symbol: []const u8,
 
         fn clone(
@@ -56,7 +59,7 @@ pub const TypedExpr = union(FlatType) {
     };
 
     pub const List = struct {
-        subtype: SType,
+        subtype: Type,
         exprs: []Self,
 
         fn clone(self: List, ally: Allocator) Allocator.Error!List {
@@ -71,7 +74,7 @@ pub const TypedExpr = union(FlatType) {
     };
 
     pub const Call = struct {
-        returns: SType,
+        returns: Type,
         exprs: []Self,
 
         fn clone(self: Call, ally: Allocator) Allocator.Error!Call {
@@ -93,16 +96,15 @@ pub const TypedExpr = union(FlatType) {
     pub const Def = struct {
         symbol: []const u8,
         anno: *Self,
-        body: *SExpr,
+        body: *Value,
     };
 
-    unit,
     undef,
 
+    unit,
     symbol: TypedSymbol,
     int: i64,
-    stype: SType,
-    ptr: *Self,
+    stype: Type,
 
     list: List,
     call: Call,
@@ -146,204 +148,97 @@ pub const TypedExpr = union(FlatType) {
         }
     }
 
-    /// bidirectional type checking and inference. returns a TypedExpr tree on the
-    /// ally. does not allow for conflicting information.
+    /// bidirectional type checking and inference on the raw AST. returns a
+    /// TypedExpr tree on the ally. errors on any conflicting information.
     ///
     /// *call externally through `analyze()`
     /// TODO nicer errors
-    fn from_sexpr(
+    pub fn from_expr(
         ally: Allocator,
         env: Env,
-        expr: SExpr,
-        expects: SType
-    ) anyerror!TypedExpr {
-        // check the flat type
-        switch (expr) {
-            .symbol, .call => {},
-            else => {
-                if (expects != .undef
-                and @as(FlatType, expr) != @as(FlatType, expects)) {
-                    return TypingError.ExpectationFailed;
-                }
-            }
-        }
+        ast_expr: AstExpr,
+        expects: ?Pattern
+    ) anyerror!Self {
+        _ = env;
+        _ = expects;
 
-        return switch (expr) {
-            .undef => unreachable,
-            .int => |n| Self{ .int = n },
-            .stype => |t| Self{ .stype = try t.clone(ally) },
-            .symbol => |sym| blk: {
-                const bound_stype = env.get_type(sym) orelse {
-                    std.debug.print("unknown symbol `{s}`\n", .{sym});
+        const expr = switch (ast_expr.etype) {
+            .unit => Self{ .unit = {} },
+            .symbol => symbol: {
+                const symbol = ast_expr.slice;
+                const stype = env.get_type(symbol) orelse {
                     return TypingError.UnknownSymbol;
                 };
 
-                if (!bound_stype.matches(expects)) {
-                    std.debug.print(
-                        "`{s}` is {}, expected {}\n",
-                        .{sym, bound_stype, expects}
-                    );
-
-                    return TypingError.ExpectationFailed;
-                }
-
-                break :blk Self{
+                break :symbol Self{
                     .symbol = TypedSymbol{
-                        .symbol = try ally.dupe(u8, sym),
-                        .stype = try bound_stype.clone(ally),
+                        .stype = try stype.clone(ally),
+                        .symbol = try ally.dupe(u8, symbol)
                     }
                 };
             },
-            .list => |list| blk: {
-                if (list.len > 0) {
-                    // infer on children
-                    var exprs = try ally.alloc(Self, list.len);
+            .int => Self{ .int = try std.fmt.parseInt(i64, ast_expr.slice, 0) },
+            .call => call: {
+                // TODO expectations here
 
-                    exprs[0] = try Self.from_sexpr(
-                        ally,
-                        env,
-                        list[0],
-                        if (expects == .undef) expects else expects.list.*
-                    );
+                const children = ast_expr.children.?;
+                const exprs = try ally.alloc(Self, children.len);
 
-                    // children past the first are expected to match the first
-                    const subtype = try exprs[0].find_type(ally);
+                // fn
+                exprs[0] = try Self.from_expr(ally, env, children[0], null);
 
-                    for (list[1..]) |sexpr, i| {
-                        exprs[i + 1] = try Self.from_sexpr(
-                            ally,
-                            env,
-                            sexpr,
-                            subtype
-                        );
+                const fn_type = try exprs[0].find_type(ally);
+                defer fn_type.deinit(ally);
+
+                // params
+                for (children[1..]) |child, i| {
+                    const ptype = fn_type.func.params[i];
+                    const ppat = try Pattern.from_type(ally, ptype);
+                    defer ppat.deinit(ally);
+
+                    exprs[i + 1] = try Self.from_expr(ally, env, child, ppat);
+                }
+
+                const returns = try fn_type.func.returns.clone(ally);
+
+                break :call Self{
+                    .call = Call{
+                        .returns = returns,
+                        .exprs = exprs
                     }
-
-                    break :blk Self{
-                        .list = List{
-                            .subtype = subtype,
-                            .exprs = exprs
-                        }
-                    };
-                } else {
-                    // zero-length list
-                    if (expects == .undef) return TypingError.UninferrableType;
-
-                    break :blk Self{
-                        .list = List{
-                            .subtype = try expects.clone(ally),
-                            .exprs = &.{}
-                        }
-                    };
-                }
-            },
-            .call => |call| blk: {
-                if (call.len == 0) return TypingError.CalledNothing;
-
-                // TODO lambdas here
-                // TODO actual type checking against expectations here
-
-                if (call[0] == .symbol) {
-                    const exprs = try ally.alloc(Self, call.len);
-
-                    // infer fn
-                    exprs[0] = try Self.from_sexpr(
-                        ally,
-                        env,
-                        call[0],
-                        SType{ .undef = {} }
-                    );
-
-                    const func_data = exprs[0].symbol.stype.func;
-
-                    // infer params
-                    for (call[1..]) |param, i| {
-                        exprs[i + 1] = try Self.from_sexpr(
-                            ally,
-                            env,
-                            param,
-                            func_data.params[i]
-                        );
-                    }
-
-                    break :blk Self{
-                        .call = Call{
-                            .returns = try func_data.returns.clone(ally),
-                            .exprs = exprs,
-                        }
-                    };
-                } else {
-                    @panic("TODO non-symbol calls");
-                }
-            },
-            .func => |func| blk: {
-                if (expects == .undef) {
-                    return TypingError.FuncWithoutExpectation;
-                }
-
-                const exp_func = expects.func;
-                const exp_params = exp_func.params;
-
-                if (exp_params.len != func.params.len) {
-                    return TypingError.ExpectationFailed;
-                }
-
-                // create params
-                const params = try ally.alloc(TypedSymbol, func.params.len);
-                for (func.params) |param_sym, i| {
-                    params[i] = TypedSymbol{
-                        .stype = try exp_params[i].clone(ally),
-                        .symbol = try ally.dupe(u8, param_sym),
-                    };
-                }
-
-                // translate body with defined params
-                var sub_env = Env.init(ally, &env);
-                defer sub_env.deinit();
-
-                for (params) |param, i| {
-                    try sub_env.define_local(param.symbol, param.stype, i);
-                }
-
-                const body = try util.place_on(ally, try Self.from_sexpr(
-                    ally,
-                    sub_env,
-                    func.body.*,
-                    exp_func.returns.*
-                ));
-
-                break :blk Self{
-                    .func = Func{ .params = params, .body = body }
                 };
             },
-            .def => |def| Self{
-                .def = Def{
-                    .symbol = try ally.dupe(u8, def.symbol),
-                    .anno = try util.place_on(ally, try Self.from_sexpr(
-                        ally,
-                        env,
-                        def.anno.*,
-                        SType{ .stype = {} }
-                    )),
-                    .body = try util.place_on(ally, try def.body.clone(ally)),
-                }
-            },
-            else => std.debug.panic("TODO translate {s}", .{@tagName(expr)})
+            else => std.debug.panic(
+                "TODO from_expr of {s}",
+                .{@tagName(ast_expr.etype)}
+            )
         };
+
+        // final type check
+        const stype = try expr.find_type(ally);
+        defer stype.deinit(ally);
+
+        if (!stype.matches(expects)) {
+            return TypingError.ExpectationFailed;
+        }
+
+        return expr;
     }
 
     /// determines the type of this expr when executed
-    pub fn find_type(self: Self, ally: Allocator) Allocator.Error!SType {
+    ///
+    /// *I want this to stay incredibly trivial*
+    pub fn find_type(self: Self, ally: Allocator) Allocator.Error!Type {
         return switch (self) {
-            .unit => SType{ .unit = {} },
-            .undef => SType{ .undef = {} },
-            .int => SType{ .int = {} },
-            .stype => SType{ .stype = {} },
+            .unit => Type{ .unit = {} },
+            .undef => Type{ .undef = {} },
+            .int => Type{ .int = {} },
+            .stype => Type{ .stype = {} },
             .symbol => |sym| try sym.stype.clone(ally),
-            .ptr => |sub| try SType.init_ptr(ally, try sub.find_type(ally)),
-            .list => |list| try SType.init_list(ally, list.subtype),
+            .list => |list| try Type.init_list(ally, list.subtype),
             .call => |call| try call.returns.clone(ally),
             .func => |meta| blk: {
-                const param_types = try ally.alloc(SType, meta.params.len);
+                const param_types = try ally.alloc(Type, meta.params.len);
                 for (meta.params) |param, i| {
                     param_types[i] = try param.stype.clone(ally);
                 }
@@ -353,49 +248,34 @@ pub const TypedExpr = union(FlatType) {
                     try meta.body.find_type(ally)
                 );
 
-                break :blk SType{
+                break :blk Type{
                     .func = .{
                         .params = param_types,
                         .returns = returns
                     }
                 };
             },
-            .def => SType{ .unit = {} }
+            .def => Type{ .unit = {} }
         };
     }
 
     /// converts this expr to an untyped value
-    pub fn to_sexpr(self: Self, ally: Allocator) Allocator.Error!SExpr {
+    pub fn to_value(self: Self, ally: Allocator) Allocator.Error!Value {
         return switch (self) {
-            .unit => SExpr{ .unit = {} },
-            .undef => SExpr{ .undef = {} },
-            .int => |n| SExpr{ .int = n },
-            .stype => |t| SExpr{ .stype = try t.clone(ally) },
-            .symbol => |sym| SExpr{ .symbol = try ally.dupe(u8, sym.symbol) },
-            .ptr => @panic("TODO"),
+            .unit => Value{ .unit = {} },
+            .undef => Value{ .undef = {} },
+            .int => |n| Value{ .int = n },
+            .stype => |t| Value{ .stype = try t.clone(ally) },
+            .symbol => @panic("symbols aren't values"),
             .list => |list| blk: {
-                const values = try ally.alloc(SExpr, list.exprs.len);
-                for (list.exprs) |expr, i| values[i] = try expr.to_sexpr(ally);
+                const values = try ally.alloc(Value, list.exprs.len);
+                for (list.exprs) |expr, i| values[i] = try expr.to_value(ally);
 
-                break :blk SExpr{ .list = values };
+                break :blk Value{ .list = values };
             },
-            .call => |call| blk: {
-                const values = try ally.alloc(SExpr, call.exprs.len);
-                for (call.exprs) |expr, i| values[i] = try expr.to_sexpr(ally);
-
-                break :blk SExpr{ .call = values };
-            },
-            .func => @panic("TODO"),
-            .def => |def| SExpr{
-                .def = .{
-                    .symbol = try ally.dupe(u8, def.symbol),
-                    .anno = try util.place_on(
-                        ally,
-                        try def.anno.to_sexpr(ally)
-                    ),
-                    .body = try util.place_on(ally, try def.body.clone(ally)),
-                }
-            },
+            .call => @panic("TODO to_sexpr of call"),
+            .func => @panic("TODO to_sexpr of func"),
+            .def => @panic("defs aren't values"),
         };
     }
 
@@ -571,15 +451,17 @@ pub const TypedExpr = union(FlatType) {
 pub fn analyze(
     ally: Allocator,
     env: Env,
-    sexpr: SExpr,
-    expects: ?SType
+    ast_expr: AstExpr,
+    expects: ?Type
 ) !TypedExpr {
-    const expr = TypedExpr.from_sexpr(
+    const expr = TypedExpr.from_expr(
         ally,
         env,
-        sexpr,
-        expects orelse SType{ .undef = {} }
+        ast_expr,
+        expects orelse Type{ .undef = {} }
     );
+
+    try expr.display(ally, "analyzed", .{});
 
     // TODO ensure that defs are only global?
     // TODO function + type dependency solve?

@@ -11,8 +11,8 @@ const Builtin = @import("lang.zig").Builtin;
 
 const stdout = std.io.getStdOut().writer();
 const Allocator = std.mem.Allocator;
-const SExpr = fluent.SExpr;
-const SType = fluent.SType;
+const SExpr = fluent.Value;
+const SType = fluent.Type;
 const TypedExpr = sema.TypedExpr;
 const Block = ir.Block;
 

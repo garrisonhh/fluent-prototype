@@ -1,16 +1,16 @@
 const std = @import("std");
 const util = @import("../util/util.zig");
 
-/// Expr is the most basic AST representation
+/// AstExpr is the most basic AST representation
 const Self = @This();
 
 pub const Type = enum {
-    nil,
+    unit,
     int,
     float,
     string,
 
-    ident,
+    symbol,
 
     list,
     call,
@@ -47,8 +47,8 @@ pub fn init_slice(tag: Type, slice: []const u8) Self {
 
 /// TODO only added this to make hacky stuff easier, worth removing as soon as
 /// those hacks are removed
-pub fn is_ident(self: Self, comptime ident: []const u8) bool {
-    return self.etype == .ident and std.mem.eql(u8, self.slice, ident);
+pub fn is_symbol(self: Self, comptime symbol: []const u8) bool {
+    return self.etype == .symbol and std.mem.eql(u8, self.slice, symbol);
 }
 
 const Fmt = struct {
@@ -100,7 +100,7 @@ const Fmt = struct {
                 }
                 try writer.writeAll(if (etype == .list) "]" else ")");
             },
-            .ident, .string, .int, .float => try writer.writeAll(expr.slice),
+            .symbol, .string, .int, .float => try writer.writeAll(expr.slice),
             else => @panic("TODO ???")
         }
     }

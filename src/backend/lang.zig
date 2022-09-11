@@ -7,8 +7,8 @@ const ir = @import("ir.zig");
 const Env = @import("env.zig");
 
 const Allocator = std.mem.Allocator;
-const SType = fluent.SType;
-const SExpr = fluent.SExpr;
+const Type = fluent.Type;
+const Value = fluent.Value;
 const Op = ir.Op;
 const OpCode = ir.OpCode;
 const Block = ir.Block;
@@ -17,14 +17,14 @@ const Block = ir.Block;
 fn define_op(
     env: *Env,
     name: []const u8,
-    stype: SType,
+    stype: Type,
     opcode: OpCode
 ) !void {
     std.debug.assert(stype == .func);
 
     // figure out locals
     var num_params = stype.func.params.len;
-    var local_buf: [256]SType = undefined;
+    var local_buf: [256]Type = undefined;
     for (stype.func.params) |param, i| local_buf[i] = param;
 
     local_buf[num_params] = stype.func.returns.*;
@@ -67,24 +67,24 @@ pub fn create_prelude(ally: Allocator) !Env {
     const tmp = arena.allocator();
 
     // consts
-    const type_type = SType{ .stype = {} };
-    const int_type = SType{ .int = {} };
+    const type_type = Type{ .stype = {} };
+    const int_type = Type{ .int = {} };
 
     // type primitives
     try prelude.define_type("Type", type_type);
     try prelude.define_type("Int", int_type);
 
     {
-        const params = [_]SType{try SType.init_list(tmp, type_type), type_type};
-        const fn_type = try SType.init_func(tmp, &params, type_type);
+        const params = [_]Type{try Type.init_list(tmp, type_type), type_type};
+        const fn_type = try Type.init_func(tmp, &params, type_type);
 
         try define_op(&prelude, "Fn", fn_type, .@"fn");
     }
 
     // math
     {
-        const params = [_]SType{int_type, int_type};
-        const bin_imath_type = try SType.init_func(tmp, &params, int_type);
+        const params = [_]Type{int_type, int_type};
+        const bin_imath_type = try Type.init_func(tmp, &params, int_type);
 
         try define_op(&prelude, "+", bin_imath_type, .iadd);
         try define_op(&prelude, "-", bin_imath_type, .isub);

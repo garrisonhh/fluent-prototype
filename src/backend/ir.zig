@@ -14,9 +14,9 @@ const ops = @import("ir/ops.zig");
 const blocks = @import("ir/blocks.zig");
 
 const Allocator = std.mem.Allocator;
-const FlatType = fluent.Type;
-const SType = fluent.SType;
-const SExpr = fluent.SExpr;
+const FlatType = fluent.FlatType;
+const SType = fluent.Type;
+const SExpr = fluent.Value;
 const TypedExpr = sema.TypedExpr;
 const Mason = blocks.Mason;
 const stdout = std.io.getStdOut().writer();
@@ -32,7 +32,7 @@ fn build_const(mason: *Mason, value: TypedExpr) anyerror!Op.UInt {
 
     return try mason.add_op(Op{
         .code = .@"const",
-        .a = try mason.add_const(try value.to_sexpr(mason.ally)),
+        .a = try mason.add_const(try value.to_value(mason.ally)),
         .to = try mason.add_local(try value.find_type(mason.ally))
     });
 }
@@ -168,7 +168,6 @@ fn build_expr(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
         .call => try build_call(mason, env, expr),
         .list => try build_list(mason, env, expr),
         .func => try build_func(mason, env, expr),
-        else => std.debug.panic("TODO lower {s} TypedExprs", .{@tagName(expr)})
     };
 }
 
