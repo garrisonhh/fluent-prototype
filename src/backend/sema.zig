@@ -23,8 +23,10 @@ pub const SemaError = error {
     // parsing
     BadInt,
     BadDef,
+    BadFn,
 
     // symbol lookup
+    EnvError,
     UnknownSymbol,
 
     // calls
@@ -438,16 +440,70 @@ fn translate_def(
     };
 }
 
+fn translate_fn(
+    ally: Allocator,
+    env: Env,
+    children: []AstExpr,
+    expects: ?Pattern
+) Error!TypedExpr {
+    if (children.len != 3) return SemaError.BadFn;
+
+    // get func pattern data
+    const pat = expects orelse return SemaError.UninferrableType;
+    if (pat != .func) return SemaError.ExpectationFailed;
+
+    const func = pat.func;
+
+    // parse params
+    const param_list = children[1];
+    if (param_list.etype != .list) return SemaError.BadFn;
+
+    const param_exprs = param_list.children.?;
+    if (param_exprs.len != func.params.len) return SemaError.BadFn;
+
+    const params = try ally.alloc(TypedExpr.TypedSymbol, param_exprs.len);
+    for (param_exprs) |expr, i| {
+        params[i] = TypedExpr.TypedSymbol{
+            .stype = (try Pattern.to_type(ally, func.params[i])) orelse {
+                return SemaError.UninferrableType;
+            },
+            .symbol = try ally.dupe(u8, expr.slice)
+        };
+    }
+
+    // translate body
+    var sub_env = Env.init(ally, &env);
+    defer sub_env.deinit();
+
+    for (params) |param, i| {
+        sub_env.define_local(param.symbol, param.stype, i) catch {
+            return SemaError.EnvError;
+        };
+    }
+
+    const exp_ret = Pattern.unwrap(func.returns);
+    const body = try translate(ally, sub_env, children[2], exp_ret);
+
+    return TypedExpr{
+        .func = TypedExpr.Func{
+            .params = params,
+            .body = try util.place_on(ally, body)
+        }
+    };
+}
+
 // callbacks for translating builtin syntax
 const TranslateFn = fn(Allocator, Env, []AstExpr, ?Pattern) Error!TypedExpr;
 const syntax_table = std.ComptimeStringMap(TranslateFn, .{
     .{"def", translate_def},
+    .{"fn", translate_fn},
 });
 
 fn translate_call(
     ally: Allocator,
     env: Env,
-    children: []AstExpr
+    children: []AstExpr,
+    expects: ?Pattern
 ) Error!TypedExpr {
     if (children.len == 0) return SemaError.CalledNothing;
 
@@ -456,7 +512,7 @@ fn translate_call(
         .symbol => {
             // syntax
             if (syntax_table.get(fn_expr.slice)) |cb| {
-                return try cb(ally, env, children, null);
+                return try cb(ally, env, children, expects);
             }
 
             const exprs = try ally.alloc(TypedExpr, children.len);
@@ -489,7 +545,7 @@ fn translate_call(
             };
         },
         .call => {
-            @panic("TODO infer fn literal");
+            @panic("TODO translate anonymous fn literal call");
         },
         else => return SemaError.CalledNonFunction
     }
@@ -525,7 +581,7 @@ fn translate(
             }
          },
         .list => try translate_list(ally, env, ast_expr.children.?, expects),
-        .call => try translate_call(ally, env, ast_expr.children.?),
+        .call => try translate_call(ally, env, ast_expr.children.?, expects),
         .file => @panic("I use the `file` etype?")
     };
 
