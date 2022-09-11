@@ -15,8 +15,8 @@ const blocks = @import("ir/blocks.zig");
 
 const Allocator = std.mem.Allocator;
 const FlatType = fluent.FlatType;
-const SType = fluent.Type;
-const SExpr = fluent.Value;
+const Type = fluent.Type;
+const Value = fluent.Value;
 const TypedExpr = sema.TypedExpr;
 const Mason = blocks.Mason;
 const stdout = std.io.getStdOut().writer();
@@ -43,7 +43,7 @@ fn build_symbol(
     sym: TypedExpr.TypedSymbol
 ) anyerror!Op.UInt {
     return switch (env.get_data(sym.symbol).?) {
-        .local, .block => |index| @intCast(Op.UInt, index),
+        .local => |index| @intCast(Op.UInt, index),
         .value => |value| try mason.add_op(Op{
             .code = .@"const",
             .a = try mason.add_const(value),
@@ -55,7 +55,8 @@ fn build_symbol(
 /// lowers function call
 fn build_call(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
     // lower call exprs
-    const block_ref = try build_expr(mason, env, expr.call.exprs[0]);
+    const fn_expr = expr.call.exprs[0];
+    const fn_ref = try build_expr(mason, env, fn_expr);
 
     const params = expr.call.exprs[1..];
     const param_refs = try mason.ally.alloc(Op.UInt, params.len);
@@ -64,11 +65,6 @@ fn build_call(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
     }
 
     // lower call
-    _ = try mason.add_op(Op{
-        .code = .frame,
-        .a = @intCast(Op.UInt, env.blocks.items[block_ref].locals.len)
-    });
-
     for (param_refs) |ref, i| {
         _ = try mason.add_op(Op{
             .code = .param,
@@ -77,12 +73,13 @@ fn build_call(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
         });
     }
 
-    const block_type = env.blocks.items[block_ref].output_type();
+    const fn_type = try fn_expr.find_type(mason.ally);
+    defer fn_type.deinit(mason.ally);
 
     return try mason.add_op(Op{
         .code = .call,
-        .a = block_ref,
-        .to = try mason.add_local(try block_type.clone(mason.ally))
+        .a = fn_ref,
+        .to = try mason.add_local(try fn_type.func.returns.clone(mason.ally))
     });
 }
 
@@ -99,7 +96,7 @@ fn build_list(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
     const size_ref = try build_const(mason, TypedExpr{ .int = size });
 
     // list allocation
-    const list_type = try SType.init_list(ally, try subtype.clone(ally));
+    const list_type = try Type.init_list(ally, try subtype.clone(ally));
     const list_ref = try mason.add_op(Op{
         .code = .alloc,
         .a = type_ref,
@@ -108,7 +105,7 @@ fn build_list(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
     });
 
     // set indices
-    const ptr_type = try SType.init_ptr(ally, try subtype.clone(ally));
+    const ptr_type = try Type.init_ptr(ally, try subtype.clone(ally));
     const ptr_ref = try mason.add_op(Op{
         .code = .list_ptr,
         .a = list_ref,
@@ -136,11 +133,9 @@ fn build_list(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
     return list_ref;
 }
 
-/// returns block ref
-/// TODO unsure how this will work with function as value semantics. I think I
-/// will have to implement transitioning SExprs to only values, and storing
-/// the function index as the data
+/// lower func, then return ref of a local which is loaded with function
 fn build_func(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
+    // lower fn
     const name = try env.next_anon_func_name();
     defer mason.ally.free(name);
 
@@ -150,9 +145,14 @@ fn build_func(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
     const stype = try expr.find_type(mason.ally);
     defer stype.deinit(mason.ally);
 
-    const index = try env.define_block(name, stype, block);
+    const block_index = try env.define_block(name, stype, block);
 
-    return @intCast(Op.UInt, index);
+    // lower fn const retrieval
+    return try mason.add_op(Op{
+        .code = .@"const",
+        .a = try mason.add_const(Value{ .func = block_index }),
+        .to = try mason.add_local(try stype.clone(mason.ally)),
+    });
 }
 
 /// returns where this expr produces its value (`to`)
@@ -190,7 +190,7 @@ pub fn lower_func(
     }
 
     // do masonry
-    const param_types = try ally.alloc(SType, func.params.len);
+    const param_types = try ally.alloc(Type, func.params.len);
     defer ally.free(param_types);
 
     for (func.params) |param, i| param_types[i] = try param.stype.clone(ally);

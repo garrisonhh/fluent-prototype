@@ -11,8 +11,8 @@ const Builtin = @import("lang.zig").Builtin;
 
 const stdout = std.io.getStdOut().writer();
 const Allocator = std.mem.Allocator;
-const SExpr = fluent.Value;
-const SType = fluent.Type;
+const Type = fluent.Type;
+const Value = fluent.Value;
 const TypedExpr = sema.TypedExpr;
 const Block = ir.Block;
 
@@ -23,11 +23,10 @@ const Self = @This();
 pub const Bound = struct {
     pub const Data = union(enum) {
         local: usize, // function locals
-        value: SExpr, // raw value
-        block: usize, // index of a block
+        value: Value, // raw value
     };
 
-    stype: SType,
+    stype: Type,
     data: Data,
 };
 const Map = std.StringHashMap(Bound);
@@ -61,7 +60,7 @@ pub fn deinit(self: Self) void {
         bound.stype.deinit(self.ally);
 
         switch (bound.data) {
-            .local, .block => {},
+            .local => {},
             .value => |value| value.deinit(self.ally),
         }
     }
@@ -85,7 +84,7 @@ pub fn define(self: *Self, symbol: []const u8, to: Bound) !void {
     const cloned = Bound{
         .stype = try to.stype.clone(self.ally),
         .data = switch (to.data) {
-            .local, .block => to.data,
+            .local => to.data,
             .value => |val| Bound.Data{
                 .value = try val.clone(self.ally)
             },
@@ -99,7 +98,7 @@ pub fn define(self: *Self, symbol: []const u8, to: Bound) !void {
 pub fn define_local(
     self: *Self,
     symbol: []const u8,
-    stype: SType,
+    stype: Type,
     index: usize
 ) !void {
     try self.define(symbol, Bound{
@@ -112,8 +111,8 @@ pub fn define_local(
 pub fn define_value(
     self: *Self,
     symbol: []const u8,
-    stype: SType,
-    value: SExpr
+    stype: Type,
+    value: Value
 ) !void {
     try self.define(symbol, Bound{
         .stype = stype,
@@ -122,11 +121,11 @@ pub fn define_value(
 }
 
 /// define() helper
-pub fn define_type(self: *Self, symbol: []const u8, stype: SType) !void {
+pub fn define_type(self: *Self, symbol: []const u8, stype: Type) !void {
     try self.define_value(
         symbol,
-        SType{ .stype = {} },
-        SExpr{ .stype = stype }
+        Type{ .stype = {} },
+        Value{ .stype = stype }
     );
 }
 
@@ -135,7 +134,7 @@ pub fn define_type(self: *Self, symbol: []const u8, stype: SType) !void {
 pub fn define_block(
     self: *Self,
     symbol: []const u8,
-    stype: SType,
+    stype: Type,
     block: Block
 ) !usize {
     const index = self.blocks.items.len;
@@ -143,7 +142,7 @@ pub fn define_block(
 
     try self.define(symbol, Bound{
         .stype = stype,
-        .data = .{ .block = index }
+        .data = .{ .value = Value{ .func = index } }
     });
 
     return index;
@@ -159,7 +158,7 @@ pub fn contains(self: Self, symbol: []const u8) bool {
     return self.get(symbol) != null;
 }
 
-pub fn get_type(self: Self, symbol: []const u8) ?SType {
+pub fn get_type(self: Self, symbol: []const u8) ?Type {
     return if (self.get(symbol)) |bound| bound.stype else null;
 }
 
@@ -186,40 +185,17 @@ pub fn next_anon_func_name(
 const Process = struct {
     ally: Allocator,
     blocks: []const Block,
-    frames: std.ArrayList([]SExpr),
-    top_frame: []SExpr,
+    param_buf: [256]Value = undefined,
 
     fn init(ally: Allocator, blocks: []const Block) Process {
         return Process{
             .ally = ally,
-            .blocks = blocks,
-            .frames = std.ArrayList([]SExpr).init(ally),
-            .top_frame = undefined
+            .blocks = blocks
         };
     }
 
     fn deinit(self: Process) void {
-        self.frames.deinit();
-    }
-
-    fn push_frame(self: *Process, size: usize) Allocator.Error!void {
-        self.top_frame = try self.ally.alloc(SExpr, size);
-        std.mem.set(SExpr, self.top_frame, SExpr{ .undef = {} });
-
-        try self.frames.append(self.top_frame);
-    }
-
-    fn drop_frame(self: *Process) void {
-        std.debug.assert(self.frames.items.len > 0);
-
-        // free values in frame
-        for (self.top_frame) |value| value.deinit(self.ally);
-
-        // free frame
-        self.ally.free(self.frames.pop());
-
-        const num_frames = self.frames.items.len;
-        if (num_frames > 0) self.top_frame = self.frames.items[num_frames - 1];
+        _ = self;
     }
 };
 
@@ -227,7 +203,7 @@ const Process = struct {
 fn execute_op(
     state: *Process,
     block: Block,
-    frame: []SExpr,
+    frame: []Value,
     op: ir.Op
 ) Allocator.Error!void {
     const ally = state.ally;
@@ -236,31 +212,38 @@ fn execute_op(
     const b = op.b;
 
     // op behavior
-    const res: ?SExpr = switch (op.code) {
+    const res: ?Value = switch (op.code) {
         .@"const" => try block.consts[a].clone(ally),
         .copy => try frame[a].clone(ally),
-        .frame => frame: {
-            try state.push_frame(a);
-            break :frame null;
-        },
         .param => param: {
-            state.top_frame[a] = try frame[b].clone(ally);
+            state.param_buf[a] = try frame[b].clone(ally);
             break :param null;
         },
         .call => call: {
-            // run instructions
-            const call_frame = state.top_frame;
-            const call_block = state.blocks[op.a];
+            const call_block = state.blocks[frame[op.a].func];
 
+            // alloc frame
+            const num_locals = call_block.locals.len;
+            const call_frame = try state.ally.alloc(Value, num_locals);
+            defer {
+                for (call_frame) |val| val.deinit(state.ally);
+                state.ally.free(call_frame);
+            }
+
+            // set up params
+            std.mem.copy(
+                Value,
+                call_frame,
+                state.param_buf[0..call_block.inputs]
+            );
+
+            // execute block ops
             for (call_block.ops) |call_op| {
                 try execute_op(state, call_block, call_frame, call_op);
             }
 
-            // get returned value and deallocate
-            const returned = try call_frame[call_block.output].clone(ally);
-            state.drop_frame();
-
-            break :call returned;
+            // return
+            break :call try call_frame[call_block.output].clone(ally);
         },
 
         .peek => try frame[a].ptr.to.clone(ally),
@@ -268,19 +251,19 @@ fn execute_op(
             frame[a].ptr.to.* = try frame[b].clone(ally);
             break :poke null;
         },
-        .pinc => SExpr{
+        .pinc => Value{
             .ptr = .{
                 .owns = false,
-                .to = &@ptrCast([*]SExpr, frame[a].ptr.to)[1]
+                .to = &@ptrCast([*]Value, frame[a].ptr.to)[1]
             }
         },
         .padd => padd: {
             const offset = @intCast(usize, frame[b].int);
 
-            break :padd SExpr{
+            break :padd Value{
                 .ptr = .{
                     .owns = false,
-                    .to = &@ptrCast([*]SExpr, frame[a].ptr.to)[offset]
+                    .to = &@ptrCast([*]Value, frame[a].ptr.to)[offset]
                 }
             };
         },
@@ -288,24 +271,24 @@ fn execute_op(
         .alloc => alloc: {
             // TODO stype (locals[a]) is unused here, what do I do with it?
             const size = @intCast(usize, frame[b].int);
-            const list = try ally.alloc(SExpr, size);
+            const list = try ally.alloc(Value, size);
 
-            for (list) |*elem| elem.* = SExpr{ .undef = {} };
+            for (list) |*elem| elem.* = Value{ .undef = {} };
 
-            break :alloc SExpr{ .list = list };
+            break :alloc Value{ .list = list };
         },
-        .index => SExpr{
+        .index => Value{
             .ptr = .{
                 .owns = false,
                 .to = &frame[a].list[@intCast(usize, frame[b].int)]
             }
         },
-        .list_ptr => SExpr{
+        .list_ptr => Value{
             .ptr = .{ .owns = false, .to = &frame[a].list[0] }
         },
 
         .@"fn" => @"fn": {
-            const params = try ally.alloc(SType, frame[a].list.len);
+            const params = try ally.alloc(Type, frame[a].list.len);
             for (frame[a].list) |expr, i| {
                 params[i] = try expr.stype.clone(ally);
             }
@@ -315,18 +298,18 @@ fn execute_op(
                 try frame[b].stype.clone(ally)
             );
 
-            break :@"fn" SExpr{
-                .stype = SType{
+            break :@"fn" Value{
+                .stype = Type{
                     .func = .{ .params = params, .returns = returns }
                 }
             };
         },
 
-        .iadd => SExpr{ .int = frame[a].int + frame[b].int },
-        .isub => SExpr{ .int = frame[a].int - frame[b].int },
-        .imul => SExpr{ .int = frame[a].int * frame[b].int },
-        .idiv => SExpr{ .int = @divTrunc(frame[a].int, frame[b].int) },
-        .imod => SExpr{ .int = @rem(frame[a].int, frame[b].int) },
+        .iadd => Value{ .int = frame[a].int + frame[b].int },
+        .isub => Value{ .int = frame[a].int - frame[b].int },
+        .imul => Value{ .int = frame[a].int * frame[b].int },
+        .idiv => Value{ .int = @divTrunc(frame[a].int, frame[b].int) },
+        .imod => Value{ .int = @rem(frame[a].int, frame[b].int) },
 
         else => |code| std.debug.panic("TODO do op {s}", .{@tagName(code)})
     };
@@ -343,14 +326,14 @@ pub fn execute(
     self: Self,
     ally: Allocator,
     block: Block,
-    inputs: []const SExpr
-) Allocator.Error!SExpr {
+    inputs: []const Value
+) Allocator.Error!Value {
     std.debug.assert(inputs.len == block.inputs);
 
     block.display(ally, "executing block", .{}) catch {};
 
     // allocate locals
-    var locals = try ally.alloc(SExpr, block.locals.len);
+    var locals = try ally.alloc(Value, block.locals.len);
     defer {
         for (locals) |local| local.deinit(ally);
         ally.free(locals);
@@ -414,7 +397,6 @@ pub fn display(
         const stype = &bound.stype;
         const data = switch (bound.data) {
             .local => |index| try table.print("local {}", .{index}),
-            .block => |index| try table.print("block {}", .{index}),
             .value => |value| try table.print("{}", .{value}),
         };
 

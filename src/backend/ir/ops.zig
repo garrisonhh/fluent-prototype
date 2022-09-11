@@ -2,17 +2,14 @@ const std = @import("std");
 const util = @import("../../util/util.zig");
 const fluent = @import("../fluent.zig");
 
-const SType = fluent.SType;
-
 pub const OpCode = enum {
     const Self = @This();
 
     // unique
     @"const", // load a constant
     copy, // copy a local to another local
-    frame, // allocate a stack frame
-    param, // load a local to a frame slot
-    call, // call a function with loaded parameters
+    param, // load a local to a param slot
+    call, // call a function with loaded params
 
     // ptr ops
     // TODO create,
@@ -55,7 +52,6 @@ pub const OpCode = enum {
             break :blk util.EnumTable(Self, OpMeta).init(.{
                 .{.@"const", .unary},
                 .{.copy, .unary},
-                .{.frame, .unary_effect},
                 .{.param, .binary_effect},
                 .{.call, .unary},
 
@@ -113,9 +109,8 @@ pub const Op = struct {
         switch (self.code) {
             .@"const" => try writer.print("l{} = c{}", .{self.to, self.a}),
             .copy => try writer.print("l{} = copy l{}", .{self.to, self.a}),
-            .frame => try writer.print("frame {}", .{self.a}),
             .param => try writer.print("param {} = l{}", .{self.a, self.b}),
-            .call => try writer.print("l{} = call b{}", .{self.to, self.a}),
+            .call => try writer.print("l{} = call l{}", .{self.to, self.a}),
             else => switch (self.code.get_metadata()) {
                 .unary => try writer.print(
                     "l{} = {s} l{}",

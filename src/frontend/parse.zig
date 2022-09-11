@@ -76,44 +76,25 @@ fn generate_ast(
     };
 }
 
-/// the ast and the arena which backs it
-pub const Ast = struct {
-    const Self = @This();
-
-    arena: std.heap.ArenaAllocator,
-    exprs: []Expr,
-
-    pub fn deinit(self: *Self) void {
-        self.arena.deinit();
-    }
-};
-
-/// intakes program as an lfile and outputs an ast
-pub fn parse(ctx: *Context) Error!Ast {
+/// intakes program as an lfile and outputs an ast allocated on ally
+pub fn parse(ctx: *Context, ally: Allocator) Error![]Expr {
     // lex
     var tbuf = try lex.lex(ctx);
     defer tbuf.deinit(ctx);
-
-    // generate ast
-    var ast_arena = std.heap.ArenaAllocator.init(ctx.ally);
-    const ast_ally = ast_arena.allocator();
 
     if (tbuf.tokens.len == 0) {
         try ctx.add_message(.err, "empty program?", ctx.lfile.text[0..0]);
         return util.CompilationFailed;
     }
 
-    var children = std.ArrayList(Expr).init(ctx.ally);
-    defer children.deinit();
+    // generate ast
+    var children = std.ArrayList(Expr).init(ally);
 
     var index: usize = 0;
     while (index < tbuf.tokens.len) {
-        const child = try generate_ast(ctx, ast_ally, &tbuf, index, &index);
+        const child = try generate_ast(ctx, ally, &tbuf, index, &index);
         try children.append(child);
     }
 
-    return Ast{
-        .arena = ast_arena,
-        .exprs = try ast_ally.dupe(Expr, children.items),
-    };
+    return children.toOwnedSlice();
 }

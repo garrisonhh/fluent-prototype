@@ -22,6 +22,7 @@ pub const SemaError = error {
 
     // parsing
     BadInt,
+    BadDef,
 
     // symbol lookup
     UnknownSymbol,
@@ -99,7 +100,7 @@ pub const TypedExpr = union(enum) {
     pub const Def = struct {
         symbol: []const u8,
         anno: *Self,
-        body: *Value,
+        body: *const AstExpr, // TypedExpr does not own this memory
     };
 
     undef,
@@ -144,8 +145,6 @@ pub const TypedExpr = union(enum) {
                 ally.free(def.symbol);
                 def.anno.deinit(ally);
                 ally.destroy(def.anno);
-                def.body.deinit(ally);
-                ally.destroy(def.body);
             },
             else => {}
         }
@@ -418,39 +417,82 @@ fn translate_list(
     }
 }
 
-fn translate_call(
+fn translate_def(
     ally: Allocator,
     env: Env,
     children: []AstExpr,
     expects: ?Pattern
 ) Error!TypedExpr {
-    _ = expects; // TODO
+    _ = expects;
 
-    const exprs = try ally.alloc(TypedExpr, children.len);
+    if (children.len != 4) return SemaError.BadDef;
 
-    // fn
-    exprs[0] = try translate(ally, env, children[0], null);
-
-    const fn_type = try exprs[0].find_type(ally);
-    defer fn_type.deinit(ally);
-
-    // params
-    for (children[1..]) |child, i| {
-        const ptype = fn_type.func.params[i];
-        const ppat = try Pattern.from_type(ally, ptype);
-        defer ppat.deinit(ally);
-
-        exprs[i + 1] = try translate(ally, env, child, ppat);
-    }
-
-    const returns = try fn_type.func.returns.clone(ally);
+    const anno = try translate(ally, env, children[2], Pattern{ .stype = {} });
 
     return TypedExpr{
-        .call = TypedExpr.Call{
-            .returns = returns,
-            .exprs = exprs
+        .def = TypedExpr.Def{
+            .symbol = try ally.dupe(u8, children[1].slice),
+            .anno = try util.place_on(ally, anno),
+            .body = &children[3]
         }
     };
+}
+
+// callbacks for translating builtin syntax
+const TranslateFn = fn(Allocator, Env, []AstExpr, ?Pattern) Error!TypedExpr;
+const syntax_table = std.ComptimeStringMap(TranslateFn, .{
+    .{"def", translate_def},
+});
+
+fn translate_call(
+    ally: Allocator,
+    env: Env,
+    children: []AstExpr
+) Error!TypedExpr {
+    if (children.len == 0) return SemaError.CalledNothing;
+
+    const fn_expr = children[0];
+    switch (fn_expr.etype) {
+        .symbol => {
+            // syntax
+            if (syntax_table.get(fn_expr.slice)) |cb| {
+                return try cb(ally, env, children, null);
+            }
+
+            const exprs = try ally.alloc(TypedExpr, children.len);
+
+            // fn
+            exprs[0] = try translate(ally, env, fn_expr, null);
+
+            const fn_type = try exprs[0].find_type(ally);
+            defer fn_type.deinit(ally);
+
+            if (fn_type != .func) return SemaError.CalledNonFunction;
+
+            // function type is known in advance, so parameters are checked
+            // against function
+            for (children[1..]) |child, i| {
+                const ptype = fn_type.func.params[i];
+                const ppat = try Pattern.from_type(ally, ptype);
+                defer ppat.deinit(ally);
+
+                exprs[i + 1] = try translate(ally, env, child, ppat);
+            }
+
+            const returns = try fn_type.func.returns.clone(ally);
+
+            return TypedExpr{
+                .call = TypedExpr.Call{
+                    .returns = returns,
+                    .exprs = exprs
+                }
+            };
+        },
+        .call => {
+            @panic("TODO infer fn literal");
+        },
+        else => return SemaError.CalledNonFunction
+    }
 }
 
 fn translate(
@@ -483,7 +525,7 @@ fn translate(
             }
          },
         .list => try translate_list(ally, env, ast_expr.children.?, expects),
-        .call => try translate_call(ally, env, ast_expr.children.?, expects),
+        .call => try translate_call(ally, env, ast_expr.children.?),
         .file => @panic("I use the `file` etype?")
     };
 

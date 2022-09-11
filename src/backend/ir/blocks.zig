@@ -5,8 +5,8 @@ const fluent = @import("../fluent.zig");
 const ops = @import("ops.zig");
 
 const Allocator = std.mem.Allocator;
-const SType = fluent.Type;
-const SExpr = fluent.Value;
+const Type = fluent.Type;
+const Value = fluent.Value;
 const Op = ops.Op;
 const OpCode = ops.OpCode;
 const stdout = std.io.getStdOut().writer();
@@ -16,8 +16,8 @@ const stdout = std.io.getStdOut().writer();
 pub const Block = struct {
     const Self = @This();
 
-    consts: []const SExpr,
-    locals: []const SType,
+    consts: []const Value,
+    locals: []const Type,
     ops: []const Op,
 
     inputs: usize, // locals[0..input] are the parameters for the block
@@ -31,8 +31,8 @@ pub const Block = struct {
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return Self{
-            .consts = try SExpr.clone_slice(ally, self.consts),
-            .locals = try SType.clone_slice(ally, self.locals),
+            .consts = try Value.clone_slice(ally, self.consts),
+            .locals = try Type.clone_slice(ally, self.locals),
             .ops = try ally.dupe(Op, self.ops),
             .inputs = self.inputs,
             .output = self.output
@@ -40,7 +40,7 @@ pub const Block = struct {
     }
 
     // returns const ref to output type
-    pub fn output_type(self: Self) *const SType {
+    pub fn output_type(self: Self) *const Type {
         return &self.locals[self.output];
     }
 
@@ -127,8 +127,8 @@ pub const Mason = struct {
     const Self = @This();
 
     ally: Allocator,
-    consts: std.ArrayList(SExpr),
-    locals: std.ArrayList(SType),
+    consts: std.ArrayList(Value),
+    locals: std.ArrayList(Type),
     ops: std.ArrayList(Op),
 
     name: []const u8,
@@ -137,15 +137,15 @@ pub const Mason = struct {
     pub fn init(
         ally: Allocator,
         name: []const u8,
-        inputs: []const SType
+        inputs: []const Type
     ) Allocator.Error!Self {
-        var locals = std.ArrayList(SType).init(ally);
+        var locals = std.ArrayList(Type).init(ally);
 
-        try locals.appendSlice(try SType.clone_slice(ally, inputs));
+        try locals.appendSlice(try Type.clone_slice(ally, inputs));
 
         return Self{
             .ally = ally,
-            .consts = std.ArrayList(SExpr).init(ally),
+            .consts = std.ArrayList(Value).init(ally),
             .locals = locals,
             .ops = std.ArrayList(Op).init(ally),
             .name = try ally.dupe(u8, name),
@@ -233,7 +233,8 @@ pub const Mason = struct {
     }
 
     /// returns index of constant
-    pub fn add_const(self: *Self, @"const": SExpr) Allocator.Error!Op.UInt {
+    /// TODO would be more intuitive if this defensively copied
+    pub fn add_const(self: *Self, @"const": Value) Allocator.Error!Op.UInt {
         const index = @intCast(Op.UInt, self.consts.items.len);
         try self.consts.append(@"const");
 
@@ -241,7 +242,8 @@ pub const Mason = struct {
     }
 
     /// returns ref to local
-    pub fn add_local(self: *Self, local: SType) Allocator.Error!Op.UInt {
+    /// TODO would be more intuitive if this defensively copied
+    pub fn add_local(self: *Self, local: Type) Allocator.Error!Op.UInt {
         const index = @intCast(Op.UInt, self.locals.items.len);
         try self.locals.append(local);
 
