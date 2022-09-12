@@ -23,7 +23,7 @@ const CharClass = enum {
     dquote, // strings
     lexical, // valid identifier chars that aren't digits
 
-    fn is_ident(self: Self) bool {
+    fn is_alphanumeric(self: Self) bool {
         return self == .lexical or self == .digit;
     }
 };
@@ -51,8 +51,7 @@ pub const Token = struct {
         rbracket,
         ident,
         atom,
-        integer,
-        float,
+        number,
         string,
         character
     };
@@ -192,19 +191,11 @@ fn tokenize(ctx: *Context) Allocator.Error!TokenBuffer {
             .lbracket => tbuf.emit(ctx, .lbracket, str[start..i]),
             .rbracket => tbuf.emit(ctx, .rbracket, str[start..i]),
             .digit => {
-                while (classify_char_at(str, i) == .digit) i += 1;
-
-                if (char_at(str, i) == '.') {
-                    i += 1;
-                    while (classify_char_at(str, i) == .digit) i += 1;
-
-                    try tbuf.emit(ctx, .float, str[start..i]);
-                } else {
-                    try tbuf.emit(ctx, .integer, str[start..i]);
-                }
+                while (classify_char_at(str, i).is_alphanumeric()) i += 1;
+                try tbuf.emit(ctx, .number, str[start..i]);
             },
             .lexical, .colon => {
-                while (classify_char_at(str, i).is_ident()) {
+                while (classify_char_at(str, i).is_alphanumeric()) {
                     i += 1;
                 }
 
@@ -213,11 +204,32 @@ fn tokenize(ctx: *Context) Allocator.Error!TokenBuffer {
 
                 try tbuf.emit(ctx, token_type, str[start..i]);
             },
+            .squote => {
+                while (true) {
+                    const ch = char_at(str, i);
+                    const unescaped_squote =
+                        ch == '\'' and char_at(str, i - 1) != '\\';
+
+                    i += 1;
+
+                    if (unescaped_squote) {
+                        try tbuf.emit(ctx, .character, str[start..i]);
+                        break;
+                    } else if (ch == 0) {
+                        try ctx.add_message(
+                            .err,
+                            "looks like this char literal never terminated.",
+                            str[start..start + 1]
+                        );
+                        break;
+                    }
+                }
+            },
             .dquote => {
                 while (true) {
                     const ch = char_at(str, i);
-                    const unescaped_dquote = ch == '"'
-                                         and char_at(str, i - 1) != '\\';
+                    const unescaped_dquote =
+                        ch == '"' and char_at(str, i - 1) != '\\';
 
                     i += 1;
 
@@ -227,14 +239,13 @@ fn tokenize(ctx: *Context) Allocator.Error!TokenBuffer {
                     } else if (ch == 0) {
                         try ctx.add_message(
                             .err,
-                            "looks like this string never terminated.",
-                            str[start..start+1]
+                            "looks like this string literal never terminated.",
+                            str[start..start + 1]
                         );
                         break;
                     }
                 }
             },
-            else => @panic("hit something weird in lexing")
         };
     }
 

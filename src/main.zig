@@ -99,23 +99,27 @@ pub fn main() !void {
 
     // do language tests (I just want all of it to compile, lol)
     const tests = [_][]const u8{
-        "(/ (+ 45 69) 2)",
-
+        // different kinds of literals
+        "0xDEAD_BEEF",
         "[1 2 3]",
 
+        // math
+        "(/ (+ 45 69) 2)",
+
+        // function type
         "(Fn [Int] Int)",
 
-        \\ (def a Int
-        \\   (* 34 56))
-        \\ (def b Int
-        \\   (+ a 1))
-        \\ (+ a b)
+        // interreliant defs
+        \\(def a Int (* 34 56))
+        \\(def b Int (+ a 1))
+        \\(+ a b)
         ,
 
-        \\ (def my-add (Fn [Int Int] Int)
-        \\   (fn [a b] (+ a b)))
+        //
+        \\(def my-add (Fn [Int Int] Int)
+        \\  (fn [a b] (+ a b)))
         \\
-        \\ (my-add 45 56)
+        \\(my-add 45 56)
         ,
     };
 
@@ -123,6 +127,18 @@ pub fn main() !void {
         var env = backend.Env.init(ally, &prelude);
         defer env.deinit();
 
+        // print test input
+        try stdout.print(
+            "{}test{}:\n",
+            .{&kz.Color{ .fg = .cyan }, &kz.Color{}}
+        );
+
+        var lines = std.mem.tokenize(u8, @"test", "\n");
+        while (lines.next()) |line| try stdout.print("> {s}\n", .{line});
+
+        try stdout.writeAll("\n");
+
+        // run test
         var result = plumbing.evaluate(ally, &env, "test", @"test") catch |e| {
             try stdout.print(
                 "{}test failed with {}{}:\n{s}\n\n",
@@ -132,16 +148,6 @@ pub fn main() !void {
         };
         defer result.deinit(ally);
 
-        try stdout.print(
-            "{}test case:{}\n{s}\n\n{}returns:{}\n{}\n\n",
-            .{
-                &kz.Color{ .fg = .cyan },
-                &kz.Color{},
-                @"test",
-                &kz.Color{ .fg = .cyan },
-                &kz.Color{},
-                result
-            }
-        );
+        try stdout.print("{}\n\n", .{result});
     }
 }

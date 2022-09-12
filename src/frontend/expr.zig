@@ -7,13 +7,10 @@ const Allocator = std.mem.Allocator;
 const Self = @This();
 
 pub const Type = enum {
-    unit,
-    int,
-    float,
+    number,
+    character,
     string,
-
     symbol,
-
     list,
     call,
     file,
@@ -76,8 +73,9 @@ fn format_r(
             }
             try writer.writeAll(if (etype == .list) "]" else ")");
         },
-        .symbol, .string, .int, .float => try writer.writeAll(self.slice),
-        else => @panic("TODO ???")
+        .symbol, .string, .character, .number => {
+            try writer.writeAll(self.slice);
+        },
     }
 }
 

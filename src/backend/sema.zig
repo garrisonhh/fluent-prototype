@@ -4,6 +4,7 @@
 const std = @import("std");
 const kz = @import("kritzler");
 const util = @import("../util/util.zig");
+const literals = @import("../util/literals.zig");
 const fluent = @import("fluent.zig");
 const frontend = @import("../frontend.zig");
 const Env = @import("env.zig");
@@ -21,7 +22,7 @@ pub const SemaError = error {
     UninferrableType,
 
     // parsing
-    BadInt,
+    BadNumber,
     BadDef,
     BadFn,
 
@@ -37,7 +38,7 @@ pub const SemaError = error {
     FuncWithoutExpectation,
 };
 
-pub const Error = SemaError || Allocator.Error;
+pub const Error = SemaError || literals.ParseNumberError || Allocator.Error;
 
 /// see `from_sexpr()`
 ///
@@ -108,9 +109,9 @@ pub const TypedExpr = union(enum) {
     undef,
 
     unit,
-    symbol: TypedSymbol,
     int: i64,
     stype: Type,
+    symbol: TypedSymbol,
 
     list: List,
     call: Call,
@@ -559,9 +560,18 @@ fn translate(
 ) Error!TypedExpr {
     // initial translation
     const expr = switch (ast_expr.etype) {
-        .unit => TypedExpr{ .unit = {} },
-        .float => @panic("TODO floats"),
+        .number => num: {
+            const num = try literals.parse_number(ally, ast_expr.slice);
+            defer num.deinit(ally);
+
+            switch (num.layout) {
+                .int => break :num TypedExpr{ .int = try num.to(i64) },
+                .uint => @panic("TODO"),
+                .float => @panic("TODO"),
+            }
+        },
         .string => @panic("TODO strings"),
+        .character => @panic("TODO chars"),
         .symbol => symbol: {
             const symbol = ast_expr.slice;
             const stype = env.get_type(symbol) orelse {
@@ -575,11 +585,6 @@ fn translate(
                 }
             };
         },
-        .int => TypedExpr{
-            .int = std.fmt.parseInt(i64, ast_expr.slice, 0) catch {
-                return SemaError.BadInt;
-            }
-         },
         .list => try translate_list(ally, env, ast_expr.children.?, expects),
         .call => try translate_call(ally, env, ast_expr.children.?, expects),
         .file => @panic("I use the `file` etype?")
@@ -609,8 +614,6 @@ pub fn analyze(
                 else null;
 
     const expr = try translate(ally, env, ast_expr, pat);
-
-    try expr.display(ally, "analyzed", .{});
 
     // TODO ensure that defs are only global?
     // TODO function + type dependency solve?

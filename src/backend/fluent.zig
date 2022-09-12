@@ -21,6 +21,7 @@ pub const FlatType = enum {
     unit,
 
     // simple
+    boolean,
     int,
     stype,
     ptr,
@@ -39,6 +40,7 @@ pub const Type = union(FlatType) {
     undef,
     unit,
 
+    boolean,
     int,
     stype,
     ptr: *Self,
@@ -115,7 +117,7 @@ pub const Type = union(FlatType) {
         const pat = opt_pat orelse return true;
 
         return self == @as(FlatType, pat) and switch (self) {
-            .undef, .unit, .int, .stype => true,
+            .undef, .unit, .boolean, .int, .stype => true,
             .ptr => |to| to.matches(Pattern.unwrap(pat.ptr)),
             .list => |of| of.matches(Pattern.unwrap(pat.list)),
             .func => |func| func: {
@@ -139,6 +141,7 @@ pub const Type = union(FlatType) {
     fn format_r(self: Self, writer: anytype) @TypeOf(writer).Error!void {
         switch (self) {
             .stype => try writer.writeAll("Type"),
+            .boolean => try writer.writeAll("Bool"),
             .ptr => |subtype| try writer.print("(Ptr {})", .{subtype}),
             .list => |subtype| try writer.print("(List {})", .{subtype}),
             .func => |func| {
@@ -174,6 +177,7 @@ pub const Pattern = union(FlatType) {
     undef,
     unit,
 
+    boolean,
     int,
     stype,
     ptr: ?*Self,
@@ -207,7 +211,7 @@ pub const Pattern = union(FlatType) {
 
     pub fn deinit(self: Self, ally: Allocator) void {
         switch (self) {
-            .undef, .unit, .int, .stype => {},
+            .undef, .unit, .boolean, .int, .stype => {},
             .ptr, .list => |of| if (of) |pat| pat.deinit(ally),
             .func => |func| {
                 for (func.params) |param| param.deinit(ally);
@@ -220,6 +224,7 @@ pub const Pattern = union(FlatType) {
         return switch (stype) {
             .undef => Self{ .undef = {} },
             .unit => Self{ .unit = {} },
+            .boolean => Self{ .boolean = {} },
             .int => Self{ .int = {} },
             .stype => Self{ .stype = {} },
             .ptr => |to| Self{
@@ -253,6 +258,7 @@ pub const Pattern = union(FlatType) {
         return switch (pat) {
             .undef => Type{ .undef = {} },
             .unit => Type{ .unit = {} },
+            .boolean => Type{ .boolean = {} },
             .int => Type{ .int = {} },
             .stype => Type{ .stype = {} },
             .ptr => |to| ptr: {
@@ -346,6 +352,7 @@ pub const Value = union(FlatType) {
     undef,
     unit,
 
+    boolean: bool,
     int: i64,
     stype: Type,
 
@@ -384,7 +391,7 @@ pub const Value = union(FlatType) {
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch(self) {
-            .undef, .unit, .int, .func => self,
+            .undef, .unit, .boolean, .int, .func => self,
             .stype => |stype| Self{ .stype = try stype.clone(ally) },
             // TODO is this the right behavior?
             .ptr => |ptr| Self{ .ptr = .{ .owns = false, .to = ptr.to } },
@@ -395,6 +402,7 @@ pub const Value = union(FlatType) {
     fn format_r(self: Self, writer: anytype) @TypeOf(writer).Error!void {
         switch (self) {
             .unit, .undef => try writer.print("{s}", .{@tagName(self)}),
+            .boolean => |b| try writer.print("{}", .{b}),
             .int => |n| try writer.print("{d}", .{n}),
             .stype => |stype| try writer.print("{}", .{stype}),
             .ptr => |subtype| try writer.print("(ref {})", .{subtype}),

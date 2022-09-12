@@ -67,8 +67,7 @@ fn generate_ast(
             );
         },
         .ident => Expr.init_slice(.symbol, token.view),
-        .integer => Expr.init_slice(.int, token.view),
-        .float => Expr.init_slice(.float, token.view),
+        .number => Expr.init_slice(.number, token.view),
         .string => Expr.init_slice(.string, token.view),
         .character => @panic("TODO characters are currently unimplemented"),
         .atom => @panic("TODO atoms are currently unimplemented"),

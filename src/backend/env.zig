@@ -185,6 +185,9 @@ pub fn next_anon_func_name(
 const Process = struct {
     ally: Allocator,
     blocks: []const Block,
+
+    // used by the `param` instruction to temporarily cache parameters
+    // before call frame is allocated
     param_buf: [256]Value = undefined,
 
     fn init(ally: Allocator, blocks: []const Block) Process {
@@ -329,8 +332,6 @@ pub fn execute(
     inputs: []const Value
 ) Allocator.Error!Value {
     std.debug.assert(inputs.len == block.inputs);
-
-    block.display(ally, "executing block", .{}) catch {};
 
     // allocate locals
     var locals = try ally.alloc(Value, block.locals.len);
