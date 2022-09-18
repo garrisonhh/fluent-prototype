@@ -101,7 +101,9 @@ pub fn main() !void {
     const tests = [_][]const u8{
         // different kinds of literals
         "0xDEAD_BEEF",
-        "[1 2 3]",
+        "0b1010",
+        "0o777",
+        "[1 -2 3]",
 
         // math
         "(/ (+ 45 69) 2)",
@@ -115,7 +117,7 @@ pub fn main() !void {
         \\(+ a b)
         ,
 
-        //
+        // simple function
         \\(def my-add (Fn [Int Int] Int)
         \\  (fn [a b] (+ a b)))
         \\

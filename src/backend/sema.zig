@@ -21,7 +21,7 @@ pub const SemaError = error {
     ExpectationFailed,
     UninferrableType,
 
-    // parsing
+    // parsing (syntax errors that aren't caught in the frontend)
     BadNumber,
     BadDef,
     BadFn,
@@ -601,9 +601,31 @@ fn translate(
     return expr;
 }
 
+/// check that `def` statements are only global
+fn validate_defs(expr: TypedExpr, in_global: bool) SemaError!void {
+    switch (expr) {
+        .list => |list| {
+            for (list.exprs) |child| try validate_defs(child, false);
+        },
+        .call => |call| {
+            for (call.exprs) |child| try validate_defs(child, false);
+        },
+        .func => |func| try validate_defs(func.body.*, false),
+        .def => |def| {
+            if (!in_global) return SemaError.BadDef;
+            try validate_defs(def.anno.*, false);
+        },
+        else => {}
+    }
+}
+
 /// semantic analysis.
+/// TODO eventually I want to do function/type dependency solving. currently
+/// execution is exclusively linear (what they call a one-pass compiler) and
+/// this will definitely end up being problematic once I start writing
+/// larger programs (or just want to write trampolines etc.)
 ///
-/// arena compatible
+/// *arena compatible*
 pub fn analyze(
     ally: Allocator,
     env: Env,
@@ -615,8 +637,7 @@ pub fn analyze(
 
     const expr = try translate(ally, env, ast_expr, pat);
 
-    // TODO ensure that defs are only global?
-    // TODO function + type dependency solve?
+    try validate_defs(expr, true);
 
     return expr;
 }
