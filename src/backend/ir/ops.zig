@@ -11,6 +11,10 @@ pub const OpCode = enum {
     param, // load a local to a param slot
     call, // call a function with loaded params
 
+    // control flow
+    jmp, // unconditional jump to a label
+    skip_if, // jump if condition is false
+
     // ptr ops
     // TODO create,
     // TODO destroy,
@@ -43,11 +47,11 @@ pub const OpCode = enum {
     lnot,
 
     const OpMeta = union(enum) {
-        // pure result
+        // writes data to a local
         unary,
         binary,
 
-        // has no result
+        // has no direct output
         unary_effect,
         binary_effect,
     };
@@ -59,6 +63,9 @@ pub const OpCode = enum {
                 .{.copy, .unary},
                 .{.param, .binary_effect},
                 .{.call, .unary},
+
+                .{.jmp, .unary_effect},
+                .{.skip_if, .binary_effect},
 
                 .{.peek, .unary},
                 .{.poke, .binary_effect},
@@ -120,6 +127,8 @@ pub const Op = struct {
             .copy => try writer.print("l{} = copy l{}", .{self.to, self.a}),
             .param => try writer.print("param {} = l{}", .{self.a, self.b}),
             .call => try writer.print("l{} = call l{}", .{self.to, self.a}),
+            .jmp => try writer.print("jmp @{}", .{self.a}),
+            .skip_if => try writer.print("skip_if l{} @{}", .{self.a, self.b}),
             else => switch (self.code.get_metadata()) {
                 .unary => try writer.print(
                     "l{} = {s} l{}",

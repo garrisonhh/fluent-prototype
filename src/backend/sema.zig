@@ -361,8 +361,14 @@ pub const TypedExpr = union(enum) {
                 cursor.* += kz.Vec2{-INDENT, 1};
             },
             .@"if" => |meta| {
-                _ = meta;
-                @panic("TODO");
+                try canvas.scribble(pos, kz.Color{}, "if", .{});
+
+                cursor.*[0] += INDENT;
+                for (meta.exprs) |child| {
+                    cursor.*[1] += 1;
+                    try child.display_r(canvas, cursor);
+                }
+                cursor.*[0] -= INDENT;
             },
         }
     }
@@ -517,12 +523,36 @@ fn translate_if(
     children: []AstExpr,
     expects: ?Pattern
 ) Error!TypedExpr {
-    _ = ally;
-    _ = env;
-    _ = children;
-    _ = expects;
+    if (children.len != 4) return SemaError.BadIf;
 
-    @panic("TODO");
+    const exprs = try ally.alloc(TypedExpr, 3);
+
+    // condition
+    const exp_bool = Pattern{ .boolean = {} };
+    exprs[0] = try translate(ally, env, children[1], exp_bool);
+
+    // branches
+    exprs[1] = try translate(ally, env, children[2], expects);
+
+    const stype = try exprs[1].find_type(ally);
+
+    // if expectation is provided, reuse it. otherwise, expect the same type
+    // as the first branch.
+    if (expects != null) {
+        exprs[2] = try translate(ally, env, children[3], expects);
+    } else {
+        const exp_snd = try Pattern.from_type(ally, stype);
+        defer exp_snd.deinit(ally);
+
+        exprs[2] = try translate(ally, env, children[3], exp_snd);
+    }
+
+    return TypedExpr{
+        .@"if" = TypedExpr.If{
+            .stype = stype,
+            .exprs = exprs,
+        }
+    };
 }
 
 // callbacks for translating builtin syntax

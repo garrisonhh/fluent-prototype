@@ -52,6 +52,7 @@ fn define_op(
         Block{
             .consts = &.{},
             .locals = local_buf[0..num_params + 1],
+            .labels = &.{},
             .ops = &[_]Op{op},
             .inputs = num_params,
             .output = op.to

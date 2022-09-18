@@ -12,11 +12,14 @@ const stdout = std.io.getStdOut().writer();
 
 /// basic representation of linearized code. every block represents a procedure,
 /// with some number of parameters (including zero) and returning one value.
+///
+/// blocks are meant to be manipulated indirectly through Mason
 pub const Block = struct {
     const Self = @This();
 
     consts: []const Value,
     locals: []const Type,
+    labels: []const usize,
     ops: []const Op,
 
     inputs: usize, // locals[0..input] are the parameters for the block
@@ -25,6 +28,7 @@ pub const Block = struct {
     pub fn deinit(self: Self, ally: Allocator) void {
         ally.free(self.consts);
         ally.free(self.locals);
+        ally.free(self.labels);
         ally.free(self.ops);
     }
 
@@ -32,6 +36,7 @@ pub const Block = struct {
         return Self{
             .consts = try Value.clone_slice(ally, self.consts),
             .locals = try Type.clone_slice(ally, self.locals),
+            .labels = try ally.dupe(usize, self.labels),
             .ops = try ally.dupe(Op, self.ops),
             .inputs = self.inputs,
             .output = self.output
@@ -46,17 +51,18 @@ pub const Block = struct {
     pub fn display(
         self: Self,
         ally: Allocator,
-        comptime label_fmt: []const u8,
-        label_args: anytype
+        comptime title_fmt: []const u8,
+        title_args: anytype
     ) (Allocator.Error || @TypeOf(stdout).Error)!void {
         var canvas = kz.Canvas.init(ally);
         defer canvas.deinit();
         const tmp = canvas.arena.allocator();
 
-        const label_color = kz.Color{ .fg = .red };
-        const title_color = kz.Color{ .fg = .cyan };
+        const title_color = kz.Color{ .fg = .red };
+        const header_color = kz.Color{ .fg = .cyan };
         const const_color = kz.Color{ .fg = .magenta };
         const type_color = kz.Color{ .fg = .green };
+        const label_color = kz.Color{ .fmt = .bold };
         const op_color = kz.Color{};
 
         var pos = kz.Vec2{0, 0};
@@ -65,7 +71,7 @@ pub const Block = struct {
         const down = kz.Vec2{-indent, 0};
 
         // title
-        try canvas.scribble(pos, label_color, label_fmt, label_args);
+        try canvas.scribble(pos, title_color, title_fmt, title_args);
         pos += up;
 
         // typing
@@ -85,7 +91,7 @@ pub const Block = struct {
         pos[1] += 2;
 
         // consts
-        try canvas.scribble(pos, title_color, "consts", .{});
+        try canvas.scribble(pos, header_color, "consts", .{});
         pos += up;
 
         for (self.consts) |val| {
@@ -96,7 +102,7 @@ pub const Block = struct {
         pos += down;
 
         // locals
-        try canvas.scribble(pos, title_color, "locals", .{});
+        try canvas.scribble(pos, header_color, "locals", .{});
         pos += up;
 
         for (self.locals) |stype| {
@@ -106,11 +112,24 @@ pub const Block = struct {
 
         pos += down;
 
-        // ops
-        try canvas.scribble(pos, title_color, "ops", .{});
+        // prepare labels
+        // maps op index -> handle
+        var labels = std.AutoHashMap(usize, usize).init(ally);
+        defer labels.deinit();
+
+        for (self.labels) |lbl, i| try labels.put(lbl, i);
+
+        // draw ops + labels
+        try canvas.scribble(pos, header_color, "ops", .{});
         pos += up;
 
-        for (self.ops) |op| {
+        for (self.ops) |op, i| {
+            if (labels.get(i)) |name| {
+                pos[0] -= 1;
+                try canvas.scribble(pos, label_color, "@{}:", .{name});
+                pos += kz.Vec2{1, 1};
+            }
+
             try canvas.scribble(pos, op_color, "{}", .{op});
             pos[1] += 1;
         }
@@ -128,6 +147,7 @@ pub const Mason = struct {
     ally: Allocator,
     consts: std.ArrayList(Value),
     locals: std.ArrayList(Type),
+    labels: std.ArrayList(usize),
     ops: std.ArrayList(Op),
 
     name: []const u8,
@@ -146,6 +166,7 @@ pub const Mason = struct {
             .ally = ally,
             .consts = std.ArrayList(Value).init(ally),
             .locals = locals,
+            .labels = std.ArrayList(usize).init(ally),
             .ops = std.ArrayList(Op).init(ally),
             .name = try ally.dupe(u8, name),
             .inputs = inputs.len,
@@ -157,6 +178,7 @@ pub const Mason = struct {
         return Block{
             .consts = self.consts.toOwnedSlice(),
             .locals = self.locals.toOwnedSlice(),
+            .labels = self.labels.toOwnedSlice(),
             .ops = self.ops.toOwnedSlice(),
             .inputs = self.inputs,
             .output = output
@@ -228,6 +250,8 @@ pub const Mason = struct {
             try self.ops.append(adjusted);
         }
 
+        // TODO labels
+
         return block.output + local_offset;
     }
 
@@ -249,9 +273,25 @@ pub const Mason = struct {
         return index;
     }
 
+    /// returns 'name' of label
+    pub fn add_label(self: *Self) Allocator.Error!Op.UInt {
+        const name = @intCast(Op.UInt, self.labels.items.len);
+        try self.labels.append(self.ops.items.len);
+
+        return name;
+    }
+
     /// returns ref to local output of op
     pub fn add_op(self: *Self, op: Op) Allocator.Error!Op.UInt {
         try self.ops.append(op);
         return op.to;
+    }
+
+    /// adds an op and returns index of op
+    pub fn add_backref(self: *Self, op: Op) Allocator.Error!usize {
+        const backref = self.ops.items.len;
+        _ = try self.add_op(op);
+
+        return backref;
     }
 };

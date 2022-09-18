@@ -115,7 +115,9 @@ pub fn main() !void {
         "(or false (not true))",
 
         // function type
-        "(Fn [Int] Int)",
+        \\(def int-to-int Type
+        \\  (Fn [Int] Int))
+        ,
 
         // interreliant defs
         \\(def a Int (* 34 56))
@@ -128,6 +130,13 @@ pub fn main() !void {
         \\  (fn [a b] (+ a b)))
         \\
         \\(my-add 45 56)
+        ,
+
+        // conditional
+        \\[
+        \\  (if true 1 0)
+        \\  (if false 1 0)
+        \\]
         ,
     };
 

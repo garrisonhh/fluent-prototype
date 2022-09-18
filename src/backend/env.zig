@@ -185,6 +185,7 @@ pub fn next_anon_func_name(
 const Process = struct {
     ally: Allocator,
     blocks: []const Block,
+    pc: usize = 0, // program counter
 
     // used by the `param` instruction to temporarily cache parameters
     // before call frame is allocated
@@ -193,7 +194,7 @@ const Process = struct {
     fn init(ally: Allocator, blocks: []const Block) Process {
         return Process{
             .ally = ally,
-            .blocks = blocks
+            .blocks = blocks,
         };
     }
 
@@ -247,6 +248,15 @@ fn execute_op(
 
             // return
             break :call try call_frame[call_block.output].clone(ally);
+        },
+
+        .jmp => jmp: {
+            state.pc = block.labels[a];
+            break :jmp null;
+        },
+        .skip_if => skip: {
+            if (!frame[a].boolean) state.pc = block.labels[b];
+            break :skip null;
         },
 
         .peek => try frame[a].ptr.to.clone(ally),
@@ -350,7 +360,10 @@ pub fn execute(
     var process = Process.init(ally, self.blocks.items);
     defer process.deinit();
 
-    for (block.ops) |op| {
+    while (process.pc < block.ops.len) {
+        const op = block.ops[process.pc];
+        process.pc += 1;
+
         try execute_op(&process, block, locals, op);
     }
 

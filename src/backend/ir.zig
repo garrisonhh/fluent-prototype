@@ -155,6 +155,46 @@ fn build_func(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
     });
 }
 
+fn build_if(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
+    const meta = expr.@"if";
+
+    // output of the `if` so that both branches can use it
+    const out_ref = try mason.add_local(meta.stype);
+
+    // conditional
+    const cond_ref = try build_expr(mason, env, meta.exprs[0]);
+    const skip_backref = try mason.add_backref(Op{
+        .code = .skip_if,
+        .a = cond_ref,
+        .b = 0
+    });
+
+    // first branch
+    const fst_ref = try build_expr(mason, env, meta.exprs[1]);
+    _ = try mason.add_op(Op{
+        .code = .copy,
+        .a = fst_ref,
+        .to = out_ref
+    });
+
+    const exit_backref = try mason.add_backref(Op{ .code = .jmp, .a = 0 });
+
+    // second branch
+    mason.ops.items[skip_backref].b = try mason.add_label();
+
+    const snd_ref = try build_expr(mason, env, meta.exprs[2]);
+    _ = try mason.add_op(Op{
+        .code = .copy,
+        .a = snd_ref,
+        .to = out_ref
+    });
+
+    // exit label
+    mason.ops.items[exit_backref].a = try mason.add_label();
+
+    return out_ref;
+}
+
 /// returns where this expr produces its value (`to`)
 fn build_expr(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
     if (expr.is_literal()) return try build_const(mason, expr);
@@ -168,7 +208,7 @@ fn build_expr(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
         .call => try build_call(mason, env, expr),
         .list => try build_list(mason, env, expr),
         .func => try build_func(mason, env, expr),
-        .@"if" => @panic("TODO lower `if`"),
+        .@"if" => try build_if(mason, env, expr),
     };
 }
 

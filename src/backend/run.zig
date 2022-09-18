@@ -59,6 +59,9 @@ fn eval_expr(ally: Allocator, env: *Env, expr: TypedExpr) !Value {
         var block = try ir.lower_expr(ally, env, "expr", expr);
         defer block.deinit(ally);
 
+        // TODO remove vvv
+        try block.display(ally, "running", .{});
+
         return try env.execute(ally, block, &.{});
     }
 }
