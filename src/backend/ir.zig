@@ -161,13 +161,14 @@ fn build_expr(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
 
     return switch (expr) {
         // these are literals
-        .unit, .undef, .int, .stype => unreachable,
-        // def is pure syntax
+        .unit, .undef, .boolean, .int, .stype => unreachable,
+        // def is purely handled by sema
         .def => unreachable,
         .symbol => |sym| try build_symbol(mason, env, sym),
         .call => try build_call(mason, env, expr),
         .list => try build_list(mason, env, expr),
         .func => try build_func(mason, env, expr),
+        .@"if" => @panic("TODO lower `if`"),
     };
 }
 

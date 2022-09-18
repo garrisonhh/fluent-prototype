@@ -314,6 +314,10 @@ fn execute_op(
         .idiv => Value{ .int = @divTrunc(frame[a].int, frame[b].int) },
         .imod => Value{ .int = @rem(frame[a].int, frame[b].int) },
 
+        .land => Value{ .boolean = frame[a].boolean and frame[b].boolean },
+        .lor => Value{ .boolean = frame[a].boolean or frame[b].boolean },
+        .lnot => Value{ .boolean = !frame[a].boolean },
+
         else => |code| std.debug.panic("TODO do op {s}", .{@tagName(code)})
     };
 

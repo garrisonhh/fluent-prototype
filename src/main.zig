@@ -103,10 +103,16 @@ pub fn main() !void {
         "0xDEAD_BEEF",
         "0b1010",
         "0o777",
+        "true",
+        "false",
         "[1 -2 3]",
 
         // math
         "(/ (+ 45 69) 2)",
+
+        // logic
+        "(and (or true false) (not false))",
+        "(or false (not true))",
 
         // function type
         "(Fn [Int] Int)",

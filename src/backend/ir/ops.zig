@@ -37,6 +37,11 @@ pub const OpCode = enum {
     idiv,
     imod,
 
+    // logic
+    land,
+    lor,
+    lnot,
+
     const OpMeta = union(enum) {
         // pure result
         unary,
@@ -73,6 +78,10 @@ pub const OpCode = enum {
                 .{.imul, .binary},
                 .{.idiv, .binary},
                 .{.imod, .binary},
+
+                .{.land, .binary},
+                .{.lor, .binary},
+                .{.lnot, .unary},
             });
         };
 

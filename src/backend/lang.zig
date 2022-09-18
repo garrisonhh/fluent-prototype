@@ -69,29 +69,40 @@ pub fn create_prelude(ally: Allocator) !Env {
     // consts
     const type_type = Type{ .stype = {} };
     const int_type = Type{ .int = {} };
+    const bool_type = Type{ .boolean = {} };
+
+    // consts in prelude
+    try prelude.define_value("true", bool_type, Value{ .boolean = true });
+    try prelude.define_value("false", bool_type, Value{ .boolean = false });
 
     // type primitives
     try prelude.define_type("Type", type_type);
     try prelude.define_type("Int", int_type);
+    try prelude.define_type("Bool", bool_type);
 
-    {
-        const params = [_]Type{try Type.init_list(tmp, type_type), type_type};
-        const fn_type = try Type.init_func(tmp, &params, type_type);
+    const fn_params = [_]Type{try Type.init_list(tmp, type_type), type_type};
+    const fn_type = try Type.init_func(tmp, &fn_params, type_type);
 
-        try define_op(&prelude, "Fn", fn_type, .@"fn");
-    }
+    try define_op(&prelude, "Fn", fn_type, .@"fn");
 
     // math
-    {
-        const params = [_]Type{int_type, int_type};
-        const bin_imath_type = try Type.init_func(tmp, &params, int_type);
+    const bin_imath_params = [_]Type{int_type, int_type};
+    const bin_imath_type = try Type.init_func(tmp, &bin_imath_params, int_type);
 
-        try define_op(&prelude, "+", bin_imath_type, .iadd);
-        try define_op(&prelude, "-", bin_imath_type, .isub);
-        try define_op(&prelude, "*", bin_imath_type, .imul);
-        try define_op(&prelude, "/", bin_imath_type, .idiv);
-        try define_op(&prelude, "%", bin_imath_type, .imod);
-    }
+    try define_op(&prelude, "+", bin_imath_type, .iadd);
+    try define_op(&prelude, "-", bin_imath_type, .isub);
+    try define_op(&prelude, "*", bin_imath_type, .imul);
+    try define_op(&prelude, "/", bin_imath_type, .idiv);
+    try define_op(&prelude, "%", bin_imath_type, .imod);
+
+    // logic
+    const cond_params = [_]Type{bool_type, bool_type};
+    const cond_type = try Type.init_func(tmp, &cond_params, bool_type);
+    const lnot_type = try Type.init_func(tmp, &[_]Type{bool_type}, bool_type);
+
+    try define_op(&prelude, "and", cond_type, .land);
+    try define_op(&prelude, "or", cond_type, .lor);
+    try define_op(&prelude, "not", lnot_type, .lnot);
 
     try prelude.display("prelude", .{});
 

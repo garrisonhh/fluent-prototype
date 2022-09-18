@@ -25,6 +25,7 @@ pub const SemaError = error {
     BadNumber,
     BadDef,
     BadFn,
+    BadIf,
 
     // symbol lookup
     EnvError,
@@ -106,9 +107,15 @@ pub const TypedExpr = union(enum) {
         body: *const AstExpr, // TypedExpr does not own this memory
     };
 
+    pub const If = struct {
+        stype: Type,
+        exprs: []Self,
+    };
+
     undef,
 
     unit,
+    boolean: bool,
     int: i64,
     stype: Type,
     symbol: TypedSymbol,
@@ -117,6 +124,7 @@ pub const TypedExpr = union(enum) {
     call: Call,
     func: Func,
     def: Def,
+    @"if": If,
 
     pub fn deinit(self: Self, ally: Allocator) void {
         switch (self) {
@@ -161,6 +169,7 @@ pub const TypedExpr = union(enum) {
             .unit => Type{ .unit = {} },
             .undef => Type{ .undef = {} },
             .int => Type{ .int = {} },
+            .boolean => Type{ .boolean = {} },
             .stype => Type{ .stype = {} },
             .symbol => |sym| try sym.stype.clone(ally),
             .list => |list| try Type.init_list(ally, list.subtype),
@@ -183,7 +192,8 @@ pub const TypedExpr = union(enum) {
                     }
                 };
             },
-            .def => Type{ .unit = {} }
+            .def => Type{ .unit = {} },
+            .@"if" => |meta| try meta.stype.clone(ally),
         };
     }
 
@@ -192,6 +202,7 @@ pub const TypedExpr = union(enum) {
         return switch (self) {
             .unit => Value{ .unit = {} },
             .undef => Value{ .undef = {} },
+            .boolean => |b| Value{ .boolean = b },
             .int => |n| Value{ .int = n },
             .stype => |t| Value{ .stype = try t.clone(ally) },
             .symbol => @panic("symbols aren't values"),
@@ -203,14 +214,16 @@ pub const TypedExpr = union(enum) {
             },
             .call => @panic("TODO to_sexpr of call"),
             .func => @panic("TODO to_sexpr of func"),
-            .def => @panic("defs aren't values"),
+            .def, .@"if" => {
+                @panic("need ast manipulation within fluent for this");
+            },
         };
     }
 
     /// recursively determines whether this is a data literal
     pub fn is_literal(self: Self) bool {
         return switch (self) {
-            .unit, .undef, .int, .stype => true,
+            .unit, .undef, .boolean, .int, .stype => true,
             .list => |data| blk: {
                 for (data.exprs) |expr| {
                     if (!expr.is_literal()) break :blk false;
@@ -289,6 +302,7 @@ pub const TypedExpr = union(enum) {
                 "{s}",
                 .{@tagName(self)}
             ),
+            .boolean => |b| try canvas.scribble(pos, lit_color, "{}", .{b}),
             .int => |n| try canvas.scribble(pos, lit_color, "{}", .{n}),
             .symbol => |sym| {
                 try canvas.scribble(pos, sym_color, "{s}", .{sym.symbol});
@@ -345,6 +359,10 @@ pub const TypedExpr = union(enum) {
                 cursor.*[1] += 1;
                 try canvas.scribble(cursor.*, kz.Color{}, "`{}`", .{meta.body});
                 cursor.* += kz.Vec2{-INDENT, 1};
+            },
+            .@"if" => |meta| {
+                _ = meta;
+                @panic("TODO");
             },
         }
     }
@@ -493,11 +511,26 @@ fn translate_fn(
     };
 }
 
+fn translate_if(
+    ally: Allocator,
+    env: Env,
+    children: []AstExpr,
+    expects: ?Pattern
+) Error!TypedExpr {
+    _ = ally;
+    _ = env;
+    _ = children;
+    _ = expects;
+
+    @panic("TODO");
+}
+
 // callbacks for translating builtin syntax
 const TranslateFn = fn(Allocator, Env, []AstExpr, ?Pattern) Error!TypedExpr;
-const syntax_table = std.ComptimeStringMap(TranslateFn, .{
+const builtin_funcs = std.ComptimeStringMap(TranslateFn, .{
     .{"def", translate_def},
     .{"fn", translate_fn},
+    .{"if", translate_if},
 });
 
 fn translate_call(
@@ -512,7 +545,7 @@ fn translate_call(
     switch (fn_expr.etype) {
         .symbol => {
             // syntax
-            if (syntax_table.get(fn_expr.slice)) |cb| {
+            if (builtin_funcs.get(fn_expr.slice)) |cb| {
                 return try cb(ally, env, children, expects);
             }
 
@@ -564,14 +597,18 @@ fn translate(
             const num = try literals.parse_number(ally, ast_expr.slice);
             defer num.deinit(ally);
 
+            // TODO this assumes that every number is an i64. I definitely
+            // need something like Zig's `comptime_int` for comptime -> runtime
+            // type coercion and literals etc.
+
             switch (num.layout) {
                 .int => break :num TypedExpr{ .int = try num.to(i64) },
-                .uint => @panic("TODO"),
-                .float => @panic("TODO"),
+                .uint => @panic("TODO translate unsigned ints"),
+                .float => @panic("TODO translate floats"),
             }
         },
-        .string => @panic("TODO strings"),
-        .character => @panic("TODO chars"),
+        .string => @panic("TODO translate strings"),
+        .character => @panic("TODO translate chars"),
         .symbol => symbol: {
             const symbol = ast_expr.slice;
             const stype = env.get_type(symbol) orelse {
@@ -587,7 +624,7 @@ fn translate(
         },
         .list => try translate_list(ally, env, ast_expr.children.?, expects),
         .call => try translate_call(ally, env, ast_expr.children.?, expects),
-        .file => @panic("I use the `file` etype?")
+        .file => @panic("I'm using the `file` etype?")
     };
 
     // final type check

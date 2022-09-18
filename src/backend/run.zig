@@ -74,6 +74,9 @@ pub fn run(
     for (program) |ast_expr| {
         const expr = try sema.analyze(ally, env.*, ast_expr, null);
 
+        // TODO remove vvv
+        try expr.display(ally, "running", .{});
+
         final_value.deinit(ally);
         final_value = try eval_expr(ally, env, expr);
     }
