@@ -32,7 +32,9 @@ pub fn coerce_tuple(comptime S: type, tuple: anytype) S {
     }
 
     var s: S = undefined;
-    inline for (struct_fields) |field, i| @field(s, field.name) = tuple[i];
+    inline for (struct_fields) |field, i| {
+        @field(s, field.name) = @as(field.field_type, tuple[i]);
+    }
 
     return s;
 }
@@ -64,7 +66,12 @@ pub fn EnumTable(comptime E: type, comptime V: type) type {
             comptime {
                 // coerce entries to an array of Self.Entry
                 var entries: [rows.len]Entry = undefined;
-                for (rows) |row, i| entries[i] = coerce_tuple(Entry, row);
+                for (rows) |row, i| {
+                    entries[i] = Entry{
+                        .key = row[0],
+                        .value = coerce_tuple(V, row[1]),
+                    };
+                }
 
                 // verify entries is a pure set of keys
                 var has_entry: [enum_size]bool = undefined;

@@ -175,6 +175,19 @@ fn tokenize(ctx: *Context) Allocator.Error!TokenBuffer {
 
     var i: usize = 0;
     while (i < str.len) {
+        // skip comments
+        if (char_at(str, i) == '/' and char_at(str, i + 1) == '/') {
+            i += 2;
+
+            while (line_ended: {
+                const ch = char_at(str, i);
+                i += 1;
+
+                break :line_ended ch != 0 and ch != '\n';
+            }) {
+            }
+        }
+
         const start = i;
         var start_class = classify_char_at(str, i);
         i += 1;

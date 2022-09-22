@@ -5,6 +5,7 @@ const plumbing = @import("plumbing.zig");
 const backend = @import("backend.zig");
 
 const stdout = std.io.getStdOut().writer();
+const stderr = std.io.getStdErr().writer();
 const Allocator = std.mem.Allocator;
 
 const c = @cImport({
@@ -44,11 +45,7 @@ fn repl_read(ally: Allocator) ![]const u8 {
                     level -= 1;
                 },
                 else => {}
-            }
-        }
-
-        // append line as text
-        try buf.appendSlice(indent);
+            }}
         try buf.appendSlice(line);
         try buf.append('\n');
 
@@ -86,33 +83,8 @@ fn repl(ally: Allocator, prelude: backend.Env) !void {
     }
 }
 
-pub fn main() !void {
-    // var gpa = std.heap.GeneralPurposeAllocator(.{
-        // .stack_trace_frames = 1000,
-    // }){};
-    // defer _ = gpa.deinit();
-    // const ally = gpa.allocator();
-    const ally = std.heap.page_allocator;
-
-    var prelude = try backend.create_prelude(ally);
-    defer prelude.deinit();
-
-    // do language tests (I just want all of it to compile, lol)
+fn fluent_tests(ally: Allocator, prelude: backend.Env) !void {
     const tests = [_][]const u8{
-        // out-of-order defs
-        \\b
-        \\(def b T (+ a 1))
-        \\(def a T (* 10 10))
-        \\(def T Type Int)
-        ,
-
-        \\(def a T (* 10 10))
-        \\(def b X (+ a 1))
-        \\(def X Type T)
-        \\(def T Type Int)
-        \\b
-        ,
-
         // different kinds of literals
         "0xDEAD_BEEF",
         "0b1010",
@@ -128,26 +100,34 @@ pub fn main() !void {
         "(and (or true false) (not false))",
         "(or false (not true))",
 
-        // function type
+        \\// function type
         \\(def int-to-int Type
         \\  (Fn [Int] Int))
         ,
 
-        // interreliant defs
+        \\// interreliant defs
         \\(def c Int (+ a b))
         \\(def a Int (* 34 56))
         \\(def b Int (+ a 1))
         \\c
         ,
 
-        // simple function
+        \\// out-of-order defs
+        \\(def a T (* 10 10))
+        \\(def b X (+ a 1))
+        \\(def X Type T)
+        \\(def T Type Int)
+        \\b
+        ,
+
+        \\// simple function
         \\(def my-add (Fn [Int Int] Int)
         \\  (fn [a b] (+ a b)))
         \\
         \\(my-add 45 56)
         ,
 
-        // conditional
+        \\// conditional
         \\[
         \\  (if true 1 0)
         \\  (if false 1 0)
@@ -181,5 +161,110 @@ pub fn main() !void {
         defer result.deinit(ally);
 
         try stdout.print("{}\n\n", .{result});
+    }
+}
+
+/// the output of argument parsing
+const Command = union(enum) {
+    const Self = @This();
+    const Enum = @typeInfo(Self).Union.tag_type.?;
+
+    help: void,
+    repl: void,
+    tests: void,
+
+    const Meta = struct {
+        desc: []const u8,
+    };
+    const meta = util.EnumTable(Enum, Meta).init(.{
+        .{.help,  .{""}},
+        .{.repl,  .{"start interactive mode"}},
+        .{.tests, .{"run internal tests"}},
+    });
+
+    // maps name -> tag
+    const tag_map = std.ComptimeStringMap(Enum, pairs: {
+        const KV = struct {
+            @"0": []const u8,
+            @"1": Enum
+        };
+
+        const fields = @typeInfo(Enum).Enum.fields;
+        var entries: [fields.len]KV = undefined;
+        for (fields) |field, i| {
+            entries[i] = KV{
+                .@"0" = field.name,
+                .@"1" = @intToEnum(Enum, field.value),
+            };
+        }
+
+        break :pairs entries;
+    });
+
+};
+
+fn print_help() @TypeOf(stdout).Error!void {
+    try stdout.print("commands:\n\n", .{});
+
+    for (std.enums.values(Command.Enum)) |tag| {
+        const meta = Command.meta.get(tag);
+        try stdout.print("{s:<16}{s}\n", .{@tagName(tag), meta.desc});
+    }
+}
+
+const CommandError = error {
+    BadArgs,
+};
+
+fn read_args(ally: Allocator) ![][]const u8 {
+    var arg_iter = try std.process.argsWithAllocator(ally);
+    defer arg_iter.deinit();
+
+    var args = std.ArrayList([]const u8).init(ally);
+    while (arg_iter.next(ally)) |arg| try args.append((try arg)[0..]);
+
+    return args.toOwnedSlice();
+}
+
+fn parse_args(ally: Allocator) !Command {
+    const args = try read_args(ally);
+    defer ally.free(args);
+
+    if (args.len != 2) return CommandError.BadArgs;
+
+    const tag = Command.tag_map.get(args[1]) orelse {
+        return CommandError.BadArgs;
+    };
+
+    return switch (tag) {
+        .help => Command{ .help = {} },
+        .repl => Command{ .repl = {} },
+        .tests => Command{ .tests = {} },
+    };
+}
+
+pub fn main() !void {
+    // var gpa = std.heap.GeneralPurposeAllocator(.{
+        // .stack_trace_frames = 1000,
+    // }){};
+    // defer _ = gpa.deinit();
+    // const ally = gpa.allocator();
+    const ally = std.heap.page_allocator;
+
+    var prelude = try backend.create_prelude(ally);
+    defer prelude.deinit();
+
+    const cmd = parse_args(ally) catch |e| err: {
+        if (e == CommandError.BadArgs) {
+            break :err Command{ .help = {} };
+        }
+
+        return e;
+    };
+
+    switch (cmd) {
+        .help => try print_help(),
+        .repl => try repl(ally, prelude),
+        .tests => try fluent_tests(ally, prelude),
     }
 }

@@ -14,7 +14,7 @@ pub fn build(b: *std.build.Builder) void {
     exe.addCSourceFile("lib/linenoise/linenoise.c", &.{""});
     exe.addIncludeDir("lib/linenoise");
 
-    // kritzler
+    // packages
     exe.addPackagePath("kritzler", "lib/kritzler/kritzler.zig");
 
     exe.install();
