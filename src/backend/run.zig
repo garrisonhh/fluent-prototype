@@ -166,6 +166,9 @@ const NameResolver = struct {
 
                     const stype = stype_val.stype;
 
+                    // place in env as temp TODO is this necessary?
+                    try env.define_temp(untyped.symbol, stype);
+
                     // determine body deps and place back in queue as typed
                     var new_deps = SymbolSet{};
                     try self.fill_deps(untyped.body_expr.*, &new_deps);
@@ -197,11 +200,6 @@ const NameResolver = struct {
                         typed.stype,
                     );
                     defer value.deinit(self.ally);
-
-                    std.debug.print(
-                        "solved {s}: {} = {}\n",
-                        .{symbol, typed.stype, value}
-                    );
 
                     // define the value
                     try env.define_value(symbol, typed.stype, value);
@@ -282,10 +280,7 @@ pub fn run(
 
     // do first pass to define all symbols
     const sanitized = try resolve_names(ally, env, program.children.?);
-    defer {
-        for (sanitized) |ast_expr| ast_expr.deinit(ally);
-        ally.free(sanitized);
-    }
+    defer ally.free(sanitized);
 
     // eval sanitized exprs
     var final_value = Value{ .unit = {} };

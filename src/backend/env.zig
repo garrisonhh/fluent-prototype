@@ -82,8 +82,6 @@ pub fn define_raw(self: *Self, symbol: []const u8, to: Bound) !void {
     if (res.found_existing) {
         if (res.value_ptr.data != .temp) return error.SymbolAlreadyDefined;
         self.deinit_bound(res.value_ptr.*);
-
-        std.debug.print("REDEFINING {s}\n", .{symbol});
     } else {
         res.key_ptr.* = try self.ally.dupe(u8, symbol);
     }

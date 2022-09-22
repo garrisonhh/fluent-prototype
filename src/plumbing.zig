@@ -11,7 +11,7 @@ const Allocator = std.mem.Allocator;
 const Env = backend.Env;
 const Value = backend.Value;
 
-pub fn evaluate(
+pub fn execute(
     ally: Allocator,
     env: *Env,
     name: []const u8,

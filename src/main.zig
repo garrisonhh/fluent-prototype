@@ -79,7 +79,7 @@ fn repl(ally: Allocator, prelude: backend.Env) !void {
         if (is_empty) break;
 
         // eval and print
-        var result = try plumbing.evaluate(ally, &repl_env, "repl", input);
+        var result = try plumbing.execute(ally, &repl_env, "repl", input);
         defer result.deinit(ally);
 
         try stdout.print("{}\n", .{result});
@@ -155,7 +155,7 @@ pub fn main() !void {
         ,
     };
 
-    for (tests[0..2]) |@"test"| {
+    for (tests) |@"test"| {
         var env = backend.Env.init(ally, &prelude);
         defer env.deinit();
 
@@ -171,7 +171,7 @@ pub fn main() !void {
         try stdout.writeAll("\n");
 
         // run test
-        var result = plumbing.evaluate(ally, &env, "test", @"test") catch |e| {
+        var result = plumbing.execute(ally, &env, "test", @"test") catch |e| {
             try stdout.print(
                 "{}test failed with {}{}:\n{s}\n\n",
                 .{&kz.Color{ .fg = .red }, e, &kz.Color{}, @"test"}
