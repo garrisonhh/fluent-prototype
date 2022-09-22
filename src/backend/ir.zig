@@ -43,6 +43,7 @@ fn build_symbol(
     sym: TypedExpr.TypedSymbol
 ) anyerror!Op.UInt {
     return switch (env.get_data(sym.symbol).?) {
+        .temp => unreachable,
         .local => |index| @intCast(Op.UInt, index),
         .value => |value| try mason.add_op(Op{
             .code = .@"const",

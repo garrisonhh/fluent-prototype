@@ -75,8 +75,8 @@ fn generate_ast(
     };
 }
 
-/// intakes program as an lfile and outputs an ast allocated on ally
-pub fn parse(ctx: *Context, ally: Allocator) Error![]Expr {
+/// intakes program as an lfile and outputs an ast allocated on ally.
+pub fn parse(ctx: *Context, ally: Allocator) Error!Expr {
     // lex
     var tbuf = try lex.lex(ctx);
     defer tbuf.deinit(ctx);
@@ -95,5 +95,15 @@ pub fn parse(ctx: *Context, ally: Allocator) Error![]Expr {
         try children.append(child);
     }
 
-    return children.toOwnedSlice();
+    // reutrn ast as a program Expr
+    const slice = try util.slice_from_bookends(
+        children.items[0].slice,
+        children.items[children.items.len - 1].slice
+    );
+
+    return Expr{
+        .etype = .program,
+        .slice = slice,
+        .children = children.toOwnedSlice(),
+    };
 }

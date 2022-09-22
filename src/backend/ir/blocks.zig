@@ -43,7 +43,7 @@ pub const Block = struct {
         };
     }
 
-    // returns const ref to output type
+    /// returns const ref to output type
     pub fn output_type(self: Self) *const Type {
         return &self.locals[self.output];
     }

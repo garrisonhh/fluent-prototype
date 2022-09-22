@@ -99,6 +99,20 @@ pub fn main() !void {
 
     // do language tests (I just want all of it to compile, lol)
     const tests = [_][]const u8{
+        // out-of-order defs
+        \\b
+        \\(def b T (+ a 1))
+        \\(def a T (* 10 10))
+        \\(def T Type Int)
+        ,
+
+        \\(def a T (* 10 10))
+        \\(def b X (+ a 1))
+        \\(def X Type T)
+        \\(def T Type Int)
+        \\b
+        ,
+
         // different kinds of literals
         "0xDEAD_BEEF",
         "0b1010",
@@ -120,9 +134,10 @@ pub fn main() !void {
         ,
 
         // interreliant defs
+        \\(def c Int (+ a b))
         \\(def a Int (* 34 56))
         \\(def b Int (+ a 1))
-        \\(+ a b)
+        \\c
         ,
 
         // simple function
@@ -140,7 +155,7 @@ pub fn main() !void {
         ,
     };
 
-    for (tests) |@"test"| {
+    for (tests[0..2]) |@"test"| {
         var env = backend.Env.init(ally, &prelude);
         defer env.deinit();
 

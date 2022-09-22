@@ -356,6 +356,8 @@ pub const Value = union(FlatType) {
     int: i64,
     stype: Type,
 
+    // TODO make ptr, my_ptr, arr_ptr, my_arr_ptr distinct? or is this just
+    // a type-level distinction?
     ptr: struct {
         owns: bool,
         to: *Self,

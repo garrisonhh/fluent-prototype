@@ -41,13 +41,9 @@ pub const SemaError = error {
 
 pub const Error = SemaError || literals.ParseNumberError || Allocator.Error;
 
-/// see `from_sexpr()`
+/// the final abstract representation of Fluent code before lowering to IR
 ///
-/// maps 1-to-1 to SExpr in terms of structure, but contains extra type
-/// information for a more complete AST
-///
-/// TODO I should just translate ast Exprs straight to this, make SExpr more
-/// of a pure value type
+/// TODO rename to SExpr and place in its own file
 pub const TypedExpr = union(enum) {
     const Self = @This();
 
@@ -444,27 +440,6 @@ fn translate_list(
     }
 }
 
-fn translate_def(
-    ally: Allocator,
-    env: Env,
-    children: []AstExpr,
-    expects: ?Pattern
-) Error!TypedExpr {
-    _ = expects;
-
-    if (children.len != 4) return SemaError.BadDef;
-
-    const anno = try translate(ally, env, children[2], Pattern{ .stype = {} });
-
-    return TypedExpr{
-        .def = TypedExpr.Def{
-            .symbol = try ally.dupe(u8, children[1].slice),
-            .anno = try util.place_on(ally, anno),
-            .body = &children[3]
-        }
-    };
-}
-
 fn translate_fn(
     ally: Allocator,
     env: Env,
@@ -558,7 +533,6 @@ fn translate_if(
 // callbacks for translating builtin syntax
 const TranslateFn = fn(Allocator, Env, []AstExpr, ?Pattern) Error!TypedExpr;
 const builtin_funcs = std.ComptimeStringMap(TranslateFn, .{
-    .{"def", translate_def},
     .{"fn", translate_fn},
     .{"if", translate_if},
 });
@@ -654,7 +628,7 @@ fn translate(
         },
         .list => try translate_list(ally, env, ast_expr.children.?, expects),
         .call => try translate_call(ally, env, ast_expr.children.?, expects),
-        .file => @panic("I'm using the `file` etype?")
+        .program => unreachable
     };
 
     // final type check
@@ -668,31 +642,29 @@ fn translate(
     return expr;
 }
 
-/// check that `def` statements are only global
-fn validate_defs(expr: TypedExpr, in_global: bool) SemaError!void {
+fn validate_defs_r(expr: TypedExpr, in_global: bool) SemaError!void {
     switch (expr) {
         .list => |list| {
-            for (list.exprs) |child| try validate_defs(child, false);
+            for (list.exprs) |child| try validate_defs_r(child, false);
         },
         .call => |call| {
-            for (call.exprs) |child| try validate_defs(child, false);
+            for (call.exprs) |child| try validate_defs_r(child, false);
         },
-        .func => |func| try validate_defs(func.body.*, false),
+        .func => |func| try validate_defs_r(func.body.*, false),
         .def => |def| {
             if (!in_global) return SemaError.BadDef;
-            try validate_defs(def.anno.*, false);
+            try validate_defs_r(def.anno.*, false);
         },
         else => {}
     }
 }
 
+/// ensure that `def` statements are only global
+fn validate_defs(expr: TypedExpr) SemaError!void {
+    return try validate_defs_r(expr, true);
+}
+
 /// semantic analysis.
-/// TODO eventually I want to do function/type dependency solving. currently
-/// execution is exclusively linear (what they call a one-pass compiler) and
-/// this will definitely end up being problematic once I start writing
-/// larger programs (or just want to write trampolines etc.)
-///
-/// *arena compatible*
 pub fn analyze(
     ally: Allocator,
     env: Env,
@@ -704,7 +676,7 @@ pub fn analyze(
 
     const expr = try translate(ally, env, ast_expr, pat);
 
-    try validate_defs(expr, true);
+    try validate_defs(expr);
 
     return expr;
 }

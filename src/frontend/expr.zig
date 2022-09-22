@@ -13,11 +13,11 @@ pub const Type = enum {
     symbol,
     list,
     call,
-    file,
+    program,
 
     fn is_sequence(self: Type) bool {
         return switch (self) {
-            .call, .file, .list => true,
+            .program, .call, .list => true,
             else => false
         };
     }
@@ -59,7 +59,7 @@ fn format_r(
     writer: anytype
 ) @TypeOf(writer).Error!void {
     switch (self.etype) {
-        .call, .file, .list => |etype| {
+        .program, .call, .list => |etype| {
             const children = self.children.?;
 
             try writer.writeAll(if (etype == .list) "[" else "(");

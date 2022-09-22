@@ -22,6 +22,7 @@ const Self = @This();
 /// they need a value
 pub const Bound = struct {
     pub const Data = union(enum) {
+        temp: void, // placeholder during first pass of evaluation
         local: usize, // function locals
         value: Value, // raw value
     };
@@ -50,19 +51,21 @@ pub fn init(ally: Allocator, parent: ?*const Self) Self {
     };
 }
 
+fn deinit_bound(self: Self, bound: Bound) void {
+    bound.stype.deinit(self.ally);
+
+    switch (bound.data) {
+        .local, .temp => {},
+        .value => |value| value.deinit(self.ally),
+    }
+}
+
 pub fn deinit(self: Self) void {
     // free symbols and deinit values
     var iter = self.map.iterator();
     while (iter.next()) |entry| {
         self.ally.free(entry.key_ptr.*);
-
-        const bound = entry.value_ptr;
-        bound.stype.deinit(self.ally);
-
-        switch (bound.data) {
-            .local => {},
-            .value => |value| value.deinit(self.ally),
-        }
+        self.deinit_bound(entry.value_ptr.*);
     }
 
     // deinit blocks
@@ -75,8 +78,17 @@ pub fn deinit(self: Self) void {
 /// dupes symbol, assumes you already allocated or cloned binding onto the env
 /// allocator. errors on redefinition of a binding.
 pub fn define_raw(self: *Self, symbol: []const u8, to: Bound) !void {
-    if (self.get(symbol) != null) return error.SymbolAlreadyDefined;
-    try self.map.put(try self.ally.dupe(u8, symbol), to);
+    const res = try self.map.getOrPut(symbol);
+    if (res.found_existing) {
+        if (res.value_ptr.data != .temp) return error.SymbolAlreadyDefined;
+        self.deinit_bound(res.value_ptr.*);
+
+        std.debug.print("REDEFINING {s}\n", .{symbol});
+    } else {
+        res.key_ptr.* = try self.ally.dupe(u8, symbol);
+    }
+
+    res.value_ptr.* = to;
 }
 
 /// clones bound and defines it.
@@ -84,14 +96,17 @@ pub fn define(self: *Self, symbol: []const u8, to: Bound) !void {
     const cloned = Bound{
         .stype = try to.stype.clone(self.ally),
         .data = switch (to.data) {
-            .local => to.data,
-            .value => |val| Bound.Data{
-                .value = try val.clone(self.ally)
-            },
+            .local, .temp => to.data,
+            .value => |val| Bound.Data{ .value = try val.clone(self.ally) },
         }
     };
 
     try self.define_raw(symbol, cloned);
+}
+
+/// define() helper
+pub fn define_temp(self: *Self, symbol: []const u8, stype: Type) !void {
+    try self.define(symbol, Bound{ .stype = stype, .data = .{ .temp = {} } });
 }
 
 /// define() helper
@@ -378,23 +393,17 @@ pub fn display(
 ) !void {
     var table = try kz.Table(&.{
         .{ .title = "symbol", .fmt = "{s}", .color = kz.Color{ .fg = .red } },
-        .{ .title = "type", .fmt = "<{}>", .color = kz.Color{ .fg = .green } },
+        .{ .title = "type", .color = kz.Color{ .fg = .green } },
         .{ .title = "data", .fmt = "{s}" },
     }).init(self.ally, label_fmt, label_args);
 
     // collect and order env's variables
     const EnvVar = Map.Unmanaged.Entry;
     const Closure = struct {
-        // sorts first by bound type, then alphabetically
+        // sorts alphabetically
         fn ev_less_than(ctx: void, a: EnvVar, b: EnvVar) bool {
             _ = ctx;
-
-            const cmp = @intCast(isize, @enumToInt(b.value_ptr.data))
-                      - @intCast(isize, @enumToInt(a.value_ptr.data));
-
-            if (cmp > 0) return true
-            else if (cmp < 0) return false
-            else return std.mem.lessThan(u8, a.key_ptr.*, b.key_ptr.*);
+            return std.ascii.lessThanIgnoreCase(a.key_ptr.*, b.key_ptr.*);
         }
     };
 
@@ -416,6 +425,7 @@ pub fn display(
         const data = switch (bound.data) {
             .local => |index| try table.print("local {}", .{index}),
             .value => |value| try table.print("{}", .{value}),
+            .temp => "temp",
         };
 
         try table.add_row(.{ symbol, stype, data });

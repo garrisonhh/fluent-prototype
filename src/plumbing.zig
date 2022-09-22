@@ -25,12 +25,9 @@ pub fn evaluate(
     defer ctx.deinit();
 
     // lex + parse
-    const exprs = try ctx.wrap_stage(frontend.parse(&ctx, ally));
-    defer {
-        for (exprs) |expr| expr.deinit(ally);
-        ally.free(exprs);
-    }
+    const program = try ctx.wrap_stage(frontend.parse(&ctx, ally));
+    defer program.deinit(ally);
 
     // run
-    return try backend.run(ally, env, exprs);
+    return try backend.run(ally, env, program);
 }
