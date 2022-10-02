@@ -46,6 +46,10 @@ pub const OpCode = enum {
     lor,
     lnot,
 
+    // conditions
+    ieq,
+    ilt,
+
     const OpMeta = union(enum) {
         // writes data to a local
         unary,
@@ -89,6 +93,9 @@ pub const OpCode = enum {
                 .{.land, .binary},
                 .{.lor, .binary},
                 .{.lnot, .unary},
+
+                .{.ieq, .binary},
+                .{.ilt, .binary},
             });
         };
 

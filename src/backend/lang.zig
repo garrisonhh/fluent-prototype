@@ -87,8 +87,8 @@ pub fn create_prelude(ally: Allocator) !Env {
     try define_op(&prelude, "Fn", fn_type, .@"fn");
 
     // math
-    const bin_imath_params = [_]Type{int_type, int_type};
-    const bin_imath_type = try Type.init_func(tmp, &bin_imath_params, int_type);
+    const bin_int_params = [_]Type{int_type, int_type};
+    const bin_imath_type = try Type.init_func(tmp, &bin_int_params, int_type);
 
     try define_op(&prelude, "+", bin_imath_type, .iadd);
     try define_op(&prelude, "-", bin_imath_type, .isub);
@@ -104,6 +104,12 @@ pub fn create_prelude(ally: Allocator) !Env {
     try define_op(&prelude, "and", cond_type, .land);
     try define_op(&prelude, "or", cond_type, .lor);
     try define_op(&prelude, "not", lnot_type, .lnot);
+
+    // numeric conditions
+    const bin_icond_type = try Type.init_func(tmp, &bin_int_params, bool_type);
+
+    try define_op(&prelude, "=", bin_icond_type, .ieq);
+    try define_op(&prelude, "<", bin_icond_type, .ilt);
 
     try prelude.display("prelude", .{});
 

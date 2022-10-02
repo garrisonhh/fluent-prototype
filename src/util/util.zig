@@ -67,9 +67,12 @@ pub fn EnumTable(comptime E: type, comptime V: type) type {
                 // coerce entries to an array of Self.Entry
                 var entries: [rows.len]Entry = undefined;
                 for (rows) |row, i| {
+                    const value = if (@TypeOf(row[1]) == V) row[1]
+                                  else coerce_tuple(V, row[1]);
+
                     entries[i] = Entry{
                         .key = row[0],
-                        .value = coerce_tuple(V, row[1]),
+                        .value = value,
                     };
                 }
 

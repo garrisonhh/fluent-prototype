@@ -172,14 +172,20 @@ const Command = union(enum) {
     help: void,
     repl: void,
     tests: void,
+    run: []const u8,
 
     const Meta = struct {
         desc: []const u8,
+        params: []const []const u8 = &.{},
     };
     const meta = util.EnumTable(Enum, Meta).init(.{
-        .{.help,  .{""}},
-        .{.repl,  .{"start interactive mode"}},
-        .{.tests, .{"run internal tests"}},
+        .{.help, Meta{ .desc = "" }},
+        .{.repl, Meta{ .desc = "start interactive mode" }},
+        .{.tests, Meta{ .desc = "run internal tests" }},
+        .{.run, Meta{
+            .desc = "run a program dynamically",
+            .params = &[_][]const u8{"file"}
+        }},
     });
 
     // maps name -> tag
@@ -200,7 +206,6 @@ const Command = union(enum) {
 
         break :pairs entries;
     });
-
 };
 
 fn print_help() @TypeOf(stdout).Error!void {
@@ -210,6 +215,32 @@ fn print_help() @TypeOf(stdout).Error!void {
         const meta = Command.meta.get(tag);
         try stdout.print("{s:<16}{s}\n", .{@tagName(tag), meta.desc});
     }
+}
+
+fn execute_file(ally: Allocator, prelude: backend.Env, path: []const u8) !void {
+    // open and read file
+    var file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    const text = try file.readToEndAlloc(ally, try file.getEndPos());
+    defer ally.free(text);
+
+    // execute
+    var env = backend.Env.init(ally, &prelude);
+    defer env.deinit();
+
+    const start_time = std.time.nanoTimestamp();
+
+    const res = try plumbing.execute(ally, &env, path, text);
+    defer res.deinit(ally);
+
+    const end_time = std.time.nanoTimestamp();
+    const seconds = @intToFloat(f64, end_time - start_time) * 1e-9;
+
+    try stdout.print(
+        "program returned: {}\nexecution finished in {:.6}s.",
+        .{res, seconds}
+    );
 }
 
 const CommandError = error {
@@ -230,16 +261,18 @@ fn parse_args(ally: Allocator) !Command {
     const args = try read_args(ally);
     defer ally.free(args);
 
-    if (args.len != 2) return CommandError.BadArgs;
-
     const tag = Command.tag_map.get(args[1]) orelse {
         return CommandError.BadArgs;
     };
+    const meta = Command.meta.get(tag);
+
+    if (args.len != 2 + meta.params.len) return CommandError.BadArgs;
 
     return switch (tag) {
         .help => Command{ .help = {} },
         .repl => Command{ .repl = {} },
         .tests => Command{ .tests = {} },
+        .run => Command{ .run = args[2] },
     };
 }
 
@@ -266,5 +299,6 @@ pub fn main() !void {
         .help => try print_help(),
         .repl => try repl(ally, prelude),
         .tests => try fluent_tests(ally, prelude),
+        .run => |path| try execute_file(ally, prelude, path),
     }
 }

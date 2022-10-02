@@ -341,6 +341,9 @@ fn execute_op(
         .lor => Value{ .boolean = frame[a].boolean or frame[b].boolean },
         .lnot => Value{ .boolean = !frame[a].boolean },
 
+        .ieq => Value{ .boolean = frame[a].int == frame[b].int },
+        .ilt => Value{ .boolean = frame[a].int < frame[b].int },
+
         else => |code| std.debug.panic("TODO do op {s}", .{@tagName(code)})
     };
 
