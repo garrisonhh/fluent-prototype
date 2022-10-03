@@ -26,7 +26,9 @@ pub const Block = struct {
     output: Op.UInt, // index of the output local
 
     pub fn deinit(self: Self, ally: Allocator) void {
+        for (self.consts) |value| value.deinit(ally);
         ally.free(self.consts);
+        for (self.locals) |stype| stype.deinit(ally);
         ally.free(self.locals);
         ally.free(self.labels);
         ally.free(self.ops);

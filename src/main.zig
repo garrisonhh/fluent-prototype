@@ -1,6 +1,7 @@
 const std = @import("std");
 const kz = @import("kritzler");
 const util = @import("util/util.zig");
+const context = @import("context.zig");
 const plumbing = @import("plumbing.zig");
 const backend = @import("backend.zig");
 
@@ -12,11 +13,13 @@ const c = @cImport({
     @cInclude("linenoise.h");
 });
 
-/// returns string allocated onto ally
-fn repl_read(ally: Allocator) ![]const u8 {
+/// returns file
+fn repl_read(ally: Allocator) !context.FileHandle {
     const INDENT = 2;
 
     var buf = std.ArrayList(u8).init(ally);
+    defer buf.deinit();
+
     var level: usize = 0;
 
     while (true) {
@@ -53,7 +56,7 @@ fn repl_read(ally: Allocator) ![]const u8 {
         if (level == 0) break;
     }
 
-    return buf.toOwnedSlice();
+    return try context.addExternalSource("repl", buf.items);
 }
 
 fn repl(ally: Allocator, prelude: backend.Env) !void {
@@ -62,11 +65,10 @@ fn repl(ally: Allocator, prelude: backend.Env) !void {
 
     while (true) {
         const input = try repl_read(ally);
-        defer ally.free(input);
 
         // check for empty input (exit program)
         var is_empty: bool = true;
-        for (input) |ch| {
+        for (context.getSource(input)) |ch| {
             if (!std.ascii.isSpace(ch)) {
                 is_empty = false;
                 break;
@@ -76,7 +78,7 @@ fn repl(ally: Allocator, prelude: backend.Env) !void {
         if (is_empty) break;
 
         // eval and print
-        var result = try plumbing.execute(ally, &repl_env, "repl", input);
+        var result = try plumbing.execute(ally, &repl_env, input);
         defer result.deinit(ally);
 
         try stdout.print("{}\n", .{result});
@@ -151,7 +153,9 @@ fn fluent_tests(ally: Allocator, prelude: backend.Env) !void {
         try stdout.writeAll("\n");
 
         // run test
-        var result = plumbing.execute(ally, &env, "test", @"test") catch |e| {
+        const handle = try context.addExternalSource("test", @"test");
+
+        var result = plumbing.execute(ally, &env, handle) catch |e| {
             try stdout.print(
                 "{}test failed with {}{}:\n{s}\n\n",
                 .{&kz.Color{ .fg = .red }, e, &kz.Color{}, @"test"}
@@ -179,7 +183,7 @@ const Command = union(enum) {
         params: []const []const u8 = &.{},
     };
     const meta = util.EnumTable(Enum, Meta).init(.{
-        .{.help, Meta{ .desc = "" }},
+        .{.help, Meta{ .desc = "display this prompt" }},
         .{.repl, Meta{ .desc = "start interactive mode" }},
         .{.tests, Meta{ .desc = "run internal tests" }},
         .{.run, Meta{
@@ -218,27 +222,23 @@ fn print_help() @TypeOf(stdout).Error!void {
 }
 
 fn execute_file(ally: Allocator, prelude: backend.Env, path: []const u8) !void {
-    // open and read file
-    var file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+    // required backing stuff
+    const handle = try context.loadSource(path);
 
-    const text = try file.readToEndAlloc(ally, try file.getEndPos());
-    defer ally.free(text);
-
-    // execute
     var env = backend.Env.init(ally, &prelude);
     defer env.deinit();
 
+    // time execution
     const start_time = std.time.nanoTimestamp();
 
-    const res = try plumbing.execute(ally, &env, path, text);
+    const res = try plumbing.execute(ally, &env, handle);
     defer res.deinit(ally);
 
     const end_time = std.time.nanoTimestamp();
     const seconds = @intToFloat(f64, end_time - start_time) * 1e-9;
 
     try stdout.print(
-        "program returned: {}\nexecution finished in {:.6}s.",
+        "program returned: {}\nexecution finished in {d:.6}s.\n",
         .{res, seconds}
     );
 }
@@ -247,19 +247,29 @@ const CommandError = error {
     BadArgs,
 };
 
-fn read_args(ally: Allocator) ![][]const u8 {
+fn read_args(ally: Allocator) ![][]u8 {
     var arg_iter = try std.process.argsWithAllocator(ally);
     defer arg_iter.deinit();
 
-    var args = std.ArrayList([]const u8).init(ally);
-    while (arg_iter.next(ally)) |arg| try args.append((try arg)[0..]);
+    var args = std.ArrayList([]u8).init(ally);
+    while (arg_iter.next(ally)) |arg| {
+        const text = arg catch continue;
+        try args.append(try ally.dupe(u8, text[0..:0]));
+
+        ally.free(text);
+    }
 
     return args.toOwnedSlice();
 }
 
 fn parse_args(ally: Allocator) !Command {
     const args = try read_args(ally);
-    defer ally.free(args);
+    defer {
+        for (args) |arg| ally.free(arg);
+        ally.free(args);
+    }
+
+    if (args.len < 2) return CommandError.BadArgs;
 
     const tag = Command.tag_map.get(args[1]) orelse {
         return CommandError.BadArgs;
@@ -272,21 +282,25 @@ fn parse_args(ally: Allocator) !Command {
         .help => Command{ .help = {} },
         .repl => Command{ .repl = {} },
         .tests => Command{ .tests = {} },
-        .run => Command{ .run = args[2] },
+        .run => Command{ .run = try ally.dupe(u8, args[2]) },
     };
 }
 
 pub fn main() !void {
-    // var gpa = std.heap.GeneralPurposeAllocator(.{
-        // .stack_trace_frames = 1000,
-    // }){};
-    // defer _ = gpa.deinit();
-    // const ally = gpa.allocator();
-    const ally = std.heap.page_allocator;
+    // boilerplate stuff
+    var gpa = std.heap.GeneralPurposeAllocator(.{
+        .stack_trace_frames = 1000,
+    }){};
+    defer _ = gpa.deinit();
+    const ally = gpa.allocator();
+
+    context.init(ally);
+    defer context.deinit();
 
     var prelude = try backend.create_prelude(ally);
     defer prelude.deinit();
 
+    // the rest of the fucking owl
     const cmd = parse_args(ally) catch |e| err: {
         if (e == CommandError.BadArgs) {
             break :err Command{ .help = {} };
@@ -299,6 +313,9 @@ pub fn main() !void {
         .help => try print_help(),
         .repl => try repl(ally, prelude),
         .tests => try fluent_tests(ally, prelude),
-        .run => |path| try execute_file(ally, prelude, path),
+        .run => |path| {
+            try execute_file(ally, prelude, path);
+            ally.free(path);
+        }
     }
 }

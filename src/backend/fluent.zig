@@ -5,11 +5,9 @@
 const std = @import("std");
 const util = @import("../util/util.zig");
 const frontend = @import("../frontend.zig");
-const FlFile = @import("../file.zig");
 const Env = @import("env.zig");
 
 const Allocator = std.mem.Allocator;
-const Context = FlFile.Context;
 const Expr = frontend.Expr;
 
 /// flat type representation
@@ -87,6 +85,7 @@ pub const Type = union(FlatType) {
                 ally.free(func.params);
 
                 func.returns.deinit(ally);
+                ally.destroy(func.returns);
             },
             else => {}
         }

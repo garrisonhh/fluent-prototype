@@ -5,7 +5,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const frontend = @import("frontend.zig");
 const backend = @import("backend.zig");
-const FlFile = @import("file.zig");
+const context = @import("context.zig");
 
 const Allocator = std.mem.Allocator;
 const Env = backend.Env;
@@ -14,20 +14,21 @@ const Value = backend.Value;
 pub fn execute(
     ally: Allocator,
     env: *Env,
-    name: []const u8,
-    text: []const u8
+    handle: context.FileHandle,
 ) !Value {
-    // create context
-    var lfile = try FlFile.init(ally, name, text);
-    defer lfile.deinit(ally);
+    _ = ally;
+    _ = env;
 
-    var ctx = lfile.context(ally);
-    defer ctx.deinit();
+    try context.displayFile(handle);
+
+    return Value{ .unit = {} };
+
+    // @panic("TODO");
 
     // lex + parse
-    const program = try ctx.wrap_stage(frontend.parse(&ctx, ally));
-    defer program.deinit(ally);
+    // const program = try ctx.wrap_stage(frontend.parse(&ctx, ally));
+    // defer program.deinit(ally);
 
     // run
-    return try backend.run(ally, env, program);
+    // return try backend.run(ally, env, program);
 }

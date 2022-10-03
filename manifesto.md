@@ -16,24 +16,7 @@ combining compile time execution (CTE) with DSL-focused functional programming w
 
 ### more ML-like syntax
 
-lispy semantics with whitespace awareness:
-
-```
-// this:
-print (* (reduce + 0 [1 2 3]) 2)
-
-// is the same as this:
-print
-  * (reduce + 0 [1 2 3]) 2
-
-// is the same as this:
-print
-  *
-    reduce + 0 [1 2 3]
-    2
-```
-
-the important property of syntax for Fluent is that it preserves a strong relationship with the AST, so that code using Fluent's homoiconicity retains low cognitive overhead.
+lispy semantics with whitespace awareness. the important property of syntax for Fluent is that it preserves a strong relationship with the AST, so that code using Fluent's homoiconic features retains low cognitive overhead
 
 ### distinct and flow types
 

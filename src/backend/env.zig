@@ -60,13 +60,14 @@ fn deinit_bound(self: Self, bound: Bound) void {
     }
 }
 
-pub fn deinit(self: Self) void {
+pub fn deinit(self: *Self) void {
     // free symbols and deinit values
     var iter = self.map.iterator();
     while (iter.next()) |entry| {
         self.ally.free(entry.key_ptr.*);
         self.deinit_bound(entry.value_ptr.*);
     }
+    self.map.deinit();
 
     // deinit blocks
     if (self.parent == null) {
@@ -397,6 +398,7 @@ pub fn display(
         .{ .title = "type", .color = kz.Color{ .fg = .green } },
         .{ .title = "data", .fmt = "{s}" },
     }).init(self.ally, label_fmt, label_args);
+    defer table.deinit();
 
     // collect and order env's variables
     const EnvVar = Map.Unmanaged.Entry;
