@@ -10,7 +10,7 @@ const kz = @import("kritzler");
 
 const Allocator = std.mem.Allocator;
 
-/// all owned by FileStorage
+/// all fields owned by FileStorage
 const File = struct {
     name: []const u8,
     text: []const u8,
@@ -27,6 +27,8 @@ pub const FileHandle = struct {
 
 /// used to reference into source files
 pub const Loc = struct {
+    const Self = @This();
+
     comptime {
         std.debug.assert(@sizeOf(@This()) == 8);
     }
@@ -40,6 +42,34 @@ pub const Loc = struct {
     line: LineIndex,
     char: CharIndex,
     file: FileHandle,
+
+    pub fn init(file: FileHandle, line: usize, char: usize) Self {
+        return Self{
+            .file = file,
+            .line = @intCast(LineIndex, line),
+            .char = @intCast(CharIndex, char),
+        };
+    }
+
+    pub fn format(
+        self: Self,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype
+    ) @TypeOf(writer).Error!void {
+        _ = fmt;
+        _ = options;
+
+        const path = this.files.items[self.file.index].name;
+        const rel_path = std.fs.path.relative(this.ally, ".", path)
+                         catch unreachable;
+        defer this.ally.free(rel_path);
+
+        try writer.print(
+            "{s}:{}:{}",
+            .{rel_path, self.line + 1, self.char + 1}
+        );
+    }
 };
 
 const FileStorage = struct {
@@ -162,6 +192,10 @@ pub fn getSource(handle: FileHandle) []const u8 {
     return this.files.items[handle.index].text;
 }
 
+pub fn getLines(handle: FileHandle) []const []const u8 {
+    return this.files.items[handle.index].lines;
+}
+
 /// TODO remove; debugging
 pub fn displayFile(handle: FileHandle) !void {
     const file = this.files.items[handle.index];
@@ -192,3 +226,9 @@ pub fn displayFile(handle: FileHandle) !void {
 
     try canvas.flush(std.io.getStdOut().writer());
 }
+
+/// this error is used to signify that stack traces should be printed and the
+/// compiler should fail
+pub const FluentError = error { FluentError };
+
+// TODO pub fn addError {}

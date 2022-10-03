@@ -288,11 +288,12 @@ fn parse_args(ally: Allocator) !Command {
 
 pub fn main() !void {
     // boilerplate stuff
-    var gpa = std.heap.GeneralPurposeAllocator(.{
-        .stack_trace_frames = 1000,
-    }){};
-    defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    // var gpa = std.heap.GeneralPurposeAllocator(.{
+        // .stack_trace_frames = 1000,
+    // }){};
+    // defer _ = gpa.deinit();
+    // const ally = gpa.allocator();
+    const ally = std.heap.page_allocator;
 
     context.init(ally);
     defer context.deinit();

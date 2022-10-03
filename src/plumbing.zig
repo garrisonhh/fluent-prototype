@@ -16,10 +16,11 @@ pub fn execute(
     env: *Env,
     handle: context.FileHandle,
 ) !Value {
-    _ = ally;
     _ = env;
 
     try context.displayFile(handle);
+
+    try frontend.parse(ally, handle);
 
     return Value{ .unit = {} };
 
