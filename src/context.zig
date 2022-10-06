@@ -11,6 +11,8 @@ const util = @import("util/util.zig");
 
 const Allocator = std.mem.Allocator;
 
+const stderr = std.io.getStdErr().writer();
+
 /// this error is used to signify that the compiler should fail and the message
 /// tree should be displayed
 pub const FluentError = error { FluentError };
@@ -214,16 +216,21 @@ pub const Message = struct {
         note,
 
         err,
-        warning,
+        warn,
         log,
         debug,
 
-        const colors = util.EnumTable(@This(), kz.Color).init(.{
-            .{.err,     kz.Color{ .fg = .red     }},
-            .{.warning, kz.Color{ .fg = .magenta }},
-            .{.log,     kz.Color{ .fg = .cyan    }},
-            .{.debug,   kz.Color{ .fg = .green   }},
+        const meta = util.EnumTable(@This(), kz.Format).init(.{
+            .{.note,  kz.Format{                }},
+            .{.err,   kz.Format{ .fg = .red     }},
+            .{.warn,  kz.Format{ .fg = .magenta }},
+            .{.log,   kz.Format{ .fg = .cyan    }},
+            .{.debug, kz.Format{ .fg = .green   }},
         });
+
+        fn getFormat(self: @This()) kz.Format {
+            return @This().meta.get(self);
+        }
     };
 
     level: Level,
@@ -251,6 +258,31 @@ pub const Message = struct {
         text: []const u8
     ) Allocator.Error!*Self {
         try self.children.append(this.ally, Message.init(.note, loc, text));
+    }
+
+    fn draw(self: Self, ally: Allocator) Allocator.Error!kz.Texture {
+        // message
+        const text_tex = try kz.Texture.from(ally, kz.Format{}, self.text);
+        defer text_tex.deinit(ally);
+
+        const msg_tex = msg: {
+            if (self.level == .note) {
+                break :msg try text_tex.clone(ally);
+            }
+
+            const tag = @tagName(self.level);
+            var tag_tex = try kz.Texture.init(ally, .{tag.len + 4, 1});
+            defer tag_tex.deinit(ally);
+
+            tag_tex.set(.{0, 0}, kz.Format{}, '[');
+            tag_tex.write(.{1, 0}, self.level.getFormat(), tag);
+            tag_tex.write(.{tag.len + 1, 0}, kz.Format{}, "]: ");
+
+            break :msg text_tex.slap(ally, &tag_tex, .left, .center);
+        };
+        return msg_tex; // defer msg_tex.deinit(ally);
+
+        // TODO notes
     }
 };
 
@@ -280,7 +312,38 @@ const MessageTree = struct {
             res.value_ptr.* = std.ArrayListUnmanaged(Message){};
         }
 
-        return try res.value_ptr.addOne();
+        return try res.value_ptr.addOne(this.ally);
+    }
+
+    fn draw(self: Self, ally: Allocator) Allocator.Error!kz.Texture {
+        var tex = try kz.Texture.init(ally, .{0, 0});
+
+        var lists = self.map.valueIterator();
+        while (lists.next()) |list| {
+            for (list.items) |msg| {
+                const msg_tex = try msg.draw(ally);
+                const new_tex = try tex.slap(
+                    ally,
+                    &msg_tex,
+                    .bottom,
+                    .close
+                );
+
+                msg_tex.deinit(ally);
+                tex.deinit(ally);
+
+                tex = new_tex;
+            }
+        }
+
+        return tex;
+    }
+
+    fn clear(self: *Self) void {
+        var lists = self.map.valueIterator();
+        while (lists.next()) |list| list.shrinkAndFree(this.ally, 0);
+
+        self.map.clearRetainingCapacity();
     }
 };
 
@@ -290,12 +353,19 @@ pub fn postMessage(
     loc: Loc,
     text: []const u8
 ) Allocator.Error!*Message {
-    const msg_ptr = try this.messages.allocMessage();
+    const msg_ptr = try this.messages.allocMessage(loc.file);
     msg_ptr.* = Message.init(level, loc, text);
 
     return msg_ptr;
 }
 
-pub fn displayMessages() void {
-    @panic("TODO displayMessages");
+pub fn flushMessages() (Allocator.Error || @TypeOf(stderr).Error)!void {
+    const tmp_ally = this.arena.allocator();
+
+    const tex = try this.messages.draw(tmp_ally);
+    defer tex.deinit(tmp_ally);
+    defer this.messages.clear();
+
+    try tex.display(stderr);
+
 }
