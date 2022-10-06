@@ -207,37 +207,6 @@ pub fn getLines(handle: FileHandle) []const []const u8 {
     return this.files.items[handle.index].lines;
 }
 
-/// TODO remove; debugging
-pub fn displayFile(handle: FileHandle) !void {
-    const file = this.files.items[handle.index];
-
-    var canvas = kz.Canvas.init(this.ally);
-    defer canvas.deinit();
-
-    try canvas.scribble(
-        .{0, -1},
-        kz.Color{ .fg = .cyan },
-        "file \"{s}\":",
-        .{file.name}
-    );
-
-    for (file.lines) |line, i| {
-        const txt = try canvas.print("{} | ", .{i + 1});
-        const y = @intCast(isize, i);
-
-        try canvas.scribble(
-            .{-@intCast(isize, txt.len), y},
-            kz.Color{ .fmt = .bold },
-            "{s}",
-            .{txt}
-        );
-
-        try canvas.scribble(.{0, y}, kz.Color{}, "{s}", .{line});
-    }
-
-    try canvas.flush(std.io.getStdOut().writer());
-}
-
 pub const Message = struct {
     const Self = @This();
 
@@ -296,8 +265,8 @@ const MessageTree = struct {
 
     fn deinit(self: *Self) void {
         var list_iter = self.map.valueIterator();
-        while (list_iter.next()) |*list| {
-            for (list) |*msg| msg.deinit();
+        while (list_iter.next()) |list| {
+            for (list.items) |*msg| msg.deinit();
             list.deinit(this.ally);
         }
 
@@ -317,7 +286,7 @@ const MessageTree = struct {
 
 /// generates a new message which may have sub-messages
 pub fn postMessage(
-    level: Level,
+    level: Message.Level,
     loc: Loc,
     text: []const u8
 ) Allocator.Error!*Message {

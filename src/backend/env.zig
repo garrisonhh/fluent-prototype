@@ -393,11 +393,12 @@ pub fn display(
     comptime label_fmt: []const u8,
     label_args: anytype
 ) !void {
-    var table = try kz.Table(&.{
-        .{ .title = "symbol", .fmt = "{s}", .color = kz.Color{ .fg = .red } },
-        .{ .title = "type", .color = kz.Color{ .fg = .green } },
-        .{ .title = "data", .fmt = "{s}" },
-    }).init(self.ally, label_fmt, label_args);
+    // TODO reimplement in kz table
+    _ = label_fmt;
+    _ = label_args;
+
+    const headers = &.{"symbol", "type", "data"};
+    var table = kz.forms.Table(headers).init(self.ally);
     defer table.deinit();
 
     // collect and order env's variables
@@ -420,19 +421,31 @@ pub fn display(
     std.sort.sort(EnvVar, env_vars, {}, Closure.ev_less_than);
 
     // add to table and flush
-    for (env_vars) |ev| {
-        const symbol = ev.key_ptr.*;
-        const bound = ev.value_ptr;
+    const tmp_ally = table.tempAllocator();
+    const allocPrint = std.fmt.allocPrint;
 
-        const stype = &bound.stype;
-        const data = switch (bound.data) {
-            .local => |index| try table.print("local {}", .{index}),
-            .value => |value| try table.print("{}", .{value}),
+    for (env_vars) |ev| {
+        const bound = ev.value_ptr;
+        const text = switch (bound.data) {
+            .local => |index| try allocPrint(tmp_ally, "local {}", .{index}),
+            .value => |value| try allocPrint(tmp_ally, "{}", .{value}),
             .temp => "temp",
         };
 
-        try table.add_row(.{ symbol, stype, data });
+        try table.addRow(.{
+            try kz.Texture.from(
+                tmp_ally,
+                kz.Format{ .fg = .red },
+                ev.key_ptr.*
+            ),
+            try kz.Texture.from(
+                tmp_ally,
+                kz.Format{ .fg = .green },
+                try allocPrint(tmp_ally, "{}", .{bound.stype})
+            ),
+            try kz.Texture.from(tmp_ally, kz.Format{}, text)
+        });
     }
 
-    try table.flush(stdout);
+    try table.display(stdout);
 }

@@ -18,8 +18,6 @@ pub fn execute(
 ) !Value {
     _ = env;
 
-    try context.displayFile(handle);
-
     try frontend.parse(ally, handle);
 
     return Value{ .unit = {} };

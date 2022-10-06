@@ -144,7 +144,7 @@ fn fluent_tests(ally: Allocator, prelude: backend.Env) !void {
         // print test input
         try stdout.print(
             "{}test{}:\n",
-            .{&kz.Color{ .fg = .cyan }, &kz.Color{}}
+            .{&kz.Format{ .fg = .cyan }, &kz.Format{}}
         );
 
         var lines = std.mem.tokenize(u8, @"test", "\n");
@@ -158,7 +158,7 @@ fn fluent_tests(ally: Allocator, prelude: backend.Env) !void {
         var result = plumbing.execute(ally, &env, handle) catch |e| {
             try stdout.print(
                 "{}test failed with {}{}:\n{s}\n\n",
-                .{&kz.Color{ .fg = .red }, e, &kz.Color{}, @"test"}
+                .{&kz.Format{ .fg = .red }, e, &kz.Format{}, @"test"}
             );
             continue;
         };
