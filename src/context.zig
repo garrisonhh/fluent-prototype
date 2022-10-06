@@ -7,8 +7,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const kz = @import("kritzler");
+const util = @import("util/util.zig");
 
 const Allocator = std.mem.Allocator;
+
+/// this error is used to signify that the compiler should fail and the message
+/// tree should be displayed
+pub const FluentError = error { FluentError };
 
 /// all fields owned by FileStorage
 const File = struct {
@@ -61,6 +66,7 @@ pub const Loc = struct {
         _ = options;
 
         const path = this.files.items[self.file.index].name;
+        // this should never fail since the path is verified on loadSource()
         const rel_path = std.fs.path.relative(this.ally, ".", path)
                          catch unreachable;
         defer this.ally.free(rel_path);
@@ -72,32 +78,37 @@ pub const Loc = struct {
     }
 };
 
-const FileStorage = struct {
+const GlobalContext = struct {
     const Self = @This();
-    const Files = std.ArrayListUnmanaged(File);
 
     ally: Allocator,
-    text_arena: std.heap.ArenaAllocator,
-    files: Files,
+    // arena is for stuff that is only written to once in the whole program,
+    // which is *most* of the file and message stuff
+    arena: std.heap.ArenaAllocator,
 
-    fn text_ally(self: *Self) Allocator {
-        return self.text_arena.allocator();
+    files: std.ArrayListUnmanaged(File),
+    messages: MessageTree,
+
+    fn tmp_ally(self: *Self) Allocator {
+        return self.arena.allocator();
     }
 };
 
-var this: FileStorage = undefined;
+var this: GlobalContext = undefined;
 
 pub fn init(ally: Allocator) void {
-    this = FileStorage{
+    this = GlobalContext{
         .ally = ally,
-        .text_arena = std.heap.ArenaAllocator.init(ally),
+        .arena = std.heap.ArenaAllocator.init(ally),
         .files = .{},
+        .messages = .{},
     };
 }
 
 pub fn deinit() void {
-    this.text_arena.deinit();
     this.files.deinit(this.ally);
+    this.messages.deinit();
+    this.arena.deinit();
 }
 
 pub const AddSourceError = error {
@@ -108,7 +119,7 @@ pub const AddSourceError = error {
 
 /// expects `this` to own both params
 fn addSource(name: []const u8, text: []const u8) AddSourceError!FileHandle {
-    const ally = this.text_ally();
+    const ally = this.tmp_ally();
 
     // create handle
     if (this.files.items.len > FileHandle.MAX_FILES) {
@@ -160,7 +171,7 @@ pub fn addExternalSource(
     name: []const u8,
     text: []const u8
 ) AddSourceError!FileHandle {
-    const ally = this.text_ally();
+    const ally = this.tmp_ally();
 
     return try addSource(
         try ally.dupe(u8, name),
@@ -175,7 +186,7 @@ pub const LoadSourceError =
   || std.fs.File.OpenError;
 
 pub fn loadSource(path: []const u8) LoadSourceError!FileHandle {
-    const ally = this.text_ally();
+    const ally = this.tmp_ally();
 
     // get the path and file
     const abs_path = try std.fs.cwd().realpathAlloc(ally, path);
@@ -227,8 +238,95 @@ pub fn displayFile(handle: FileHandle) !void {
     try canvas.flush(std.io.getStdOut().writer());
 }
 
-/// this error is used to signify that stack traces should be printed and the
-/// compiler should fail
-pub const FluentError = error { FluentError };
+pub const Message = struct {
+    const Self = @This();
 
-// TODO pub fn addError {}
+    const Level = enum {
+        note,
+
+        err,
+        warning,
+        log,
+        debug,
+
+        const colors = util.EnumTable(@This(), kz.Color).init(.{
+            .{.err,     kz.Color{ .fg = .red     }},
+            .{.warning, kz.Color{ .fg = .magenta }},
+            .{.log,     kz.Color{ .fg = .cyan    }},
+            .{.debug,   kz.Color{ .fg = .green   }},
+        });
+    };
+
+    level: Level,
+    loc: ?Loc,
+    text: []const u8,
+    children: std.ArrayListUnmanaged(Self),
+
+    fn init(level: Level, loc: ?Loc, text: []const u8) Self {
+        return Self{
+            .level = level,
+            .loc = loc,
+            .text = text,
+            .children = .{}
+        };
+    }
+
+    fn deinit(self: *Self) void {
+        self.children.deinit(this.ally);
+    }
+
+    /// use this to create cascading messages
+    pub fn annotate(
+        self: *Self,
+        loc: ?Loc,
+        text: []const u8
+    ) Allocator.Error!*Self {
+        try self.children.append(this.ally, Message.init(.note, loc, text));
+    }
+};
+
+/// container for all messages in the global context
+const MessageTree = struct {
+    const Self = @This();
+
+    map: std.AutoHashMapUnmanaged(
+        FileHandle,
+        std.ArrayListUnmanaged(Message)
+    ) = .{},
+
+    fn deinit(self: *Self) void {
+        var list_iter = self.map.valueIterator();
+        while (list_iter.next()) |*list| {
+            for (list) |*msg| msg.deinit();
+            list.deinit(this.ally);
+        }
+
+        self.map.deinit(this.ally);
+    }
+
+    fn allocMessage(self: *Self, file: FileHandle) Allocator.Error!*Message {
+        const res = try self.map.getOrPut(this.ally, file);
+
+        if (!res.found_existing) {
+            res.value_ptr.* = std.ArrayListUnmanaged(Message){};
+        }
+
+        return try res.value_ptr.addOne();
+    }
+};
+
+/// generates a new message which may have sub-messages
+pub fn postMessage(
+    level: Level,
+    loc: Loc,
+    text: []const u8
+) Allocator.Error!*Message {
+    const msg_ptr = try this.messages.allocMessage();
+    msg_ptr.* = Message.init(level, loc, text);
+
+    return msg_ptr;
+}
+
+pub fn displayMessages() void {
+    @panic("TODO displayMessages");
+}
