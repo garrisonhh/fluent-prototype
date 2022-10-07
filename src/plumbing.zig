@@ -20,11 +20,6 @@ pub fn execute(
 
     try frontend.parse(ally, handle);
 
-    _ = try context.postMessage(
-        .err,
-        context.Loc.init(handle, 0, 0),
-        "this is an error"
-    );
     try context.flushMessages();
 
     return Value{ .unit = {} };

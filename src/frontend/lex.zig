@@ -124,14 +124,14 @@ pub fn tokenize(ally: Allocator, handle: FileHandle) TokenizeError![]Token {
 
         // indentation awareness
         try tokens.append(Token{
-            .loc = Loc.init(handle, line_idx, i),
+            .loc = Loc.init(handle, line_idx, i, 0),
             .tag = .line_start,
             .slice = line[i..i]
         });
 
         while (at(line, i) == @as(u8, ' ')) : (i += 1) {
             try tokens.append(Token{
-                .loc = Loc.init(handle, line_idx, i),
+                .loc = Loc.init(handle, line_idx, i, 1),
                 .tag = .indent,
                 .slice = line[i..i + 1]
             });
@@ -159,7 +159,7 @@ pub fn tokenize(ally: Allocator, handle: FileHandle) TokenizeError![]Token {
                     }
 
                     try tokens.append(Token{
-                        .loc = Loc.init(handle, line_idx, start),
+                        .loc = Loc.init(handle, line_idx, start, i - start),
                         .tag = if (start_class == .digit) .number else .symbol,
                         .slice = line[start..i]
                     });
@@ -172,7 +172,7 @@ pub fn tokenize(ally: Allocator, handle: FileHandle) TokenizeError![]Token {
                 .lparen, .rparen, .lbracket, .rbracket, .comma, .colon,
                     => |class| {
                     try tokens.append(Token{
-                        .loc = Loc.init(handle, line_idx, i),
+                        .loc = Loc.init(handle, line_idx, i, 1),
                         .tag = switch (class) {
                             .lparen => .lparen,
                             .rparen => .rparen,

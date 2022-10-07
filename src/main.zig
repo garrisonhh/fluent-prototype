@@ -56,7 +56,7 @@ fn repl_read(ally: Allocator) !context.FileHandle {
         if (level == 0) break;
     }
 
-    return try context.addExternalSource("repl", buf.items);
+    return context.addExternalSource("repl", buf.items);
 }
 
 fn repl(ally: Allocator, prelude: backend.Env) !void {
@@ -78,7 +78,13 @@ fn repl(ally: Allocator, prelude: backend.Env) !void {
         if (is_empty) break;
 
         // eval and print
-        var result = try plumbing.execute(ally, &repl_env, input);
+        var result = plumbing.execute(ally, &repl_env, input) catch |e| {
+            if (e == error.FluentError) {
+                continue;
+            } else {
+                return e;
+            }
+        };
         defer result.deinit(ally);
 
         try stdout.print("{}\n", .{result});
@@ -231,7 +237,14 @@ fn execute_file(ally: Allocator, prelude: backend.Env, path: []const u8) !void {
     // time execution
     const start_time = std.time.nanoTimestamp();
 
-    const res = try plumbing.execute(ally, &env, handle);
+    const res = plumbing.execute(ally, &env, handle) catch |e| {
+        if (e == error.FluentError) {
+            try stdout.print("execution failed.\n", .{});
+            return;
+        } else {
+            return e;
+        }
+    };
     defer res.deinit(ally);
 
     const end_time = std.time.nanoTimestamp();
