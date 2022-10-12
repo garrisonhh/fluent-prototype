@@ -12,7 +12,7 @@ pub fn build(b: *std.build.Builder) void {
 
     // linenoise (placeholder until static library linking gets fixed)
     exe.addCSourceFile("lib/linenoise/linenoise.c", &.{""});
-    exe.addIncludeDir("lib/linenoise");
+    exe.addIncludePath("lib/linenoise");
 
     // packages
     exe.addPackagePath("kritzler", "lib/kritzler/kritzler.zig");

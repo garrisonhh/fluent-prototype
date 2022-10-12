@@ -60,7 +60,6 @@ pub const Token = struct {
     const Self = @This();
 
     const Tag = enum {
-        line_start,
         indent,
 
         // literal-ish
@@ -103,16 +102,16 @@ fn at(text: []const u8, index: usize) ?u8 {
 }
 
 pub const TokenizeError =
-     Allocator.Error
-  || context.FluentError;
+    Allocator.Error
+ || context.FluentError;
 
 /// returns array of tokens allocated on ally
 ///
 /// may generate a FluentError
-pub fn tokenize(ally: Allocator, handle: FileHandle) TokenizeError![]Token {
+pub fn tokenize(ally: Allocator, file: FileHandle) TokenizeError![]Token {
     var tokens = std.ArrayList(Token).init(ally);
 
-    for (context.getLines(handle)) |commented_line, line_idx| {
+    for (file.getLines()) |commented_line, line_idx| {
         var i: usize = 0;
 
         // remove comments
@@ -123,17 +122,16 @@ pub fn tokenize(ally: Allocator, handle: FileHandle) TokenizeError![]Token {
         i = 0;
 
         // indentation awareness
-        try tokens.append(Token{
-            .loc = Loc.init(handle, line_idx, i, 0),
-            .tag = .line_start,
-            .slice = line[i..i]
-        });
-
+        var indent_len: usize = 0;
         while (at(line, i) == @as(u8, ' ')) : (i += 1) {
+            indent_len += 1;
+        }
+
+        if (i < line.len) {
             try tokens.append(Token{
-                .loc = Loc.init(handle, line_idx, i, 1),
+                .loc = Loc.init(file, line_idx, 0, indent_len),
                 .tag = .indent,
-                .slice = line[i..i + 1]
+                .slice = line[0..indent_len]
             });
         }
 
@@ -145,8 +143,9 @@ pub fn tokenize(ally: Allocator, handle: FileHandle) TokenizeError![]Token {
             }) {
                 .space => i += 1,
 
-                // number
+                // number or symbol
                 .digit, .lexical => |start_class| {
+                    // find char extent
                     const start = i;
                     i += 1;
 
@@ -158,9 +157,23 @@ pub fn tokenize(ally: Allocator, handle: FileHandle) TokenizeError![]Token {
                         if (!class.in(&.{ .lexical, .digit })) break;
                     }
 
+                    // detect tag
+                    var tag: Token.Tag = .symbol;
+                    if (start_class == .digit) {
+                        tag = .number;
+                    } else if (at(line, start).? == '-') maybe_neg: {
+                        const next_ch = at(line, start + 1) orelse {
+                            break :maybe_neg;
+                        };
+
+                        if (CharClass.of(next_ch) catch unreachable == .digit) {
+                            tag = .number;
+                        }
+                    }
+
                     try tokens.append(Token{
-                        .loc = Loc.init(handle, line_idx, start, i - start),
-                        .tag = if (start_class == .digit) .number else .symbol,
+                        .loc = Loc.init(file, line_idx, start, i - start),
+                        .tag = tag,
                         .slice = line[start..i]
                     });
                 },
@@ -172,7 +185,7 @@ pub fn tokenize(ally: Allocator, handle: FileHandle) TokenizeError![]Token {
                 .lparen, .rparen, .lbracket, .rbracket, .comma, .colon,
                     => |class| {
                     try tokens.append(Token{
-                        .loc = Loc.init(handle, line_idx, i, 1),
+                        .loc = Loc.init(file, line_idx, i, 1),
                         .tag = switch (class) {
                             .lparen => .lparen,
                             .rparen => .rparen,

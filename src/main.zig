@@ -33,7 +33,7 @@ fn repl_read(ally: Allocator) !context.FileHandle {
         defer ally.free(prompt);
 
         // get text with linenoise
-        const raw_line: ?[*:0]u8 = c.linenoise(prompt);
+        const raw_line: ?[*:0]u8 = c.linenoise(prompt.ptr);
         defer c.linenoiseFree(raw_line);
 
         const line =
@@ -68,7 +68,7 @@ fn repl(ally: Allocator, prelude: backend.Env) !void {
 
         // check for empty input (exit program)
         var is_empty: bool = true;
-        for (context.getSource(input)) |ch| {
+        for (input.getSource()) |ch| {
             if (!std.ascii.isSpace(ch)) {
                 is_empty = false;
                 break;
@@ -78,16 +78,11 @@ fn repl(ally: Allocator, prelude: backend.Env) !void {
         if (is_empty) break;
 
         // eval and print
-        var result = plumbing.execute(ally, &repl_env, input) catch |e| {
-            if (e == error.FluentError) {
-                continue;
-            } else {
-                return e;
-            }
-        };
-        defer result.deinit(ally);
+        if (try plumbing.execute(ally, &repl_env, input)) |result| {
+            defer result.deinit(ally);
 
-        try stdout.print("{}\n", .{result});
+            try stdout.print("{}\n", .{result});
+        }
     }
 }
 
@@ -99,46 +94,53 @@ fn fluent_tests(ally: Allocator, prelude: backend.Env) !void {
         "0o777",
         "true",
         "false",
-        "[1 -2 3]",
+        "[1, -2, 3]",
 
         // math
-        "(/ (+ 45 69) 2)",
+        \\/ (+ 45 69)
+        \\  2
+        ,
 
         // logic
-        "(and (or true false) (not false))",
-        "(or false (not true))",
+        \\and
+        \\  or true false
+        \\  not false
+        ,
+        \\or false
+        \\  not true
+        ,
 
         \\// function type
-        \\(def int-to-int Type
-        \\  (Fn [Int] Int))
+        \\def int-to-int Type
+        \\    Fn [Int] Int
         ,
 
         \\// interreliant defs
-        \\(def c Int (+ a b))
-        \\(def a Int (* 34 56))
-        \\(def b Int (+ a 1))
+        \\def c Int (+ a b)
+        \\def a Int (* 34 56)
+        \\def b Int (+ a 1)
         \\c
         ,
 
         \\// out-of-order defs
-        \\(def a T (* 10 10))
-        \\(def b X (+ a 1))
-        \\(def X Type T)
-        \\(def T Type Int)
+        \\def a T (* 10 10)
+        \\def b X (+ a 1)
+        \\def X Type T
+        \\def T Type Int
         \\b
         ,
 
         \\// simple function
-        \\(def my-add (Fn [Int Int] Int)
-        \\  (fn [a b] (+ a b)))
+        \\def my-add (Fn [Int, Int] Int)
+        \\    fn [a, b] (+ a b)
         \\
-        \\(my-add 45 56)
+        \\my-add 45 56
         ,
 
         \\// conditional
         \\[
-        \\  (if true 1 0)
-        \\  (if false 1 0)
+        \\  (if true 1 0),
+        \\  (if false 1 0),
         \\]
         ,
     };
@@ -161,16 +163,19 @@ fn fluent_tests(ally: Allocator, prelude: backend.Env) !void {
         // run test
         const handle = try context.addExternalSource("test", @"test");
 
-        var result = plumbing.execute(ally, &env, handle) catch |e| {
+        var maybe_result = plumbing.execute(ally, &env, handle) catch |e| {
             try stdout.print(
                 "{}test failed with {}{}:\n{s}\n\n",
                 .{&kz.Format{ .fg = .red }, e, &kz.Format{}, @"test"}
             );
             continue;
         };
-        defer result.deinit(ally);
 
-        try stdout.print("{}\n\n", .{result});
+        if (maybe_result) |result| {
+            defer result.deinit(ally);
+
+            try stdout.print("{}\n\n", .{result});
+        }
     }
 }
 
@@ -229,7 +234,12 @@ fn print_help() @TypeOf(stdout).Error!void {
 
 fn execute_file(ally: Allocator, prelude: backend.Env, path: []const u8) !void {
     // required backing stuff
-    const handle = try context.loadSource(path);
+    const handle = context.loadSource(path) catch |e| {
+        if (e == error.FileNotFound) {
+            try stderr.print("could not find file at '{s}'.\n", .{path});
+            return;
+        } else return e;
+    };
 
     var env = backend.Env.init(ally, &prelude);
     defer env.deinit();
@@ -237,13 +247,9 @@ fn execute_file(ally: Allocator, prelude: backend.Env, path: []const u8) !void {
     // time execution
     const start_time = std.time.nanoTimestamp();
 
-    const res = plumbing.execute(ally, &env, handle) catch |e| {
-        if (e == error.FluentError) {
-            try stdout.print("execution failed.\n", .{});
-            return;
-        } else {
-            return e;
-        }
+    const res = (try plumbing.execute(ally, &env, handle)) orelse {
+        try stdout.print("execution failed.\n", .{});
+        return;
     };
     defer res.deinit(ally);
 
@@ -251,7 +257,7 @@ fn execute_file(ally: Allocator, prelude: backend.Env, path: []const u8) !void {
     const seconds = @intToFloat(f64, end_time - start_time) * 1e-9;
 
     try stdout.print(
-        "program returned: {}\nexecution finished in {d:.6}s.\n",
+        "program returned: {}\nexecution succeeded in {d:.6}s.\n",
         .{res, seconds}
     );
 }
@@ -265,11 +271,8 @@ fn read_args(ally: Allocator) ![][]u8 {
     defer arg_iter.deinit();
 
     var args = std.ArrayList([]u8).init(ally);
-    while (arg_iter.next(ally)) |arg| {
-        const text = arg catch continue;
-        try args.append(try ally.dupe(u8, text[0..:0]));
-
-        ally.free(text);
+    while (arg_iter.next()) |arg| {
+        try args.append(try ally.dupe(u8, arg[0..:0]));
     }
 
     return args.toOwnedSlice();

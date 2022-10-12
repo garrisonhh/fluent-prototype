@@ -1,2 +1,2 @@
 pub const AstExpr = @import("frontend/expr.zig");
-usingnamespace @import("frontend/parse.zig");
+pub usingnamespace @import("frontend/parse.zig");

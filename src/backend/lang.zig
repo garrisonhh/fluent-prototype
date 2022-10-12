@@ -111,7 +111,5 @@ pub fn create_prelude(ally: Allocator) !Env {
     try define_op(&prelude, "=", bin_icond_type, .ieq);
     try define_op(&prelude, "<", bin_icond_type, .ilt);
 
-    try prelude.display("prelude", .{});
-
     return prelude;
 }

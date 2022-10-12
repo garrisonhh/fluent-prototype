@@ -11,16 +11,33 @@ const Allocator = std.mem.Allocator;
 const Env = backend.Env;
 const Value = backend.Value;
 
+const stdout = std.io.getStdOut().writer();
+
 pub fn execute(
     ally: Allocator,
     env: *Env,
     handle: context.FileHandle,
-) !Value {
+) !?Value {
     _ = env;
 
-    try frontend.parse(ally, handle);
+    // frontend
+    const ast = frontend.parse(ally, handle) catch {
+        try context.flushMessages();
+        return null;
+    };
+    defer ast.deinit(ally);
+
+    {
+        const tex = try ast.render(ally);
+        defer tex.deinit(ally);
+
+        try stdout.print("[Parsed AST]\n", .{});
+        try tex.display(stdout);
+    }
 
     try context.flushMessages();
+
+    // TODO connect to backend
 
     return Value{ .unit = {} };
 

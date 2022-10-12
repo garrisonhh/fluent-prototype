@@ -17,21 +17,6 @@ const stderr = std.io.getStdErr().writer();
 /// tree should be displayed
 pub const FluentError = error { FluentError };
 
-/// given an error union from a function which contains FluentError, this
-/// flushes messages if FluentError is returned.
-pub fn wrap(value: anytype) t: {
-    const info = @typeInfo(@TypeOf(value)).ErrorUnion;
-    const flush_info = @typeInfo(@TypeOf(flushMessages)).Fn;
-    const flush_err = @typeInfo(flush_info.return_type.?).ErrorUnion.error_set;
-    break :t (info.error_set || flush_err)!info.payload;
-} {
-    _ = value catch |e| if (e == error.FluentError) {
-        try flushMessages();
-    };
-
-    return try value;
-}
-
 /// all fields owned by FileStorage
 const File = struct {
     name: []const u8,
@@ -41,15 +26,24 @@ const File = struct {
 
 /// index into this.files
 pub const FileHandle = struct {
+    const Self = @This();
     const Index = u32;
-    const MAX_FILES = std.math.maxInt(Index);
 
     index: Index,
+
+    pub fn getSource(self: Self) []const u8 {
+        return this.files.items[self.index].text;
+    }
+
+    pub fn getLines(self: Self) []const []const u8 {
+        return this.files.items[self.index].lines;
+    }
 };
 
 /// used to reference into source files
 pub const Loc = struct {
     const Self = @This();
+    const CharIndex = u32;
 
     comptime {
         std.debug.assert(@sizeOf(Self) <= 16);
@@ -60,8 +54,8 @@ pub const Loc = struct {
     /// character span relative to the line
     /// stored zero-indexed
     span: struct {
-        start: u32,
-        len: u32,
+        start: CharIndex,
+        len: CharIndex,
     },
     file: FileHandle,
 
@@ -71,6 +65,8 @@ pub const Loc = struct {
         char_start: usize,
         char_len: usize,
     ) Self {
+        std.debug.assert(char_start + char_len <= file.getLines()[line].len);
+
         return Self{
             .file = file,
             .line = @intCast(u32, line),
@@ -79,6 +75,20 @@ pub const Loc = struct {
                 .len = @intCast(u32, char_len),
             }
         };
+    }
+
+    /// returns a loc that represents the beginning of this loc
+    pub fn beginning(self: Self) Self {
+        return Self{
+            .line = self.line,
+            .span = .{ .start = self.span.start, .len = 0 },
+            .file = self.file
+        };
+    }
+
+    pub fn getSlice(self: Self) []const u8 {
+        const start = self.span.start;
+        return self.file.getLines()[self.line][start..start + self.span.len];
     }
 
     pub fn format(
@@ -148,6 +158,10 @@ pub fn deinit() void {
     this.arena.deinit();
 }
 
+pub fn tempAlly() Allocator {
+    return this.arena.allocator();
+}
+
 /// expects `this` to own both params
 fn addSource(name: []const u8, text: []const u8) Allocator.Error!FileHandle {
     const ally = this.tmp_ally();
@@ -212,17 +226,10 @@ pub fn loadSource(path: []const u8) LoadSourceError!FileHandle {
     defer fs_file.close();
 
     // read and add to storage
-    const text = try fs_file.readToEndAlloc(ally, std.math.maxInt(u64));
+    const max_bytes = std.math.maxInt(Loc.CharIndex);
+    const text = try fs_file.readToEndAlloc(ally, max_bytes);
 
     return try addSource(abs_path, text);
-}
-
-pub fn getSource(handle: FileHandle) []const u8 {
-    return this.files.items[handle.index].text;
-}
-
-pub fn getLines(handle: FileHandle) []const []const u8 {
-    return this.files.items[handle.index].lines;
 }
 
 pub const Message = struct {
@@ -237,10 +244,10 @@ pub const Message = struct {
         debug,
 
         const meta = util.EnumTable(@This(), kz.Format).init(.{
-            .{.note,  kz.Format{                }},
+            .{.note,  kz.Format{ .fg = .cyan    }},
             .{.err,   kz.Format{ .fg = .red     }},
             .{.warn,  kz.Format{ .fg = .magenta }},
-            .{.log,   kz.Format{ .fg = .cyan    }},
+            .{.log,   kz.Format{                }},
             .{.debug, kz.Format{ .fg = .green   }},
         });
 
@@ -273,7 +280,10 @@ pub const Message = struct {
         loc: ?Loc,
         text: []const u8
     ) Allocator.Error!*Self {
-        try self.children.append(this.ally, Message.init(.note, loc, text));
+        const msg_ptr = try self.children.addOne(this.ally);
+        msg_ptr.* = Message.init(.note, loc, text);
+
+        return msg_ptr;
     }
 
     fn render(self: Self, ally: Allocator) Allocator.Error!kz.Texture {
@@ -282,7 +292,7 @@ pub const Message = struct {
         defer text_tex.deinit(ally);
 
         // text + level label
-        const labeled_tex = if (self.level != .note) msg: {
+        const labeled_tex = msg: {
             const tag = @tagName(self.level);
             var tag_tex = try kz.Texture.init(ally, .{tag.len + 3, 1});
             defer tag_tex.deinit(ally);
@@ -291,38 +301,30 @@ pub const Message = struct {
             tag_tex.write(.{1, 0}, self.level.getFormat(), tag);
             tag_tex.write(.{tag.len + 1, 0}, kz.Format{}, "] ");
 
-            break :msg try text_tex.slap(ally, &tag_tex, .left, .center);
-        } else try text_tex.clone(ally);
+            break :msg try text_tex.slap(ally, tag_tex, .left, .close);
+        };
         defer labeled_tex.deinit(ally);
 
-        // contextual location
-        const located_tex = if (self.loc) |loc| locate: {
+        // render with contextual location
+        var rendered = if (self.loc) |loc| locate: {
             const faint_fmt = kz.Format{ .special = .faint };
 
             // `loc` header
-            const header_tex = try kz.Texture.print(
-                ally,
-                faint_fmt,
-                "{}:",
-                .{loc}
-            );
+            const header_tex =
+                try kz.Texture.print(ally, faint_fmt, "{}", .{loc});
             defer header_tex.deinit(ally);
 
             // line with line number
-            const line_num_tex = try kz.Texture.print(
-                ally,
-                faint_fmt,
-                "{} | ",
-                .{loc.line + 1}
-            );
+            const line_num_tex =
+                try kz.Texture.print(ally, faint_fmt, "{} | ", .{loc.line + 1});
             defer line_num_tex.deinit(ally);
 
-            const line = getLines(loc.file)[loc.line];
+            const line = loc.file.getLines()[loc.line];
             const line_tex = try kz.Texture.from(ally, kz.Format{}, line);
             defer line_tex.deinit(ally);
 
             const numbered_tex =
-                try line_tex.slap(ally, &line_num_tex, .left, .close);
+                try line_tex.slap(ally, line_num_tex, .left, .close);
             defer numbered_tex.deinit(ally);
 
             // span highlighting (arrow or underline)
@@ -337,25 +339,38 @@ pub const Message = struct {
                 ul_tex.fill(hl_fmt, '~');
 
                 break :underline
-                    try numbered_tex.unify(ally, &ul_tex, .{hl_to_x, 1});
+                    try numbered_tex.unify(ally, ul_tex, .{hl_to_x, 1});
             } else arrow: {
                 const arrow_tex = try kz.Texture.from(ally, hl_fmt, "v");
                 defer arrow_tex.deinit(ally);
 
                 break :arrow
-                    try numbered_tex.unify(ally, &arrow_tex, .{hl_to_x, -1});
+                    try numbered_tex.unify(ally, arrow_tex, .{hl_to_x, -1});
             };
             defer highlighted_tex.deinit(ally);
 
             // slap it together!
+            const located_tex =
+                try highlighted_tex.slap(ally, header_tex, .top, .close);
+
             break :locate
-                try highlighted_tex.slap(ally, &header_tex, .top, .close);
+                try labeled_tex.slap(ally, located_tex, .bottom, .close);
         } else try labeled_tex.clone(ally);
-        defer located_tex.deinit(ally);
 
-        // TODO notes
+        // append annotations
+        const INDENT = 4;
+        for (self.children.items) |child| {
+            const child_tex = try child.render(ally);
+            defer child_tex.deinit(ally);
 
-        return try labeled_tex.slap(ally, &located_tex, .bottom, .close);
+            const to = kz.Offset{INDENT, @intCast(isize, rendered.size[1])};
+            const updated = try rendered.unify(ally, child_tex, to);
+
+            rendered.deinit(ally);
+            rendered = updated;
+        }
+
+        return rendered;
     }
 };
 
@@ -398,12 +413,7 @@ const MessageTree = struct {
                 defer msg_tex.deinit(ally);
 
                 // append msg to message list
-                const new_tex = try tex.slap(
-                    ally,
-                    &msg_tex,
-                    .bottom,
-                    .close
-                );
+                const new_tex = try tex.slap(ally, msg_tex, .bottom, .close);
 
                 tex.deinit(ally);
                 tex = new_tex;
@@ -421,19 +431,26 @@ const MessageTree = struct {
     }
 };
 
+pub const MessageError =
+    Allocator.Error
+ || std.fmt.AllocPrintError
+ || @TypeOf(stderr).Error;
+
 /// generates a new message which may have sub-messages
-pub fn postMessage(
+pub fn post(
     level: Message.Level,
     loc: Loc,
-    text: []const u8
-) Allocator.Error!*Message {
+    comptime fmt: []const u8,
+    args: anytype
+) MessageError!*Message {
+    const text = try std.fmt.allocPrint(this.ally, fmt, args);
     const msg_ptr = try this.messages.allocMessage(loc.file);
     msg_ptr.* = Message.init(level, loc, text);
 
     return msg_ptr;
 }
 
-pub fn flushMessages() (Allocator.Error || @TypeOf(stderr).Error)!void {
+pub fn flushMessages() MessageError!void {
     const tmp_ally = this.arena.allocator();
 
     const tex = try this.messages.render(tmp_ally);
@@ -441,5 +458,4 @@ pub fn flushMessages() (Allocator.Error || @TypeOf(stderr).Error)!void {
     defer this.messages.clear();
 
     try tex.display(stderr);
-
 }

@@ -86,7 +86,6 @@ fn build_call(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
 
 fn build_list(mason: *Mason, env: *Env, expr: TypedExpr) anyerror!Op.UInt {
     const ally = mason.ally;
-    _ = env;
 
     const subtype = expr.list.subtype;
     const exprs = expr.list.exprs;
