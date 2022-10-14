@@ -12,14 +12,14 @@ const Allocator = std.mem.Allocator;
 const stdout = std.io.getStdOut().writer();
 
 pub fn execute(ally: Allocator, handle: context.FileHandle) !void {
-    // frontend
+    // parse stuff
     const ast = frontend.parse(ally, handle) catch {
         try context.flushMessages();
         return;
     };
     defer ast.deinit(ally);
 
-    {
+    if (builtin.mode == .Debug) {
         const tex = try ast.render(ally);
         defer tex.deinit(ally);
 
@@ -30,5 +30,11 @@ pub fn execute(ally: Allocator, handle: context.FileHandle) !void {
 
     try context.flushMessages();
 
-    // TODO connect to backend
+    // backend
+    const sexpr = try backend.translate(ally, ast);
+    defer sexpr.deinit(ally);
+
+    if (builtin.mode == .Debug) {
+        try stdout.print("[Translated AST]\n{:4}\n", .{sexpr});
+    }
 }

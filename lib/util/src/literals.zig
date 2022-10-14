@@ -4,8 +4,12 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 
-pub const ParseNumberError = Allocator.Error
-                          || error { BadNumber, BadCastType };
+pub const ParseNumberError =
+    Allocator.Error
+ || error {
+    BadNumber,
+    BadCastType
+};
 
 pub const Number = struct {
     const Self = @This();
@@ -29,7 +33,7 @@ pub const Number = struct {
         switch (@typeInfo(T)) {
             .Int => |int| {
                 // verify type is equivalent
-                if (int.bits != self.bits
+                if (int.bits < self.bits
                  or self.layout == .int and int.signedness != .signed
                  or self.layout == .uint and int.signedness != .unsigned) {
                     return ParseNumberError.BadCastType;
@@ -60,7 +64,7 @@ pub const Number = struct {
         }
     }
 
-    fn digit_to_char(digit: u8) u8 {
+    fn digitToChar(digit: u8) u8 {
         return if (digit < 10) digit + '0' else digit + 'a' - 10;
     }
 
@@ -75,11 +79,11 @@ pub const Number = struct {
 
         if (self.neg) try writer.writeByte('-');
 
-        for (self.pre) |ch| try writer.writeByte(digit_to_char(ch));
+        for (self.pre) |ch| try writer.writeByte(digitToChar(ch));
 
         if (self.post.len > 0) {
             try writer.writeByte('.');
-            for (self.post) |ch| try writer.writeByte(digit_to_char(ch));
+            for (self.post) |ch| try writer.writeByte(digitToChar(ch));
         }
 
         const suffix: u8 = switch (self.layout) {
@@ -123,7 +127,7 @@ const Slicerator = struct {
     }
 };
 
-pub fn eat_digits(
+pub fn eatDigits(
     ally: Allocator,
     sl: *Slicerator,
     radix: u8
@@ -152,7 +156,7 @@ pub fn eat_digits(
 }
 
 /// parses a number output by the lexer
-pub fn parse_number(ally: Allocator, str: []const u8) ParseNumberError!Number {
+pub fn parseNumber(ally: Allocator, str: []const u8) ParseNumberError!Number {
     const BadNumber = ParseNumberError.BadNumber;
     var sl = Slicerator{ .slice = str };
 
@@ -182,13 +186,13 @@ pub fn parse_number(ally: Allocator, str: []const u8) ParseNumberError!Number {
     }
 
     // pre
-    const pre = try eat_digits(ally, &sl, radix);
+    const pre = try eatDigits(ally, &sl, radix);
     if (pre.len == 0) return BadNumber;
 
     // post
     const post = if (sl.peek() == @intCast(u8, '.')) post: {
         sl.eat(1);
-        break :post try eat_digits(ally, &sl, radix);
+        break :post try eatDigits(ally, &sl, radix);
     } else try ally.alloc(u8, 0);
 
     // layout
