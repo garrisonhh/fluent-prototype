@@ -8,22 +8,14 @@ const backend = @import("backend.zig");
 const context = @import("context.zig");
 
 const Allocator = std.mem.Allocator;
-const Env = backend.Env;
-const Value = backend.Value;
 
 const stdout = std.io.getStdOut().writer();
 
-pub fn execute(
-    ally: Allocator,
-    env: *Env,
-    handle: context.FileHandle,
-) !?Value {
-    _ = env;
-
+pub fn execute(ally: Allocator, handle: context.FileHandle) !void {
     // frontend
     const ast = frontend.parse(ally, handle) catch {
         try context.flushMessages();
-        return null;
+        return;
     };
     defer ast.deinit(ally);
 
@@ -39,15 +31,4 @@ pub fn execute(
     try context.flushMessages();
 
     // TODO connect to backend
-
-    return Value{ .unit = {} };
-
-    // @panic("TODO");
-
-    // lex + parse
-    // const program = try ctx.wrap_stage(frontend.parse(&ctx, ally));
-    // defer program.deinit(ally);
-
-    // run
-    // return try backend.run(ally, env, program);
 }

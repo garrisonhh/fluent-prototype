@@ -57,10 +57,7 @@ fn repl_read(ally: Allocator) !context.FileHandle {
     return context.addExternalSource("repl", buf.items);
 }
 
-fn repl(ally: Allocator, prelude: backend.Env) !void {
-    var repl_env = backend.Env.init(ally, &prelude);
-    defer repl_env.deinit();
-
+fn repl(ally: Allocator) !void {
     while (true) {
         const input = try repl_read(ally);
 
@@ -76,15 +73,11 @@ fn repl(ally: Allocator, prelude: backend.Env) !void {
         if (is_empty) break;
 
         // eval and print
-        if (try plumbing.execute(ally, &repl_env, input)) |result| {
-            defer result.deinit(ally);
-
-            try stdout.print("{}\n", .{result});
-        }
+        try plumbing.execute(ally, input);
     }
 }
 
-fn fluent_tests(ally: Allocator, prelude: backend.Env) !void {
+fn fluent_tests(ally: Allocator) !void {
     const tests = [_][]const u8{
         // different kinds of literals
         "0xDEAD_BEEF",
@@ -144,9 +137,6 @@ fn fluent_tests(ally: Allocator, prelude: backend.Env) !void {
     };
 
     for (tests) |@"test"| {
-        var env = backend.Env.init(ally, &prelude);
-        defer env.deinit();
-
         // print test input
         try stdout.print(
             "{}test{}:\n",
@@ -161,19 +151,13 @@ fn fluent_tests(ally: Allocator, prelude: backend.Env) !void {
         // run test
         const handle = try context.addExternalSource("test", @"test");
 
-        var maybe_result = plumbing.execute(ally, &env, handle) catch |e| {
+        plumbing.execute(ally, handle) catch |e| {
             try stdout.print(
                 "{}test failed with {}{}:\n{s}\n\n",
                 .{&kz.Format{ .fg = .red }, e, &kz.Format{}, @"test"}
             );
             continue;
         };
-
-        if (maybe_result) |result| {
-            defer result.deinit(ally);
-
-            try stdout.print("{}\n\n", .{result});
-        }
     }
 }
 
@@ -230,7 +214,7 @@ fn print_help() @TypeOf(stdout).Error!void {
     }
 }
 
-fn execute_file(ally: Allocator, prelude: backend.Env, path: []const u8) !void {
+fn execute_file(ally: Allocator, path: []const u8) !void {
     // required backing stuff
     const handle = context.loadSource(path) catch |e| {
         if (e == error.FileNotFound) {
@@ -239,25 +223,17 @@ fn execute_file(ally: Allocator, prelude: backend.Env, path: []const u8) !void {
         } else return e;
     };
 
-    var env = backend.Env.init(ally, &prelude);
-    defer env.deinit();
-
     // time execution
     const start_time = std.time.nanoTimestamp();
 
-    const res = (try plumbing.execute(ally, &env, handle)) orelse {
-        try stdout.print("execution failed.\n", .{});
-        return;
+    plumbing.execute(ally, handle) catch |e| {
+        try stdout.print("execution failed: {}\n", .{e});
     };
-    defer res.deinit(ally);
 
     const end_time = std.time.nanoTimestamp();
     const seconds = @intToFloat(f64, end_time - start_time) * 1e-9;
 
-    try stdout.print(
-        "program returned: {}\nexecution succeeded in {d:.6}s.\n",
-        .{res, seconds}
-    );
+    try stdout.print("finished in {d:.6}s.\n", .{seconds});
 }
 
 const CommandError = error {
@@ -312,9 +288,6 @@ pub fn main() !void {
     context.init(ally);
     defer context.deinit();
 
-    var prelude = try backend.create_prelude(ally);
-    defer prelude.deinit();
-
     // the rest of the fucking owl
     const cmd = parse_args(ally) catch |e| err: {
         if (e == CommandError.BadArgs) {
@@ -326,10 +299,10 @@ pub fn main() !void {
 
     switch (cmd) {
         .help => try print_help(),
-        .repl => try repl(ally, prelude),
-        .tests => try fluent_tests(ally, prelude),
+        .repl => try repl(ally),
+        .tests => try fluent_tests(ally),
         .run => |path| {
-            try execute_file(ally, prelude, path);
+            try execute_file(ally, path);
             ally.free(path);
         }
     }
