@@ -1,6 +1,6 @@
 const std = @import("std");
 const kz = @import("kritzler");
-const util = @import("util/util.zig");
+const util = @import("util");
 const context = @import("context.zig");
 const plumbing = @import("plumbing.zig");
 const backend = @import("backend.zig");
@@ -36,9 +36,7 @@ fn repl_read(ally: Allocator) !context.FileHandle {
         const raw_line: ?[*:0]u8 = c.linenoise(prompt.ptr);
         defer c.linenoiseFree(raw_line);
 
-        const line =
-            if (raw_line == null or raw_line.?[0] == 0) ""
-            else raw_line.?[0..std.mem.len(raw_line.?)];
+        const line = if (raw_line) |raw| raw[0..std.mem.len(raw)] else "";
 
         // parse line
         for (line) |ch| {

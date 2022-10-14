@@ -3,7 +3,7 @@
 //! AST into an SExpr tree.
 
 const std = @import("std");
-const util = @import("../util/util.zig");
+const util = @import("util");
 const frontend = @import("../frontend.zig");
 const Env = @import("env.zig");
 

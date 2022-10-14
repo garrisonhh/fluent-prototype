@@ -3,8 +3,7 @@
 
 const std = @import("std");
 const kz = @import("kritzler");
-const util = @import("../util/util.zig");
-const literals = @import("../util/literals.zig");
+const util = @import("util");
 const fluent = @import("fluent.zig");
 const frontend = @import("../frontend.zig");
 const Env = @import("env.zig");
@@ -39,7 +38,7 @@ pub const SemaError = error {
     FuncWithoutExpectation,
 };
 
-pub const Error = SemaError || literals.ParseNumberError || Allocator.Error;
+pub const Error = SemaError || util.ParseNumberError || Allocator.Error;
 
 /// the final abstract representation of Fluent code before lowering to IR
 ///
@@ -598,7 +597,7 @@ fn translate(
     // initial translation
     const expr = switch (ast_expr.etype) {
         .number => num: {
-            const num = try literals.parse_number(ally, ast_expr.slice);
+            const num = try util.parse_number(ally, ast_expr.slice);
             defer num.deinit(ally);
 
             // TODO this assumes that every number is an i64. I definitely

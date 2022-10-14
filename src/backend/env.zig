@@ -3,7 +3,7 @@
 
 const std = @import("std");
 const kz = @import("kritzler");
-const util = @import("../util/util.zig");
+const util = @import("util");
 const fluent = @import("fluent.zig");
 const sema = @import("sema.zig");
 const ir = @import("ir.zig");

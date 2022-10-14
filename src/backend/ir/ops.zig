@@ -1,5 +1,5 @@
 const std = @import("std");
-const util = @import("../../util/util.zig");
+const util = @import("util");
 const fluent = @import("../fluent.zig");
 
 pub const OpCode = enum {

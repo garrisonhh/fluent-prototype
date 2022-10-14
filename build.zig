@@ -16,6 +16,7 @@ pub fn build(b: *std.build.Builder) void {
 
     // packages
     exe.addPackagePath("kritzler", "lib/kritzler/kritzler.zig");
+    exe.addPackagePath("util", "lib/util/util.zig");
 
     exe.install();
 }

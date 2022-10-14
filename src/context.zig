@@ -1,5 +1,5 @@
-//! this provides access to and storage for source files, and implements
-//! contextual messaging for language source code.
+//! this provides global access to and storage for source files, and implements
+//! contextual messaging for source code.
 //!
 //! files are stored and accessed through a globally accessible data structure.
 //! this allows file locations to be stored in a compact format.
@@ -7,7 +7,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const kz = @import("kritzler");
-const util = @import("util/util.zig");
+const util = @import("util");
 
 const Allocator = std.mem.Allocator;
 

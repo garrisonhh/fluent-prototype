@@ -33,6 +33,7 @@ pub fn execute(
 
         try stdout.print("[Parsed AST]\n", .{});
         try tex.display(stdout);
+        try stdout.writeByte('\n');
     }
 
     try context.flushMessages();
