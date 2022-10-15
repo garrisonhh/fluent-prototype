@@ -15,43 +15,67 @@ const Loc = context.Loc;
 
 const Self = @This();
 
+pub const Number = struct {
+    const Int = i64;
+    const Float = f64;
+
+    bits: ?u8,
+    data: union(enum) {
+        int: Int,
+        float: Float,
+    },
+
+    pub fn from(num: util.Number) util.ParseNumberError!Number {
+        return Number{
+            .bits = num.bits,
+            .data = if (num.layout) |layout| switch (layout) {
+                .int, .uint => .{ .int = try num.to(Int) },
+                .float => .{ .float = try num.to(Float) },
+            } else if (num.post.len > 0) .{ .float = try num.to(Float) }
+            else .{ .int = try num.to(Int) }
+        };
+    }
+};
+
 pub const Tag = std.meta.Tag(Data);
 
-const Data = union(enum) {
-    int: i64,
-    uint: u64,
-    float: f64,
+pub const Data = union(enum) {
+    number: Number,
     string: Symbol,
     symbol: Symbol,
     call: []Self,
 
-    fn FieldTypeOf(comptime tag: Tag) type {
-        return std.meta.fieldInfo(Data, tag).field_type;
+    pub fn clone(data: Data, ally: Allocator) Allocator.Error!Data {
+        return switch (data) {
+            .number => data,
+            .string => |sym| Data{ .string = try sym.clone(ally) },
+            .symbol => |sym| Data{ .symbol = try sym.clone(ally) },
+            .call => |exprs| call: {
+                const cloned = try ally.alloc(Self, exprs.len);
+                for (exprs) |expr, i| cloned[i] = try expr.clone(ally);
+                break :call Data{ .call = cloned };
+            },
+        };
     }
 };
 
 data: Data,
-loc: context.Loc,
-
-fn initFn(comptime tag: Tag) fn(Loc, Data.FieldTypeOf(tag)) Self {
-    const Closure = struct {
-        fn initFn(loc: Loc, data: Data.FieldTypeOf(tag)) Self {
-            return Self{
-                .data = @unionInit(Data, @tagName(tag), data),
-                .loc = loc
-            };
-        }
-    };
-
-    return Closure.initFn;
-}
-
-pub const initInt = initFn(.int);
-pub const initUInt = initFn(.uint);
-pub const initFloat = initFn(.float);
+loc: Loc,
 
 /// expects input to be already owned
-pub const initCall = initFn(.call);
+pub fn initCall(loc: Loc, exprs: []Self) Self {
+    return Self{
+        .data = .{ .call = exprs },
+        .loc = loc
+    };
+}
+
+pub fn initNumber(loc: Loc, num: Number) Self {
+    return Self{
+        .data = .{ .number = num },
+        .loc = loc,
+    };
+}
 
 pub fn initString(
     ally: Allocator,
@@ -86,6 +110,13 @@ pub fn deinit(self: Self, ally: Allocator) void {
     }
 }
 
+pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
+    return Self{
+        .data = try self.data.clone(ally),
+        .loc = self.loc,
+    };
+}
+
 pub fn format(
     self: Self,
     comptime fmt: []const u8,
@@ -96,9 +127,14 @@ pub fn format(
     _ = options;
 
     switch (self.data) {
-        .int => |d| try writer.print("{}", .{d}),
-        .uint => |d| try writer.print("{}", .{d}),
-        .float => |f| try writer.print("{}", .{f}),
+        .number => |num| {
+            switch (num.data) {
+                .int => |i| try writer.print("{}", .{i}),
+                .float => |f| try writer.print("{d}", .{f}),
+            }
+
+            if (num.bits) |bits| try writer.print("{}", .{bits});
+        },
         .string => |sym| try writer.print("\"{s}\"", .{sym.str}),
         .symbol => |sym| try writer.print("{s}", .{sym.str}),
         .call => |exprs| {

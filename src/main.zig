@@ -83,6 +83,10 @@ fn fluent_tests(ally: Allocator) !void {
         "0xDEAD_BEEF",
         "0b1010",
         "0o777",
+        "1.0001",
+        "0.01",
+        "0x1.1",
+        "\"Hello, World!\"",
         "true",
         "false",
         "[1, -2, 3]",
@@ -224,16 +228,11 @@ fn execute_file(ally: Allocator, path: []const u8) !void {
     };
 
     // time execution
-    const start_time = std.time.nanoTimestamp();
-
     plumbing.execute(ally, handle) catch |e| {
         try stdout.print("execution failed: {}\n", .{e});
     };
 
-    const end_time = std.time.nanoTimestamp();
-    const seconds = @intToFloat(f64, end_time - start_time) * 1e-9;
-
-    try stdout.print("finished in {d:.6}s.\n", .{seconds});
+    try stdout.print("execution succeeded.\n", .{});
 }
 
 const CommandError = error {
@@ -278,12 +277,12 @@ fn parse_args(ally: Allocator) !Command {
 
 pub fn main() !void {
     // boilerplate stuff
-    // var gpa = std.heap.GeneralPurposeAllocator(.{
-        // .stack_trace_frames = 1000,
-    // }){};
-    // defer _ = gpa.deinit();
-    // const ally = gpa.allocator();
-    const ally = std.heap.page_allocator;
+    var gpa = std.heap.GeneralPurposeAllocator(.{
+        .stack_trace_frames = 1000,
+    }){};
+    defer _ = gpa.deinit();
+    const ally = gpa.allocator();
+    // const ally = std.heap.page_allocator;
 
     context.init(ally);
     defer context.deinit();

@@ -103,6 +103,7 @@ fn at(text: []const u8, index: usize) ?u8 {
 
 pub const TokenizeError =
     Allocator.Error
+ || context.MessageError
  || context.FluentError;
 
 /// returns array of tokens allocated on ally
@@ -137,8 +138,10 @@ pub fn tokenize(ally: Allocator, file: FileHandle) TokenizeError![]Token {
 
         // other tokenization
         while (at(line, i)) |ch| {
+            const ch_loc = Loc.init(file, line_idx, i, 0);
+
             switch (CharClass.of(ch) catch {
-                // TODO syntax error
+                _ = try context.post(.err, ch_loc, "unknown character", .{});
                 return error.FluentError;
             }) {
                 .space => i += 1,
@@ -179,7 +182,33 @@ pub fn tokenize(ally: Allocator, file: FileHandle) TokenizeError![]Token {
                 },
 
                 // strings
-                .dquote => @panic("TODO tokenize strings"),
+                .dquote => {
+                    const start = i;
+                    i += 1;
+
+                    var last = ch;
+                    while (at(line, i)) |sch| : (i += 1) {
+                        if (sch == '"' and last != '\\') {
+                            i += 1;
+                            break;
+                        }
+                        last = sch;
+                    } else {
+                        _ = try context.post(
+                            .err,
+                            ch_loc,
+                            "unterminated string",
+                            .{}
+                        );
+                        return error.FluentError;
+                    }
+
+                    try tokens.append(Token{
+                        .loc = Loc.init(file, line_idx, start, i - start),
+                        .tag = .string,
+                        .slice = line[start..i]
+                    });
+                },
 
                 // single char symbols
                 .lparen, .rparen, .lbracket, .rbracket, .comma, .colon,

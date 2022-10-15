@@ -8,7 +8,9 @@ pub const ParseNumberError =
     Allocator.Error
  || error {
     BadNumber,
-    BadCastType
+    WrongLayout,
+    TooManyBits,
+    NegativeToUnsigned,
 };
 
 pub const Number = struct {
@@ -21,8 +23,8 @@ pub const Number = struct {
     // digits before and after the dot
     pre: []u8,
     post: []u8,
-    layout: Layout,
-    bits: u8,
+    layout: ?Layout,
+    bits: ?u8,
 
     pub fn deinit(self: Self, ally: Allocator) void {
         ally.free(self.pre);
@@ -32,11 +34,21 @@ pub const Number = struct {
     pub fn to(self: Self, comptime T: type) ParseNumberError!T {
         switch (@typeInfo(T)) {
             .Int => |int| {
-                // verify type is equivalent
-                if (int.bits < self.bits
-                 or self.layout == .int and int.signedness != .signed
-                 or self.layout == .uint and int.signedness != .unsigned) {
-                    return ParseNumberError.BadCastType;
+                // verify type cast is valid
+                if (self.bits) |bits| {
+                    if (bits > int.bits) return error.TooManyBits;
+                }
+
+                if (self.layout) |layout| {
+                    const wrong_layout =
+                        layout == .int and int.signedness != .signed
+                        or layout == .uint and int.signedness != .unsigned;
+
+                    if (wrong_layout) return error.WrongLayout;
+                }
+
+                if (self.neg and int.signedness == .unsigned) {
+                    return error.NegativeToUnsigned;
                 }
 
                 // cast
@@ -46,21 +58,37 @@ pub const Number = struct {
                     num = num * t_radix + @intCast(T, digit);
                 }
 
-                if (self.neg) {
-                    if (int.signedness == .unsigned) {
-                        return ParseNumberError.BadCastType;
-                    }
-
-                    num = -num;
-                }
+                if (self.neg) num = -num;
 
                 return num;
             },
             .Float => |float| {
-                _ = float;
-                @panic("TODO");
+                // verify type cast is valid
+                if (self.layout) |layout| {
+                    if (layout != .float) return error.WrongLayout;
+                }
+
+                if (self.bits) |bits| {
+                    if (bits > float.bits) return error.TooManyBits;
+                }
+
+                // cast
+                const t_radix = @intToFloat(T, self.radix);
+                const max_pow = @intToFloat(T, self.pre.len);
+                var place = std.math.pow(T, t_radix, max_pow - 1);
+                var num: T = 0;
+                for (&[_][]const u8{self.pre, self.post}) |digits| {
+                    for (digits) |digit| {
+                        num += place * @intToFloat(T, digit);
+                        place /= t_radix;
+                    }
+                }
+
+                if (self.neg) num = -num;
+
+                return num;
             },
-            else => return ParseNumberError.BadCastType
+            else => return error.BadCastType
         }
     }
 
@@ -86,13 +114,15 @@ pub const Number = struct {
             for (self.post) |ch| try writer.writeByte(digitToChar(ch));
         }
 
-        const suffix: u8 = switch (self.layout) {
-            .int => 'i',
-            .uint => 'u',
-            .float => 'f',
-        };
+        if (self.layout) |layout| {
+            try writer.print("{c}", .{@tagName(layout)[0]});
+        }
 
-        try writer.print("{c}{}{{{}}}", .{suffix, self.bits, self.radix});
+        if (self.bits) |bits| {
+            try writer.print("{}", .{bits});
+        }
+
+        try writer.print("{{{}}}", .{self.radix});
     }
 };
 
@@ -146,7 +176,7 @@ pub fn eatDigits(
             else => break
         };
 
-        if (digit > radix) return ParseNumberError.BadNumber;
+        if (digit > radix) return error.BadNumber;
 
         sl.eat(1);
         try buf.append(digit);
@@ -157,7 +187,6 @@ pub fn eatDigits(
 
 /// parses a number output by the lexer
 pub fn parseNumber(ally: Allocator, str: []const u8) ParseNumberError!Number {
-    const BadNumber = ParseNumberError.BadNumber;
     var sl = Slicerator{ .slice = str };
 
     // negation
@@ -187,7 +216,7 @@ pub fn parseNumber(ally: Allocator, str: []const u8) ParseNumberError!Number {
 
     // pre
     const pre = try eatDigits(ally, &sl, radix);
-    if (pre.len == 0) return BadNumber;
+    if (pre.len == 0) return error.BadNumber;
 
     // post
     const post = if (sl.peek() == @intCast(u8, '.')) post: {
@@ -196,7 +225,7 @@ pub fn parseNumber(ally: Allocator, str: []const u8) ParseNumberError!Number {
     } else try ally.alloc(u8, 0);
 
     // layout
-    var layout: Number.Layout = if (post.len > 0) .float else .int;
+    var layout: ?Number.Layout = null;
     if (sl.peek()) |ch| layout: {
         layout = switch (ch) {
             'i' => .int,
@@ -208,9 +237,9 @@ pub fn parseNumber(ally: Allocator, str: []const u8) ParseNumberError!Number {
     }
 
     // bits
-    var bits: u8 = 64;
+    var bits: ?u8 = null;
     if (sl.peek() != null) {
-        bits = std.fmt.parseInt(u8, sl.slice, 10) catch return BadNumber;
+        bits = std.fmt.parseInt(u8, sl.slice, 10) catch return error.BadNumber;
     }
 
     return Number{

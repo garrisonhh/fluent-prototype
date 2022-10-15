@@ -47,11 +47,14 @@ fn translateNumber(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
     const num = try util.parseNumber(ally, expr.loc.getSlice());
     defer num.deinit(ally);
 
-    return switch (num.layout) {
-        .int => SExpr.initInt(expr.loc, try num.to(i64)),
-        .uint => SExpr.initUInt(expr.loc, try num.to(u64)),
-        .float => SExpr.initFloat(expr.loc, try num.to(f64)),
-    };
+    return SExpr.initNumber(expr.loc, try SExpr.Number.from(num));
+}
+
+fn translateString(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
+    const slice = expr.loc.getSlice();
+
+    // TODO do escapes
+    return try SExpr.initString(ally, expr.loc, slice[1..slice.len - 1]);
 }
 
 pub fn translate(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
@@ -59,7 +62,7 @@ pub fn translate(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
         .file => try translateCallTo(ally, "do", expr),
         .group => try translateGroup(ally, expr),
         .number => try translateNumber(ally, expr),
-        .string => try SExpr.initString(ally, expr.loc, expr.loc.getSlice()),
+        .string => try translateString(ally, expr),
         .symbol => try SExpr.initSymbol(ally, expr.loc, expr.loc.getSlice()),
         .list => try translateCallTo(ally, "list", expr),
     };
