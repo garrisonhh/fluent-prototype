@@ -32,8 +32,6 @@ pub fn execute(ally: Allocator, handle: context.FileHandle) !void {
         try stdout.writeByte('\n');
     }
 
-    try context.flushMessages();
-
     // backend
     const sexpr = try backend.translate(ally, ast);
     defer sexpr.deinit(ally);
@@ -42,16 +40,25 @@ pub fn execute(ally: Allocator, handle: context.FileHandle) !void {
         try stdout.print("[Translated AST]\n{}\n\n", .{sexpr});
     }
 
-    var global = try backend.Env.initGlobal(ally);
-    defer global.deinit();
+    var env = try backend.initPrelude(ally);
+    defer env.deinit();
 
-    const any = backend.Pattern{ .any = {} };
-    const texpr = try backend.analyze(&global, sexpr, any);
+    const any = backend.Type{ .any = {} };
+    const texpr = try backend.analyze(&env, sexpr, any);
     defer texpr.deinit(ally);
 
     if (builtin.mode == .Debug) {
-        try stdout.print("[Analyzed AST]\n{}\n\n", .{texpr});
+        var arena = std.heap.ArenaAllocator.init(ally);
+        defer arena.deinit();
+
+        const tex = try texpr.render(env, arena.allocator());
+
+        try stdout.writeAll("[Analyzed AST]\n");
+        try tex.display(stdout);
+        try stdout.writeByte('\n');
     }
+
+    try context.flushMessages();
 
     // time logging
     const stop = std.time.nanoTimestamp();

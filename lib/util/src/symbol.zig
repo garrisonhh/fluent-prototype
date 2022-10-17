@@ -48,3 +48,15 @@ pub fn clone(self: Self, ally: std.mem.Allocator) std.mem.Allocator.Error!Self {
         .str = try ally.dupe(u8, self.str),
     };
 }
+
+pub fn format(
+    self: Self,
+    comptime fmt: []const u8,
+    options: std.fmt.FormatOptions,
+    writer: anytype
+) @TypeOf(writer).Error!void {
+    _ = fmt;
+    _ = options;
+
+    try writer.writeAll(self.str);
+}

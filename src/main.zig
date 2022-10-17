@@ -80,16 +80,18 @@ fn repl(ally: Allocator) !void {
 fn fluent_tests(ally: Allocator) !void {
     const tests = [_][]const u8{
         // different kinds of literals
-        "0xDEAD_BEEF",
+        "0xDEAD_BEEFi64",
         "0b1010",
         "0o777",
         "1.0001",
-        "0.01",
+        "0.01f32",
         "0x1.1",
         "\"Hello, World!\"",
+        "_this_is_a_hole",
         "true",
         "false",
         "[1, -2, 3]",
+        "[[1], [2, 3], [4, 5, 6], _what_could_this_be]",
 
         // math
         \\/ (+ 45 69)
@@ -142,10 +144,7 @@ fn fluent_tests(ally: Allocator) !void {
 
     for (tests) |@"test"| {
         // print test input
-        try stdout.print(
-            "{}test{}:\n",
-            .{&kz.Format{ .fg = .cyan }, &kz.Format{}}
-        );
+        try stdout.writeAll("[Test]\n");
 
         var lines = std.mem.tokenize(u8, @"test", "\n");
         while (lines.next()) |line| try stdout.print("> {s}\n", .{line});
@@ -156,12 +155,18 @@ fn fluent_tests(ally: Allocator) !void {
         const handle = try context.addExternalSource("test", @"test");
 
         plumbing.execute(ally, handle) catch |e| {
-            try stdout.print(
-                "{}test failed with {}{}:\n{s}\n\n",
-                .{&kz.Format{ .fg = .red }, e, &kz.Format{}, @"test"}
-            );
+            if (e == error.FluentError) {
+                try context.flushMessages();
+                try stdout.writeAll("test failed.\n\n");
+            } else {
+                try stdout.print(
+                    "test encountered compiler error: {}{s}{}\n",
+                    .{&kz.Format{ .fg = .red }, @errorName(e), &kz.Format{}}
+                );
+            }
             continue;
         };
+        try stdout.writeAll("test succeeded.\n\n");
     }
 }
 
@@ -179,7 +184,7 @@ const Command = union(enum) {
         desc: []const u8,
         params: []const []const u8 = &.{},
     };
-    const meta = util.EnumTable(Enum, Meta).init(.{
+    const MetaTable = util.EnumTable(Enum, Meta, .{
         .{.help, Meta{ .desc = "display this prompt" }},
         .{.repl, Meta{ .desc = "start interactive mode" }},
         .{.tests, Meta{ .desc = "run internal tests" }},
@@ -213,7 +218,7 @@ fn print_help() @TypeOf(stdout).Error!void {
     try stdout.print("commands:\n\n", .{});
 
     for (std.enums.values(Command.Enum)) |tag| {
-        const meta = Command.meta.get(tag);
+        const meta = Command.MetaTable.get(tag);
         try stdout.print("{s:<16}{s}\n", .{@tagName(tag), meta.desc});
     }
 }
@@ -263,7 +268,7 @@ fn parse_args(ally: Allocator) !Command {
     const tag = Command.tag_map.get(args[1]) orelse {
         return CommandError.BadArgs;
     };
-    const meta = Command.meta.get(tag);
+    const meta = Command.MetaTable.get(tag);
 
     if (args.len != 2 + meta.params.len) return CommandError.BadArgs;
 

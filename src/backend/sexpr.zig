@@ -17,11 +17,13 @@ const Self = @This();
 
 pub const Number = struct {
     const Int = i64;
+    const UInt = u64;
     const Float = f64;
 
     bits: ?u8,
-    data: union(enum) {
+    data: union(util.Number.Layout) {
         int: Int,
+        uint: UInt,
         float: Float,
     },
 
@@ -29,11 +31,30 @@ pub const Number = struct {
         return Number{
             .bits = num.bits,
             .data = if (num.layout) |layout| switch (layout) {
-                .int, .uint => .{ .int = try num.to(Int) },
+                .int  => .{ .int = try num.to(Int) },
+                .uint  => .{ .uint = try num.to(UInt) },
                 .float => .{ .float = try num.to(Float) },
             } else if (num.post.len > 0) .{ .float = try num.to(Float) }
             else .{ .int = try num.to(Int) }
         };
+    }
+
+    pub fn format(
+        self: @This(),
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) @TypeOf(writer).Error!void {
+        _ = fmt;
+        _ = options;
+
+        switch (self.data) {
+            .int => |i| try writer.print("{}i", .{i}),
+            .uint => |u| try writer.print("{}u", .{u}),
+            .float => |f| try writer.print("{d}f", .{f}),
+        }
+
+        if (self.bits) |bits| try writer.print("{}", .{bits});
     }
 };
 
@@ -127,14 +148,7 @@ pub fn format(
     _ = options;
 
     switch (self.data) {
-        .number => |num| {
-            switch (num.data) {
-                .int => |i| try writer.print("{}", .{i}),
-                .float => |f| try writer.print("{d}", .{f}),
-            }
-
-            if (num.bits) |bits| try writer.print("{}", .{bits});
-        },
+        .number => |num| try writer.print("{}", .{num}),
         .string => |sym| try writer.print("\"{s}\"", .{sym.str}),
         .symbol => |sym| try writer.print("{s}", .{sym.str}),
         .call => |exprs| {

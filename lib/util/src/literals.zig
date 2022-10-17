@@ -58,7 +58,11 @@ pub const Number = struct {
                     num = num * t_radix + @intCast(T, digit);
                 }
 
-                if (self.neg) num = -num;
+                if (self.neg) {
+                    // NOTE the zig 0.10 compiler doesn't seem to understand
+                    // this will never negate a uint, so invoking false UB here
+                    num = @intCast(T, -@intCast(i64, num));
+                }
 
                 return num;
             },
@@ -176,7 +180,7 @@ pub fn eatDigits(
             else => break
         };
 
-        if (digit > radix) return error.BadNumber;
+        if (digit > radix) break;
 
         sl.eat(1);
         try buf.append(digit);
@@ -199,17 +203,17 @@ pub fn parseNumber(ally: Allocator, str: []const u8) ParseNumberError!Number {
     // radix
     var radix: u8 = 10;
     if (sl.get(0) == @intCast(u8, '0')) {
-        if (sl.get(1)) |r| {
-            const found: u8 = switch (r) {
+        if (sl.get(1)) |ch| {
+            const found: ?u8 = switch (ch) {
                 'b' => 2,
                 'o' => 8,
                 'x' => 16,
-                else => 0
+                else => null
             };
 
-            if (found != 0) {
+            if (found) |r| {
                 sl.eat(2);
-                radix = found;
+                radix = r;
             }
         }
     }
@@ -239,7 +243,10 @@ pub fn parseNumber(ally: Allocator, str: []const u8) ParseNumberError!Number {
     // bits
     var bits: ?u8 = null;
     if (sl.peek() != null) {
-        bits = std.fmt.parseInt(u8, sl.slice, 10) catch return error.BadNumber;
+        bits = std.fmt.parseInt(u8, sl.slice, 10) catch {
+            std.debug.print("could not parse bits {s}\n", .{sl.slice});
+            return error.BadNumber;
+        };
     }
 
     return Number{

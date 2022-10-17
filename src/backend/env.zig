@@ -6,36 +6,42 @@ const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
 const Symbol = util.Symbol;
-const TypeSet = types.TypeSet;
+const TypeWelt = types.TypeWelt;
 const TypeId = types.TypeId;
 const Type = types.Type;
 
 const Self = @This();
 
-pub const DefError = error { SymbolRedef };
+pub const DefError =
+    Allocator.Error
+ || error { SymbolRedef };
 
-const Bind = union(enum) {
+pub const Bound = union(enum) {
     ty: TypeId,
 };
 
+const Binding = struct {
+    ty: TypeId,
+    value: Bound
+};
+
 ally: Allocator,
-typeset: TypeSet = .{},
-ns: Symbol.HashMapUnmanaged(Bind) = .{},
+typewelt: TypeWelt,
+ns: Symbol.HashMapUnmanaged(Binding) = .{},
 
 pub fn init(ally: Allocator) Self {
-    return Self{ .ally = ally };
+    return Self{
+        .ally = ally,
+        .typewelt = TypeWelt.init(ally),
+    };
 }
 
 pub fn deinit(self: *Self) void {
-    self.typeset.deinit(self.ally);
+    self.typewelt.deinit();
     self.ns.deinit(self.ally);
 }
 
-pub fn def(
-    self: *Self,
-    sym: Symbol,
-    to: Bind
-) (DefError || Allocator.Error)!void {
+pub fn def(self: *Self, sym: Symbol, to: Binding) DefError!void {
     const res = try self.ns.getOrPut(self.ally, sym);
     if (res.found_existing) {
         return error.SymbolRedef;
@@ -44,29 +50,41 @@ pub fn def(
     }
 }
 
-pub fn typeUnify(self: *Self, ty: Type) Allocator.Error!TypeId {
-    return try self.typeset.unify(self.ally, ty);
+pub fn contains(self: Self, sym: Symbol) bool {
+    return self.ns.contains(sym);
 }
 
-pub fn typeDef(
+pub fn getType(self: Self, sym: Symbol) ?TypeId {
+    return if (self.ns.get(sym)) |binding| binding.ty else null;
+}
+
+pub fn getValue(self: Self, sym: Symbol) ?*const Bound {
+    return if (self.ns.getPtr(sym)) |binding| &binding.value else null;
+}
+
+// type helpers ================================================================
+
+pub fn typeIdentify(self: *Self, ty: Type) Allocator.Error!TypeId {
+    return try self.typewelt.identify(ty);
+}
+
+pub fn typeUnify(
     self: *Self,
-    sym: Symbol,
-    ty: Type
-) (DefError || Allocator.Error)!void {
-    return try self.def(sym, Bind{ .ty = try self.typeUnify(ty) });
+    outward: TypeId,
+    inward: TypeId
+) Allocator.Error!?TypeId {
+    return try types.unify(&self.typewelt, outward, inward);
 }
 
-pub fn initGlobal(ally: Allocator) Allocator.Error!Self {
-    const sym = Symbol.init;
+pub fn typeGet(self: Self, ty: TypeId) *const Type {
+    return self.typewelt.get(ty);
+}
 
-    var global = Self.init(ally);
-
-    // TODO errors here
-
-    global.typeDef(sym("unit"), Type{ .unit = {} }) catch {};
-    global.typeDef(sym("i64"), Type{
-        .number = .{ .layout = .int, .bits = 64 }
-    }) catch {};
-
-    return global;
+pub fn typeDef(self: *Self, sym: Symbol, ty: Type) DefError!TypeId {
+    const id = try self.typeIdentify(ty);
+    try self.def(sym, Binding{
+        .ty = try self.typeIdentify(Type{ .ty = {} }),
+        .value = .{ .ty = id }
+    });
+    return id;
 }

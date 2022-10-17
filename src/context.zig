@@ -243,7 +243,7 @@ pub const Message = struct {
         log,
         debug,
 
-        const meta = util.EnumTable(@This(), kz.Format).init(.{
+        const meta = util.EnumTable(@This(), kz.Format, .{
             .{.note,  kz.Format{ .fg = .cyan    }},
             .{.err,   kz.Format{ .fg = .red     }},
             .{.warn,  kz.Format{ .fg = .magenta }},
@@ -261,16 +261,22 @@ pub const Message = struct {
     text: []const u8,
     children: std.ArrayListUnmanaged(Self),
 
-    fn init(level: Level, loc: ?Loc, text: []const u8) Self {
+    fn init(
+        level: Level,
+        loc: ?Loc,
+        comptime fmt: []const u8,
+        args: anytype
+    ) MessageError!Self {
         return Self{
             .level = level,
             .loc = loc,
-            .text = text,
+            .text = try std.fmt.allocPrint(this.ally, fmt, args),
             .children = .{}
         };
     }
 
     fn deinit(self: *Self) void {
+        this.ally.free(self.text);
         self.children.deinit(this.ally);
     }
 
@@ -278,10 +284,11 @@ pub const Message = struct {
     pub fn annotate(
         self: *Self,
         loc: ?Loc,
-        text: []const u8
-    ) Allocator.Error!*Self {
+        comptime fmt: []const u8,
+        args: anytype
+    ) MessageError!*Self {
         const msg_ptr = try self.children.addOne(this.ally);
-        msg_ptr.* = Message.init(.note, loc, text);
+        msg_ptr.* = try Message.init(.note, loc, fmt, args);
 
         return msg_ptr;
     }
@@ -404,6 +411,9 @@ const MessageTree = struct {
     }
 
     fn render(self: Self, ally: Allocator) Allocator.Error!kz.Texture {
+        const buf = try kz.Texture.init(ally, .{0, 1});
+        defer buf.deinit(ally);
+
         var tex = try kz.Texture.init(ally, .{0, 0});
 
         var lists = self.map.valueIterator();
@@ -413,7 +423,12 @@ const MessageTree = struct {
                 defer msg_tex.deinit(ally);
 
                 // append msg to message list
-                const new_tex = try tex.slap(ally, msg_tex, .bottom, .close);
+                const new_tex = try kz.Texture.stack(
+                    ally,
+                    &.{msg_tex, buf},
+                    .bottom,
+                    .close
+                );
 
                 tex.deinit(ally);
                 tex = new_tex;
@@ -443,18 +458,17 @@ pub fn post(
     comptime fmt: []const u8,
     args: anytype
 ) MessageError!*Message {
-    const text = try std.fmt.allocPrint(this.ally, fmt, args);
     const msg_ptr = try this.messages.allocMessage(loc.file);
-    msg_ptr.* = Message.init(level, loc, text);
+    msg_ptr.* = try Message.init(level, loc, fmt, args);
 
     return msg_ptr;
 }
 
 pub fn flushMessages() MessageError!void {
-    const tmp_ally = this.arena.allocator();
+    const ally = this.arena.allocator();
 
-    const tex = try this.messages.render(tmp_ally);
-    defer tex.deinit(tmp_ally);
+    const tex = try this.messages.render(ally);
+    defer tex.deinit(ally);
     defer this.messages.clear();
 
     try tex.display(stderr);
