@@ -17,6 +17,7 @@ pub const DefError =
  || error { SymbolRedef };
 
 pub const Bound = union(enum) {
+    unimpl,
     ty: TypeId,
 };
 

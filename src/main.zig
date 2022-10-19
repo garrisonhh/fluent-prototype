@@ -94,55 +94,55 @@ fn fluent_tests(ally: Allocator) !void {
         "[[1], [2, 3], [4, 5, 6], _what_could_this_be]",
 
         // math
-        \\/ (+ 45 69)
-        \\  2
-        ,
+        "addi 1 1",
+        //\\/ (+ 45 69)
+        //\\  2
+        //,
 
-        // logic
-        \\and
-        \\  or true false
-        \\  not false
-        ,
-        \\or false
-        \\  not true
-        ,
+        // \\and
+        // \\  or true false
+        // \\  not false
+        // ,
+        // \\or false
+        // \\  not true
+        // ,
 
-        \\// function type
-        \\def int-to-int Type
-        \\    Fn [Int] Int
-        ,
+        // \\// function type
+        // \\def int-to-int Type
+        // \\    Fn [Int] Int
+        // ,
 
-        \\// interreliant defs
-        \\def c Int (+ a b)
-        \\def a Int (* 34 56)
-        \\def b Int (+ a 1)
-        \\c
-        ,
+        // \\// interreliant defs
+        // \\def c Int (+ a b)
+        // \\def a Int (* 34 56)
+        // \\def b Int (+ a 1)
+        // \\c
+        // ,
 
-        \\// out-of-order defs
-        \\def a T (* 10 10)
-        \\def b X (+ a 1)
-        \\def X Type T
-        \\def T Type Int
-        \\b
-        ,
+        // \\// out-of-order defs
+        // \\def a T (* 10 10)
+        // \\def b X (+ a 1)
+        // \\def X Type T
+        // \\def T Type Int
+        // \\b
+        // ,
 
-        \\// simple function
-        \\def my-add (Fn [Int, Int] Int)
-        \\    fn [a, b] (+ a b)
-        \\
-        \\my-add 45 56
-        ,
+        // \\// simple function
+        // \\def my-add (Fn [Int, Int] Int)
+        // \\    fn [a, b] (+ a b)
+        // \\
+        // \\my-add 45 56
+        // ,
 
-        \\// conditional
-        \\[
-        \\  (if true 1 0),
-        \\  (if false 1 0),
-        \\]
-        ,
+        // \\// conditional
+        // \\[
+        // \\  (if true 1 0),
+        // \\  (if false 1 0),
+        // \\]
+        // ,
     };
 
-    for (tests) |@"test"| {
+    for (tests) |@"test"| testing: {
         // print test input
         try stdout.writeAll("[Test]\n");
 
@@ -158,13 +158,16 @@ fn fluent_tests(ally: Allocator) !void {
             if (e == error.FluentError) {
                 try context.flushMessages();
                 try stdout.writeAll("test failed.\n\n");
+
+                continue;
             } else {
                 try stdout.print(
                     "test encountered compiler error: {}{s}{}\n",
                     .{&kz.Format{ .fg = .red }, @errorName(e), &kz.Format{}}
                 );
+
+                break :testing;
             }
-            continue;
         };
         try stdout.writeAll("test succeeded.\n\n");
     }
@@ -282,12 +285,12 @@ fn parse_args(ally: Allocator) !Command {
 
 pub fn main() !void {
     // boilerplate stuff
-    var gpa = std.heap.GeneralPurposeAllocator(.{
-        .stack_trace_frames = 1000,
-    }){};
-    defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    // const ally = std.heap.page_allocator;
+    // var gpa = std.heap.GeneralPurposeAllocator(.{
+        // .stack_trace_frames = 1000,
+    // }){};
+    // defer _ = gpa.deinit();
+    // const ally = gpa.allocator();
+    const ally = std.heap.page_allocator;
 
     context.init(ally);
     defer context.deinit();

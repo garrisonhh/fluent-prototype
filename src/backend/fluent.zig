@@ -8,6 +8,7 @@ const Env = @import("env.zig");
 const Allocator = std.mem.Allocator;
 const Symbol = util.Symbol;
 const Type = types.Type;
+const TypeId = types.TypeId;
 
 pub const Builtin = enum {
     const Self = @This();
@@ -39,13 +40,41 @@ fn sym(comptime str: []const u8) Symbol {
     return comptime Symbol.init(str);
 }
 
+fn funcType(
+    ally: Allocator,
+    takes: []TypeId,
+    contexts: []TypeId,
+    returns: TypeId
+) Allocator.Error!Type {
+    return Type{
+        .func = Type.Func{
+            .takes = try ally.dupe(TypeId, takes),
+            .contexts = try ally.dupe(TypeId, contexts),
+            .returns = returns
+        }
+    };
+}
+
 pub fn initPrelude(ally: Allocator) Env.DefError!Env {
     var env = Env.init(ally);
 
     _ = try env.typeDef(sym("type"), Type{ .ty = {} });
     _ = try env.typeDef(sym("unit"), Type{ .unit = {} });
-    _ = try env.typeDef(sym("i64"), Type{
+
+    const @"i64" = try env.typeDef(sym("i64"), Type{
         .number = .{ .layout = .int, .bits = 64 }
+    });
+
+    const bin_i64 = try env.typeIdentify(try funcType(
+        ally,
+        &.{@"i64", @"i64"},
+        &.{},
+        @"i64"
+    ));
+
+    _ = try env.def(sym("addi"), .{
+        .ty = bin_i64,
+        .value = .{ .unimpl = {} },
     });
 
     return env;

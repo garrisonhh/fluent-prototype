@@ -9,7 +9,15 @@ const Allocator = std.mem.Allocator;
 const Wyhash = std.hash.Wyhash;
 const Symbol = util.Symbol;
 
-pub const TypeId = packed struct { index: usize };
+pub const TypeId = packed struct {
+    const Self = @This();
+
+    index: usize,
+
+    pub fn eql(self: Self, id: Self) bool {
+        return self.index == id.index;
+    }
+};
 
 /// where types are stored.
 pub const TypeWelt = struct {
@@ -82,11 +90,26 @@ pub const Type = union(enum) {
         bits: ?u8,
         layout: util.Number.Layout,
     };
+    pub const Func = struct {
+        takes: []TypeId,
+        // implicit parameters for effect management
+        contexts: []TypeId,
+        returns: TypeId,
 
+        pub fn clone(self: Func, ally: Allocator) Allocator.Error!Func {
+            return Func{
+                .takes = try ally.dupe(TypeId, self.takes),
+                .contexts = try ally.dupe(TypeId, self.contexts),
+                .returns = self.returns,
+            };
+        }
+    };
+
+    // unique
     unit,
-
-    // compilation
     hole,
+
+    // dynamic time
     symbol,
     ty,
 
@@ -94,16 +117,25 @@ pub const Type = union(enum) {
     any,
     set: Set,
 
-    // concrete
+    // concrete (exist at runtime)
     atom: Symbol,
     number: Number,
+
     list: TypeId, // stores subtype; lists are slices
+    tuple: []TypeId,
+
+    func: Func,
 
     pub fn deinit(self: *Self, ally: Allocator) void {
         switch (self.*) {
             .unit, .hole, .symbol, .any, .ty, .number, .list => {},
             .set => |*set| set.deinit(ally),
             .atom => |sym| ally.free(sym.str),
+            .tuple => |tup| ally.free(tup),
+            .func => |func| {
+                ally.free(func.takes);
+                ally.free(func.contexts);
+            },
         }
     }
 
@@ -113,14 +145,38 @@ pub const Type = union(enum) {
 
         switch (self) {
             .unit, .symbol, .hole, .any, .ty => {},
-            .set => @panic("TODO hash type set"),
+            .set => {
+                // NOTE if there is a serious issue here, figure out if there is
+                // a way to hash this in constant space. for now I'm just
+                // throwing my hands up and allowing .eql() to handle the work
+                // of figuring out if two sets match.
+            },
             .atom => |sym| wyhash.update(asBytes(&sym.hash)),
             .number => |num| {
                 wyhash.update(asBytes(&num.layout));
                 wyhash.update(asBytes(&num.bits));
             },
             .list => |subty| wyhash.update(asBytes(&subty)),
+            .tuple => |tup| wyhash.update(asBytes(&tup)),
+            .func => |func| {
+                wyhash.update(asBytes(&func.takes));
+                wyhash.update(asBytes(&func.contexts));
+                wyhash.update(asBytes(&func.returns));
+            }
         }
+    }
+
+    /// whether two id arrays are equivalent
+    fn idsEql(a: []const TypeId, b: []const TypeId) bool {
+        if (a.len != b.len) return false;
+
+        for (a) |elem, i| {
+            if (!elem.eql(b[i])) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     pub fn eql(self: Self, ty: Self) bool {
@@ -143,7 +199,12 @@ pub const Type = union(enum) {
             .atom => |sym| sym.eql(ty.atom),
             .number => |num|
                 num.layout == ty.number.layout and num.bits == ty.number.bits,
-            .list => |subty| subty.index == ty.list.index,
+            .list => |subty| subty.eql(ty.list),
+            .tuple => |tup| idsEql(tup, ty.tuple),
+            .func => |func|
+                idsEql(func.takes, ty.func.takes)
+                and idsEql(func.contexts, ty.func.contexts)
+                and func.returns.eql(ty.func.returns),
         };
     }
 
@@ -152,6 +213,8 @@ pub const Type = union(enum) {
             .unit, .symbol, .hole, .any, .number, .ty, .list => self,
             .set => |set| Self{ .set = try set.clone(ally) },
             .atom => |sym| Self{ .atom = try sym.clone(ally) },
+            .tuple => |tup| Self{ .tuple = try ally.dupe(TypeId, tup) },
+            .func => |func| Self{ .func = try func.clone(ally) },
         };
     }
 
@@ -177,6 +240,7 @@ pub const Type = union(enum) {
             .any, .set, .hole => unreachable,
             .unit, .symbol, .ty => true,
             .atom => |sym| sym.eql(ty.atom),
+            .tuple => self.eql(ty),
             .number => |num| num: {
                 // layout must match
                 if (num.layout != ty.number.layout) {
@@ -190,8 +254,26 @@ pub const Type = union(enum) {
                     break :num true;
                 }
             },
-            .list => |subty| typewelt.get(subty).eql(typewelt.get(self.list).*),
+            .list => |subty| subty.eql(self.list),
+            .func => func: {
+                // TODO I want functions to be able to coerce to functions with
+                // wider effect sets I think?
+                break :func self.eql(ty);
+            },
         };
+    }
+
+    fn writeList(
+        list: []TypeId,
+        typewelt: TypeWelt,
+        writer: anytype
+    ) @TypeOf(writer).Error!void {
+        try writer.writeByte('[');
+        for (list) |ty, i| {
+            if (i > 0) try writer.writeAll(", ");
+            try typewelt.get(ty).write(typewelt, writer);
+        }
+        try writer.writeByte(']');
     }
 
     /// simply the closest you can get to format
@@ -219,6 +301,23 @@ pub const Type = union(enum) {
                 try typewelt.get(subty).write(typewelt, writer);
                 try writer.writeByte(')');
             },
+            .tuple => |tup| {
+                try writer.writeAll("(Tuple");
+                for (tup) |ty| {
+                    try writer.writeByte(' ');
+                    try typewelt.get(ty).write(typewelt, writer);
+                }
+                try writer.writeByte(')');
+            },
+            .func => |func| {
+                try writer.writeAll("(Fn ");
+                try writeList(func.takes, typewelt, writer);
+                try writer.writeByte(' ');
+                try writeList(func.contexts, typewelt, writer);
+                try writer.writeByte(' ');
+                try typewelt.get(func.returns).write(typewelt, writer);
+                try writer.writeByte(')');
+            }
         }
     }
 
@@ -249,11 +348,16 @@ pub const Type = union(enum) {
         _ = fmt;
         _ = options;
 
-        @compileError("please use Type.write() or Type.writeAlloc()");
+        @compileError("Type.format is deprecated; "
+                   ++ "please use Type.write() or Type.writeAlloc()");
     }
 };
 
-/// this is basically the core of implementing 'algorithm w' for fluent.
+/// using an 'outward' expectation for the type of an expression, and the
+/// 'inward' information an expression has about its own type, unify()
+/// determines what the final type of the expression should be.
+///
+/// this is basically the core of fluent's 'algorithm w' implementation.
 pub fn unify(
     typewelt: *TypeWelt,
     outward: TypeId,

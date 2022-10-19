@@ -171,6 +171,17 @@ fn holeError(env: Env, loc: Loc, ty: Type) SemaError {
     return error.FluentError;
 }
 
+fn expectError(env: Env, loc: Loc, expected: Type, found: Type) SemaError {
+    const exp_text = try expected.writeAlloc(env.ally, env.typewelt);
+    const found_text = try found.writeAlloc(env.ally, env.typewelt);
+    defer env.ally.free(exp_text);
+    defer env.ally.free(found_text);
+
+    const msg = try context.post(.note, loc, "expected {s}", .{exp_text});
+    _ = try msg.annotate(null, "found {s}", .{found_text});
+    return error.FluentError;
+}
+
 fn typeOfNumber(env: *Env, num: SExpr.Number) SemaError!TypeId {
     return try env.typeIdentify(Type{
         .number = .{
@@ -255,11 +266,10 @@ fn analyzeList(env: *Env, expr: SExpr, expects: Type) SemaError!TExpr {
 }
 
 fn analyzeCall(env: *Env, expr: SExpr, expects: Type) SemaError!TExpr{
+    const ally = env.ally;
     const exprs = expr.data.call;
     const head = exprs[0];
     const tail = exprs[1..];
-
-    _ = tail;
 
     if (head.data == .symbol) {
         // builtins require special type analysis
@@ -270,9 +280,44 @@ fn analyzeCall(env: *Env, expr: SExpr, expects: Type) SemaError!TExpr{
             };
         }
 
-        @panic("TODO analyze general calls");
+        // regular call
+        const texprs = try ally.alloc(TExpr, exprs.len);
+
+        // analyze head
+        texprs[0] = try analyze(env, head, Type{ .any = {} });
+
+        const fn_ty = env.typeGet(texprs[0].ty);
+        if (fn_ty.* != .func) {
+            const ty_text = try fn_ty.writeAlloc(ally, env.typewelt);
+            defer ally.free(ty_text);
+
+            const text = "expected function, found {s}";
+            _ = try context.post(.err, texprs[0].loc, text, .{ty_text});
+            return error.FluentError;
+        }
+
+        // analyze tail with param expectations
+        const param_tys = fn_ty.func.takes;
+        if (param_tys.len != tail.len) {
+            _ = try context.post(
+                .err,
+                expr.loc,
+                "expected {} parameters, found {}",
+                .{param_tys.len, tail.len}
+            );
+            return error.FluentError;
+        }
+
+        for (param_tys) |param_tid, i| {
+            const param_expects = env.typeGet(param_tid);
+            texprs[i + 1] = try analyze(env, tail[i], param_expects.*);
+        }
+
+        // create TExpr
+        const data = TExpr.Data{ .call = texprs };
+        return unifyTExpr(env, expr.loc, data, fn_ty.func.returns, expects);
     } else {
-        @panic("TODO lambda etc");
+        @panic("TODO lambdas and other function expressions");
     }
 }
 
@@ -296,12 +341,7 @@ fn unifyTExpr(
     // unify inward and outward types
     const outward = try env.typeIdentify(expects);
     const ty = (try env.typeUnify(outward, inward)) orelse {
-        const ty_text = try expects.writeAlloc(env.ally, env.typewelt);
-        defer env.ally.free(ty_text);
-
-        const msg = try context.post(.note, loc, "expected {s}", .{ty_text});
-        _ = try msg.annotate(null, "found {}", .{inward});
-        return error.FluentError;
+        return expectError(env.*, loc, expects, env.typeGet(inward).*);
     };
 
     return TExpr{
