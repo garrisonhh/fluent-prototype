@@ -19,7 +19,15 @@ pub const TypeId = packed struct {
     }
 };
 
-/// where types are stored.
+/// storage for types and the context for type handles.
+///
+/// using a Type, you can call `identify()` which gives you the unique id of
+/// this type. TypeIds can be 'dereferenced' with `get`.
+///
+/// the actual unique Type objects are just stored in the internal allocator,
+/// but hashing and storing an arraylist of pointers allows the handle system
+/// to function, and the memory/speed tradeoff is worth it given the vast amount
+/// of these objects I'm creating and messing around with.
 pub const TypeWelt = struct {
     const Self = @This();
 
@@ -45,7 +53,7 @@ pub const TypeWelt = struct {
     );
 
     ally: Allocator,
-    types: std.ArrayListUnmanaged(Type) = .{},
+    types: std.ArrayListUnmanaged(*Type) = .{},
     map: TypeMap = .{},
 
     pub fn init(ally: Allocator) Self {
@@ -55,25 +63,33 @@ pub const TypeWelt = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        for (self.types.items) |*ty| ty.deinit(self.ally);
+        for (self.types.items) |ptr| {
+            ptr.deinit(self.ally);
+            self.ally.destroy(ptr);
+        }
         self.types.deinit(self.ally);
         self.map.deinit(self.ally);
     }
 
     pub fn get(self: Self, id: TypeId) *const Type {
-        return &self.types.items[id.index];
+        return self.types.items[id.index];
     }
 
     /// retrieves an established ID or creates a new one.
     pub fn identify(self: *Self, ty: Type) Allocator.Error!TypeId {
         const res = try self.map.getOrPut(self.ally, &ty);
         if (!res.found_existing) {
+            // find id
             const id = TypeId{ .index = self.types.items.len };
-            var slot = try self.types.addOne(self.ally);
 
-            slot.* = try ty.clone(self.ally);
-            res.key_ptr.* = slot;
+            // allocate for type and clone
+            const cloned = try util.placeOn(self.ally, try ty.clone(self.ally));
+
+            // store in internal data structures
+            res.key_ptr.* = cloned;
             res.value_ptr.* = id;
+
+            try self.types.append(self.ally, cloned);
         }
 
         return res.value_ptr.*;

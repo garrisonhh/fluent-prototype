@@ -69,6 +69,15 @@ pub fn typeIdentify(self: *Self, ty: Type) Allocator.Error!TypeId {
     return try self.typewelt.identify(ty);
 }
 
+pub fn typeIdentifyNumber(
+    self: *Self,
+    layout: util.Number.Layout,
+    bits: u8
+) Allocator.Error!TypeId {
+    const ty = Type{ .number = .{ .layout = layout, .bits = bits } };
+    return try self.typeIdentify(ty);
+}
+
 pub fn typeUnify(
     self: *Self,
     outward: TypeId,

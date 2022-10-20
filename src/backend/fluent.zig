@@ -40,37 +40,57 @@ fn sym(comptime str: []const u8) Symbol {
     return comptime Symbol.init(str);
 }
 
-fn funcType(
-    ally: Allocator,
-    takes: []TypeId,
-    contexts: []TypeId,
-    returns: TypeId
-) Allocator.Error!Type {
+fn funcType(takes: []TypeId, contexts: []TypeId, returns: TypeId) Type {
     return Type{
         .func = Type.Func{
-            .takes = try ally.dupe(TypeId, takes),
-            .contexts = try ally.dupe(TypeId, contexts),
+            .takes = takes,
+            .contexts = contexts,
             .returns = returns
         }
     };
 }
 
-pub fn initPrelude(ally: Allocator) Env.DefError!Env {
+pub fn initPrelude(ally: Allocator) !Env {
     var arena = std.heap.ArenaAllocator.init(ally);
     defer arena.deinit();
     const tmp_ally = arena.allocator();
+    _ = tmp_ally;
 
     var env = Env.init(ally);
 
     _ = try env.typeDef(sym("type"), Type{ .ty = {} });
     _ = try env.typeDef(sym("unit"), Type{ .unit = {} });
 
-    const @"i64" = try env.typeDef(sym("i64"), Type{
-        .number = .{ .layout = .int, .bits = 64 }
+    // define number types
+    for ([_]util.Number.Layout{.int, .uint}) |layout| {
+        var i: u3 = 0;
+        while (i < 4) : (i += 1) {
+            var name_buf: [16]u8 = undefined;
+            const bits = 8 * (@as(u8, 1) << i);
+            const name = try std.fmt.bufPrint(
+                &name_buf,
+                "{c}{d}",
+                .{@tagName(layout)[0], bits}
+            );
+
+            const ty = Type{ .number = .{ .layout = layout, .bits = bits } };
+            _ = try env.typeDef(Symbol.init(name), ty);
+        }
+    }
+
+    const @"i64" = try env.typeIdentifyNumber(.int, 64);
+    const @"f32" = try env.typeDef(sym("f32"), Type{
+        .number = .{ .layout = .float, .bits = 32 }
+    });
+    const @"f64" = try env.typeDef(sym("f64"), Type{
+        .number = .{ .layout = .float, .bits = 64 }
     });
 
-    const bin_i64 = try env.typeIdentify(try funcType(
-        tmp_ally,
+    _ = @"f32";
+    _ = @"f64";
+
+    // math functions
+    const bin_i64 = try env.typeIdentify(funcType(
         &.{@"i64", @"i64"},
         &.{},
         @"i64"
