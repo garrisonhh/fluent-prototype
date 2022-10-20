@@ -56,6 +56,10 @@ fn funcType(
 }
 
 pub fn initPrelude(ally: Allocator) Env.DefError!Env {
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const tmp_ally = arena.allocator();
+
     var env = Env.init(ally);
 
     _ = try env.typeDef(sym("type"), Type{ .ty = {} });
@@ -66,7 +70,7 @@ pub fn initPrelude(ally: Allocator) Env.DefError!Env {
     });
 
     const bin_i64 = try env.typeIdentify(try funcType(
-        ally,
+        tmp_ally,
         &.{@"i64", @"i64"},
         &.{},
         @"i64"

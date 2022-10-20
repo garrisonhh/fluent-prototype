@@ -28,6 +28,17 @@ pub const Data = union(enum) {
     do: []Self,
     list: []Self,
 
+    pub fn deinit(self: Data, ally: Allocator) void {
+        switch (self) {
+            .number => {},
+            .string, .symbol => |sym| ally.free(sym.str),
+            .call, .do, .list => |exprs| {
+                for (exprs) |expr| expr.deinit(ally);
+                ally.free(exprs);
+            }
+        }
+    }
+
     /// for easy literal analysis
     pub fn fromSExprData(
         ally: Allocator,
@@ -76,14 +87,7 @@ fn init(loc: Loc, ty: TypeId, data: Data) Self {
 }
 
 pub fn deinit(self: Self, ally: Allocator) void {
-    switch (self.data) {
-        .call => |children| {
-            for (children) |child| child.deinit(ally);
-            ally.free(children);
-        },
-        .string, .symbol => |sym| ally.free(sym.str),
-        else => {}
-    }
+    self.data.deinit(ally);
 }
 
 pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {

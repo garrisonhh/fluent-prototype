@@ -158,10 +158,6 @@ pub fn deinit() void {
     this.arena.deinit();
 }
 
-pub fn tempAlly() Allocator {
-    return this.arena.allocator();
-}
-
 /// expects `this` to own both params
 fn addSource(name: []const u8, text: []const u8) Allocator.Error!FileHandle {
     const ally = this.tmp_ally();
@@ -277,6 +273,7 @@ pub const Message = struct {
 
     fn deinit(self: *Self) void {
         this.ally.free(self.text);
+        for (self.children.items) |*child| child.deinit();
         self.children.deinit(this.ally);
     }
 
@@ -440,7 +437,10 @@ const MessageTree = struct {
 
     fn clear(self: *Self) void {
         var lists = self.map.valueIterator();
-        while (lists.next()) |list| list.shrinkAndFree(this.ally, 0);
+        while (lists.next()) |list| {
+            for (list.items) |*msg| msg.deinit();
+            list.shrinkAndFree(this.ally, 0);
+        }
 
         self.map.clearRetainingCapacity();
     }
@@ -466,6 +466,10 @@ pub fn post(
 
 pub fn flushMessages() MessageError!void {
     const ally = this.arena.allocator();
+    defer {
+        this.arena.deinit();
+        this.arena = std.heap.ArenaAllocator.init(this.ally);
+    }
 
     const tex = try this.messages.render(ally);
     defer tex.deinit(ally);

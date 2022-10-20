@@ -14,7 +14,7 @@ const c = @cImport({
 });
 
 /// returns file
-fn repl_read(ally: Allocator) !context.FileHandle {
+fn replRead(ally: Allocator) !context.FileHandle {
     const INDENT = 2;
 
     var buf = std.ArrayList(u8).init(ally);
@@ -59,7 +59,7 @@ fn repl_read(ally: Allocator) !context.FileHandle {
 
 fn repl(ally: Allocator) !void {
     while (true) {
-        const input = try repl_read(ally);
+        const input = try replRead(ally);
 
         // check for empty input (exit program)
         var is_empty: bool = true;
@@ -77,7 +77,7 @@ fn repl(ally: Allocator) !void {
     }
 }
 
-fn fluent_tests(ally: Allocator) !void {
+fn fluentTests(ally: Allocator) !void {
     const tests = [_][]const u8{
         // different kinds of literals
         "0xDEAD_BEEFi64",
@@ -95,9 +95,9 @@ fn fluent_tests(ally: Allocator) !void {
 
         // math
         "addi 1 1",
-        //\\/ (+ 45 69)
-        //\\  2
-        //,
+        \\/ (+ 45 69)
+        \\  2
+        ,
 
         // \\and
         // \\  or true false
@@ -142,7 +142,7 @@ fn fluent_tests(ally: Allocator) !void {
         // ,
     };
 
-    for (tests) |@"test"| testing: {
+    for (tests) |@"test"| {
         // print test input
         try stdout.writeAll("[Test]\n");
 
@@ -160,14 +160,9 @@ fn fluent_tests(ally: Allocator) !void {
                 try stdout.writeAll("test failed.\n\n");
 
                 continue;
-            } else {
-                try stdout.print(
-                    "test encountered compiler error: {}{s}{}\n",
-                    .{&kz.Format{ .fg = .red }, @errorName(e), &kz.Format{}}
-                );
-
-                break :testing;
             }
+
+            return e;
         };
 
         try context.flushMessages();
@@ -219,7 +214,7 @@ const Command = union(enum) {
     });
 };
 
-fn print_help() @TypeOf(stdout).Error!void {
+fn printHelp() @TypeOf(stdout).Error!void {
     try stdout.print("commands:\n\n", .{});
 
     for (std.enums.values(Command.Enum)) |tag| {
@@ -228,7 +223,7 @@ fn print_help() @TypeOf(stdout).Error!void {
     }
 }
 
-fn execute_file(ally: Allocator, path: []const u8) !void {
+fn executeFile(ally: Allocator, path: []const u8) !void {
     // required backing stuff
     const handle = context.loadSource(path) catch |e| {
         if (e == error.FileNotFound) {
@@ -261,7 +256,7 @@ fn read_args(ally: Allocator) ![][]u8 {
     return args.toOwnedSlice();
 }
 
-fn parse_args(ally: Allocator) !Command {
+fn parseArgs(ally: Allocator) !Command {
     const args = try read_args(ally);
     defer {
         for (args) |arg| ally.free(arg);
@@ -287,18 +282,18 @@ fn parse_args(ally: Allocator) !Command {
 
 pub fn main() !void {
     // boilerplate stuff
-    // var gpa = std.heap.GeneralPurposeAllocator(.{
-        // .stack_trace_frames = 1000,
-    // }){};
-    // defer _ = gpa.deinit();
-    // const ally = gpa.allocator();
-    const ally = std.heap.page_allocator;
+    var gpa = std.heap.GeneralPurposeAllocator(.{
+        .stack_trace_frames = 1000,
+    }){};
+    defer _ = gpa.deinit();
+    const ally = gpa.allocator();
+    // const ally = std.heap.page_allocator;
 
     context.init(ally);
     defer context.deinit();
 
     // the rest of the fucking owl
-    const cmd = parse_args(ally) catch |e| err: {
+    const cmd = parseArgs(ally) catch |e| err: {
         if (e == CommandError.BadArgs) {
             break :err Command{ .help = {} };
         }
@@ -307,11 +302,11 @@ pub fn main() !void {
     };
 
     switch (cmd) {
-        .help => try print_help(),
+        .help => try printHelp(),
         .repl => try repl(ally),
-        .tests => try fluent_tests(ally),
+        .tests => try fluentTests(ally),
         .run => |path| {
-            try execute_file(ally, path);
+            try executeFile(ally, path);
             ally.free(path);
         }
     }

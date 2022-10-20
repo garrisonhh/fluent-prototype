@@ -76,12 +76,16 @@ fn analyzeDo(env: *Env, expr: SExpr, expects: Type) SemaError!TExpr {
     }
 
     const texprs = try ally.alloc(TExpr, exprs.len - 1);
+    errdefer ally.free(texprs);
 
     // analyze statements
     const stmts = exprs[1..exprs.len - 1];
     for (stmts) |stmt, i| {
+        errdefer for (texprs[0..i]) |texpr| texpr.deinit(ally);
         texprs[i] = try analyze(env, stmt, Type{ .unit = {} });
     }
+
+    errdefer for (texprs[0..stmts.len]) |texpr| texpr.deinit(ally);
 
     // analyze return expr
     const final = exprs[exprs.len - 1];
@@ -90,7 +94,7 @@ fn analyzeDo(env: *Env, expr: SExpr, expects: Type) SemaError!TExpr {
 
     // create TExpr
     const data = TExpr.Data{ .do = texprs };
-    return unifyTExpr(env, expr.loc, data, ret_expr.ty, expects);
+    return try unifyTExpr(env, expr.loc, data, ret_expr.ty, expects);
 }
 
 fn analyzeList(env: *Env, expr: SExpr, expects: Type) SemaError!TExpr {
@@ -98,6 +102,8 @@ fn analyzeList(env: *Env, expr: SExpr, expects: Type) SemaError!TExpr {
 
     const elements = expr.data.call[1..];
     const texprs = try ally.alloc(TExpr, elements.len);
+    errdefer ally.free(texprs);
+
     var i: usize = 0;
 
     // determine type of the list elements
@@ -113,6 +119,7 @@ fn analyzeList(env: *Env, expr: SExpr, expects: Type) SemaError!TExpr {
 
     // analyze each element
     while (i < elements.len) : (i += 1) {
+        errdefer for (texprs[0..i]) |texpr| texpr.deinit(ally);
         texprs[i] = try analyze(env, elements[i], elem_ty.*);
     }
 
@@ -139,9 +146,11 @@ fn analyzeCall(env: *Env, expr: SExpr, expects: Type) SemaError!TExpr{
 
         // regular call
         const texprs = try ally.alloc(TExpr, exprs.len);
+        errdefer ally.free(texprs);
 
         // analyze head
         texprs[0] = try analyze(env, head, Type{ .any = {} });
+        errdefer texprs[0].deinit(ally);
 
         const fn_ty = env.typeGet(texprs[0].ty);
         if (fn_ty.* != .func) {
@@ -166,6 +175,8 @@ fn analyzeCall(env: *Env, expr: SExpr, expects: Type) SemaError!TExpr{
         }
 
         for (param_tys) |param_tid, i| {
+            errdefer for (texprs[1..i + 1]) |texpr| texpr.deinit(ally);
+
             const param_expects = env.typeGet(param_tid);
             texprs[i + 1] = try analyze(env, tail[i], param_expects.*);
         }
@@ -186,6 +197,8 @@ fn unifyTExpr(
     inward: TypeId,
     expects: Type
 ) SemaError!TExpr {
+    errdefer data.deinit(env.ally);
+
     const in = env.typeGet(inward);
 
     // create an error for holes
