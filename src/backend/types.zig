@@ -373,6 +373,11 @@ pub const Type = union(enum) {
 /// 'inward' information an expression has about its own type, unify()
 /// determines what the final type of the expression should be.
 ///
+/// TODO functions that utilize this need to recognize that unification outward
+/// means that the outward type is narrower than the inward type. therefore,
+/// semantic analysis can then infer (and check the validity of) a narrower type
+/// for inner exprs that use this unified type.
+///
 /// this is basically the core of fluent's 'algorithm w' implementation.
 pub fn unify(
     typewelt: *TypeWelt,

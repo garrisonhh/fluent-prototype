@@ -9,10 +9,12 @@ const SExpr = @import("sexpr.zig");
 
 const Allocator = std.mem.Allocator;
 const RawExpr = frontend.RawExpr;
+const Loc = context.Loc;
 
 pub const TranslateError =
     Allocator.Error
- || util.ParseNumberError;
+ || context.MessageError
+ || context.FluentError;
 
 fn translateGroup(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
     const children = expr.children.?;
@@ -42,12 +44,65 @@ fn translateCallTo(
     return SExpr.initCall(expr.loc, exprs);
 }
 
+fn numberError(loc: Loc) TranslateError {
+    const text = "can't understand this number literal";
+    _ = try context.post(.err, loc, text, .{});
+
+    return error.FluentError;
+}
+
 // TODO produce fluent errors for bad numbers
 fn translateNumber(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
-    const num = try util.parseNumber(ally, expr.loc.getSlice());
+    const num = util.parseNumber(ally, expr.loc.getSlice()) catch |e| {
+        return switch (e) {
+            error.BadNumber,
+            error.WrongLayout,
+            error.TooManyBits,
+            error.NegativeToUnsigned => numberError(expr.loc),
+            else => @errSetCast(TranslateError, e)
+        };
+    };
     defer num.deinit(ally);
 
-    return SExpr.initNumber(expr.loc, try SExpr.Number.from(num));
+    // validate bits
+    if (num.bits) |bits| {
+        const integral = num.layout.? != .float;
+        const valid_bits: []const u8 =
+            if (integral) &[_]u8{8, 16, 32, 64} else &[_]u8{32, 64};
+
+        for (valid_bits) |valid| {
+            if (bits == valid) break;
+        } else {
+            const msg = try context.post(
+                .err,
+                expr.loc,
+                "invalid number width",
+                .{}
+            );
+
+            if (integral) {
+                _ = try msg.annotate(
+                    null,
+                    "fluent supports 8, 16, 32, or 64 bit integers",
+                    .{}
+                );
+            } else {
+                _ = try msg.annotate(
+                    null,
+                    "fluent supports 32 or 64 bit floats",
+                    .{}
+                );
+            }
+
+            return error.FluentError;
+        }
+    }
+
+    const sexpr_num = SExpr.Number.from(num) catch {
+        return numberError(expr.loc);
+    };
+
+    return SExpr.initNumber(expr.loc, sexpr_num);
 }
 
 fn translateString(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
