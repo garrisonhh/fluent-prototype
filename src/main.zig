@@ -169,6 +169,8 @@ fn fluent_tests(ally: Allocator) !void {
                 break :testing;
             }
         };
+
+        try context.flushMessages();
         try stdout.writeAll("test succeeded.\n\n");
     }
 }

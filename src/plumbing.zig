@@ -58,8 +58,6 @@ pub fn execute(ally: Allocator, handle: context.FileHandle) !void {
         try stdout.writeByte('\n');
     }
 
-    try context.flushMessages();
-
     // time logging
     const stop = std.time.nanoTimestamp();
     const seconds = @intToFloat(f64, stop - start) * 1e-9;
