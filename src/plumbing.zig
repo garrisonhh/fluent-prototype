@@ -43,6 +43,15 @@ pub fn execute(ally: Allocator, handle: context.FileHandle) !void {
     var env = try backend.initPrelude(ally);
     defer env.deinit();
 
+    if (builtin.mode == .Debug) {
+        const tex = try env.render(ally);
+        defer tex.deinit(ally);
+
+        try stdout.writeAll("[Prelude]\n");
+        try tex.display(stdout);
+        try stdout.writeByte('\n');
+    }
+
     const any = backend.Type{ .any = {} };
     const texpr = try backend.analyze(&env, sexpr, any);
     defer texpr.deinit(ally);

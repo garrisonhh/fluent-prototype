@@ -94,7 +94,7 @@ fn fluentTests(ally: Allocator) !void {
         "[[1], [2, 3], [4, 5, 6], _what_could_this_be]",
 
         // math
-        "addi 1 1",
+        "+ 1 1",
         \\/ (+ 45 69)
         \\  2
         ,

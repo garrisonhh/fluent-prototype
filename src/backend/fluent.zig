@@ -54,7 +54,6 @@ pub fn initPrelude(ally: Allocator) !Env {
     var arena = std.heap.ArenaAllocator.init(ally);
     defer arena.deinit();
     const tmp_ally = arena.allocator();
-    _ = tmp_ally;
 
     var env = Env.init(ally);
 
@@ -78,7 +77,14 @@ pub fn initPrelude(ally: Allocator) !Env {
         }
     }
 
+    const @"i8" = try env.typeIdentifyNumber(.int, 8);
+    const @"i16" = try env.typeIdentifyNumber(.int, 16);
+    const @"i32" = try env.typeIdentifyNumber(.int, 32);
     const @"i64" = try env.typeIdentifyNumber(.int, 64);
+    const @"u8" = try env.typeIdentifyNumber(.uint, 8);
+    const @"u16" = try env.typeIdentifyNumber(.uint, 16);
+    const @"u32" = try env.typeIdentifyNumber(.uint, 32);
+    const @"u64" = try env.typeIdentifyNumber(.uint, 64);
     const @"f32" = try env.typeDef(sym("f32"), Type{
         .number = .{ .layout = .float, .bits = 32 }
     });
@@ -86,18 +92,45 @@ pub fn initPrelude(ally: Allocator) !Env {
         .number = .{ .layout = .float, .bits = 64 }
     });
 
-    _ = @"f32";
-    _ = @"f64";
+    const int_ids: []TypeId = &.{@"i8", @"i16", @"i32", @"i64"};
+    const uint_ids: []TypeId = &.{@"u8", @"u16", @"u32", @"u64"};
+    const float_ids: []TypeId = &.{@"f32", @"f64"};
+    const int_ty = try Type.initSet(tmp_ally, int_ids);
+    const uint_ty = try Type.initSet(tmp_ally, uint_ids);
+    const float_ty = try Type.initSet(tmp_ally, float_ids);
+
+    const int = try env.typeDef(sym("Int"), int_ty);
+    const uint = try env.typeDef(sym("UInt"), uint_ty);
+    const float = try env.typeDef(sym("Float"), float_ty);
+
+    _ = int;
+    _ = uint;
+    _ = float;
+
+    const number_ids = try tmp_ally.alloc(
+        TypeId,
+        int_ids.len + uint_ids.len + float_ids.len
+    );
+    var i: usize = 0;
+    for ([_][]TypeId{int_ids, uint_ids, float_ids}) |id_list| {
+        for (id_list) |id| {
+            number_ids[i] = id;
+            i += 1;
+        }
+    }
+
+    const number_ty = try Type.initSet(tmp_ally, number_ids);
+    const number = try env.typeDef(sym("Number"), number_ty);
 
     // math functions
-    const bin_i64 = try env.typeIdentify(funcType(
-        &.{@"i64", @"i64"},
+    const bin_math = try env.typeIdentify(funcType(
+        &.{number, number},
         &.{},
-        @"i64"
+        number
     ));
 
-    _ = try env.def(sym("addi"), .{
-        .ty = bin_i64,
+    _ = try env.def(sym("+"), .{
+        .ty = bin_math,
         .value = .{ .unimpl = {} },
     });
 

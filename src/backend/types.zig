@@ -17,6 +17,31 @@ pub const TypeId = packed struct {
     pub fn eql(self: Self, id: Self) bool {
         return self.index == id.index;
     }
+
+    pub const WriteError =
+        std.ArrayList(u8).Writer.Error
+     || std.fmt.AllocPrintError;
+
+    pub fn write(
+        self: Self,
+        ally: Allocator,
+        typewelt: TypeWelt,
+        writer: anytype
+    ) WriteError!void {
+        if (typewelt.getName(id)) |name| {
+            try writer.print("{}", .{name});
+        } else {
+            try typewelt.get(id).write(ally, typewelt, writer);
+        }
+    }
+
+    pub fn writeAlloc(
+        self: Self,
+        ally: Allocator,
+        typewelt: TypeWelt,
+    ) WriteError!void {
+
+    }
 };
 
 /// storage for types and the context for type handles.
@@ -53,6 +78,7 @@ pub const TypeWelt = struct {
     );
 
     ally: Allocator,
+    names: std.AutoHashMapUnmanaged(TypeId, Symbol) = .{},
     types: std.ArrayListUnmanaged(*Type) = .{},
     map: TypeMap = .{},
 
@@ -69,10 +95,22 @@ pub const TypeWelt = struct {
         }
         self.types.deinit(self.ally);
         self.map.deinit(self.ally);
+
+        var names = self.names.valueIterator();
+        while (names.next()) |name| self.ally.free(name.str);
+        self.names.deinit(self.ally);
     }
 
     pub fn get(self: Self, id: TypeId) *const Type {
         return self.types.items[id.index];
+    }
+
+    pub fn putName(self: *Self, id: TypeId, name: Symbol) Allocator.Error!void {
+        try self.names.put(self.ally, id, try name.clone(self.ally));
+    }
+
+    pub fn getName(self: Self, id: TypeId) ?Symbol {
+        return self.names.get(id);
     }
 
     /// retrieves an established ID or creates a new one.
@@ -141,6 +179,19 @@ pub const Type = union(enum) {
     tuple: []TypeId,
 
     func: Func,
+
+    // pretty much the only thing with a complicated underlying data structure
+    pub fn initSet(
+        ally: Allocator,
+        subtypes: []const TypeId
+    ) Allocator.Error!Self {
+        var set = Set{};
+        for (subtypes) |subty| {
+            try set.put(ally, subty, {});
+        }
+
+        return Type{ .set = set };
+    }
 
     pub fn deinit(self: *Self, ally: Allocator) void {
         switch (self.*) {
@@ -279,15 +330,20 @@ pub const Type = union(enum) {
         };
     }
 
+    pub const WriteError =
+        std.ArrayList(u8).Writer.Error
+     || std.fmt.AllocPrintError;
+
     fn writeList(
         list: []TypeId,
+        ally: Allocator,
         typewelt: TypeWelt,
         writer: anytype
-    ) @TypeOf(writer).Error!void {
+    ) WriteError!void {
         try writer.writeByte('[');
         for (list) |ty, i| {
             if (i > 0) try writer.writeAll(", ");
-            try typewelt.get(ty).write(typewelt, writer);
+            try writeId(ty, ally, typewelt, writer);
         }
         try writer.writeByte(']');
     }
@@ -295,15 +351,48 @@ pub const Type = union(enum) {
     /// simply the closest you can get to format
     pub fn write(
         self: Self,
+        ally: Allocator,
         typewelt: TypeWelt,
         writer: anytype
-    ) @TypeOf(writer).Error!void {
+    ) WriteError!void {
         switch (self) {
             .unit => try writer.writeAll(@tagName(self)),
             .ty => try writer.writeAll("Type"),
             .hole, .symbol, .any => try util.writeCaps(@tagName(self), writer),
-            .set => @panic("TODO write type set"),
             .atom => |sym| try writer.print("#{s}", .{sym.str}),
+            .set => |set| {
+                // render subtypes
+                const subtypes = try ally.alloc([]const u8, set.count());
+                defer {
+                    for (subtypes) |text| ally.free(text);
+                    ally.free(subtypes);
+                }
+
+                var keys = set.keyIterator();
+                var i: usize = 0;
+                while (keys.next()) |key| : (i += 1) {
+                    var list = std.ArrayList(u8).init(ally);
+                    try writeId(key.*, ally, typewelt, list.writer());
+
+                    subtypes[i] = list.toOwnedSlice();
+                }
+
+                // sort subtypes
+                const Closure = struct {
+                    /// just makes std.sort.sort happy
+                    fn lessThan(ctx: void, a: []const u8, b: []const u8) bool {
+                        _ = ctx;
+                        return std.ascii.lessThanIgnoreCase(a, b);
+                    }
+                };
+
+                std.sort.sort([]const u8, subtypes, {}, Closure.lessThan);
+
+                // write subtypes
+                try writer.writeAll("(Set");
+                for (subtypes) |text| try writer.print(" {s}", .{text});
+                try writer.writeByte(')');
+            },
             .number => |num| {
                 const layout = @tagName(num.layout);
                 if (num.bits) |bits| {
@@ -314,42 +403,38 @@ pub const Type = union(enum) {
             },
             .list => |subty| {
                 try writer.writeAll("(List ");
-                try typewelt.get(subty).write(typewelt, writer);
+                try writeId(subty, ally, typewelt, writer);
                 try writer.writeByte(')');
             },
             .tuple => |tup| {
                 try writer.writeAll("(Tuple");
                 for (tup) |ty| {
                     try writer.writeByte(' ');
-                    try typewelt.get(ty).write(typewelt, writer);
+                    try writeId(ty, ally, typewelt, writer);
                 }
                 try writer.writeByte(')');
             },
             .func => |func| {
                 try writer.writeAll("(Fn ");
-                try writeList(func.takes, typewelt, writer);
+                try writeList(func.takes, ally, typewelt, writer);
                 try writer.writeByte(' ');
-                try writeList(func.contexts, typewelt, writer);
+                try writeList(func.contexts, ally, typewelt, writer);
                 try writer.writeByte(' ');
-                try typewelt.get(func.returns).write(typewelt, writer);
+                try writeId(func.returns, ally, typewelt, writer);
                 try writer.writeByte(')');
             }
         }
     }
 
-    pub const WriteAllocError =
-        std.ArrayList(u8).Writer.Error
-     || std.fmt.AllocPrintError;
-
     pub fn writeAlloc(
         self: Self,
         ally: Allocator,
         typewelt: TypeWelt
-    ) WriteAllocError![]const u8 {
+    ) WriteError![]const u8 {
         var list = std.ArrayList(u8).init(ally);
         defer list.deinit();
 
-        try self.write(typewelt, list.writer());
+        try self.write(ally, typewelt, list.writer());
 
         return list.toOwnedSlice();
     }

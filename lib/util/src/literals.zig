@@ -16,7 +16,7 @@ pub const ParseNumberError =
 pub const Number = struct {
     const Self = @This();
 
-    pub const Layout = enum {int, uint, float};
+    pub const Layout = enum { int, uint, float };
 
     neg: bool,
     radix: u8,

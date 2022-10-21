@@ -1,4 +1,4 @@
-//! SSA IR data structure definitions.
+//! SSA IR primitives.
 //!
 //! the goal for this is to be a common target between static compilation and
 //! dynamic execution. the dynamic vm will want extra processing to do things
@@ -7,15 +7,16 @@
 //! sufficient
 
 const std = @import("std");
+const builtin = @import("builtin");
 const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
 const TypeId = types.TypeId;
 
-/// symbolic representation of instructions. since blocks store type info,
-/// there is no need for instructions to be type or size aware; this can be
+/// symbolic representation of operationss. since blocks store type info,
+/// there is no need for operations to be type or size specific; this can be
 /// deduced later on
-pub const Inst = union(Op) {
+pub const Op = union(enum) {
     pub const Unary = struct {
         a: usize,
         to: usize,
@@ -67,25 +68,73 @@ pub const Inst = union(Op) {
     arg: Arg,
 };
 
+/// essentially just a system-v aligned pointer with some operations added.
+/// this allows for generic operations over bits and easy c interop.
 pub const Value = struct {
     const Self = @This();
 
-    ptr: [*]align(16) u8,
+    // NOTE potential optimization here would be to store only the raw array ptr
+    ptr: []align(16) u8,
 
-    /// cast to a pointer with a comptime-known size
-    pub fn asSize(self: Self, comptime N: usize) *align(16) [N]u8 {
-        return @ptrCast(*align(16) [N]u8, self.ptr);
+    /// allocates and dupes data to aligned ptr
+    pub fn init(ally: Allocator, data: []const u8) Allocator.Error!Self {
+        const mem = try ally.alignedAlloc(u8, 16, data.len);
+        std.mem.copy(u8, mem, data);
+
+        return Self{ .ptr = mem };
     }
 
-    /// essentially a bitcast to the correct type
-    pub fn deref(self: Self, comptime T: type) T {
-        return *@ptrCast(*T, self.ptr);
+    pub fn deinit(self: *Self, ally: Allocator) void {
+        ally.free(self.ptr);
+    }
+
+    pub fn asPtr(self: Self, comptime T: type) *align(16) T {
+        if (builtin.mode == .Debug) {
+            if (@sizeOf(T) != self.len) {
+                std.debug.panic(
+                    "attempted to cast Value of size {} to type {} of size {}",
+                    .{self.len, T, @sizeOf(T)}
+                );
+            }
+        }
+
+        return @ptrCast(*align(16) T, self.ptr);
+    }
+
+    /// essentially a bitcast to the type desired
+    pub fn as(self: Self, comptime T: type) T {
+        return self.asPtr(T).*;
     }
 };
 
+/// linear block representation
+///
+/// expects to own all memory
 pub const Block = struct {
-    const_mem: []align(16) u8, // storage for constants
+    const Self = @This();
+
+    name: []const u8,
     consts: []Value,
     locals: []TypeId,
     ops: []Op,
+
+    pub fn deinit(self: Self, ally: Allocator) void {
+        ally.free(self.name);
+        for (self.consts) |*value| value.deinit(ally);
+        ally.free(self.consts);
+        ally.free(self.locals);
+        ally.free(self.ops);
+    }
+};
+
+pub const Program = struct {
+    const Self = @This();
+
+    blocks: []Block,
+    entry: *const Block,
+
+    pub fn deinit(self: Self, ally: Allocator) void {
+        for (self.blocks) |block| block.deinit(ally);
+        ally.free(Self.blocks);
+    }
 };
