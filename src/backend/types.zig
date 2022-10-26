@@ -28,10 +28,10 @@ pub const TypeId = packed struct {
         typewelt: TypeWelt,
         writer: anytype
     ) WriteError!void {
-        if (typewelt.getName(id)) |name| {
+        if (typewelt.getName(self)) |name| {
             try writer.print("{}", .{name});
         } else {
-            try typewelt.get(id).write(ally, typewelt, writer);
+            try typewelt.get(self).write(ally, typewelt, writer);
         }
     }
 
@@ -39,10 +39,16 @@ pub const TypeId = packed struct {
         self: Self,
         ally: Allocator,
         typewelt: TypeWelt,
-    ) WriteError!void {
+    ) WriteError![]u8 {
+        var list = std.ArrayList(u8).init(ally);
+        defer list.deinit();
 
+        try self.write(ally, typewelt, list.writer());
+
+        return list.toOwnedSlice();
     }
 };
+
 
 /// storage for types and the context for type handles.
 ///
@@ -140,11 +146,14 @@ pub const Type = union(enum) {
     pub const Tag = std.meta.Tag(Self);
 
     pub const Set = std.AutoHashMapUnmanaged(TypeId, void);
+
     pub const Number = struct {
-        bits: ?u8,
+        bits: u8,
         layout: util.Number.Layout,
     };
+
     pub const Func = struct {
+        generics: []TypeId,
         takes: []TypeId,
         // implicit parameters for effect management
         contexts: []TypeId,
@@ -152,6 +161,7 @@ pub const Type = union(enum) {
 
         pub fn clone(self: Func, ally: Allocator) Allocator.Error!Func {
             return Func{
+                .generics = try ally.dupe(TypeId, self.generics),
                 .takes = try ally.dupe(TypeId, self.takes),
                 .contexts = try ally.dupe(TypeId, self.contexts),
                 .returns = self.returns,
@@ -159,9 +169,13 @@ pub const Type = union(enum) {
         }
     };
 
+    /// generics only exist in the context of the current function
+    pub const GenericId = struct { index: usize };
+
     // unique
     unit,
     hole,
+    generic: GenericId,
 
     // dynamic time
     symbol,
@@ -171,7 +185,7 @@ pub const Type = union(enum) {
     any,
     set: Set,
 
-    // concrete (exist at runtime)
+    // concrete (exist at static runtime)
     atom: Symbol,
     number: Number,
 
@@ -180,7 +194,10 @@ pub const Type = union(enum) {
 
     func: Func,
 
-    // pretty much the only thing with a complicated underlying data structure
+    pub fn initGeneric(index: usize) Self {
+        return Self{ .generic = GenericId{ .index = index } };
+    }
+
     pub fn initSet(
         ally: Allocator,
         subtypes: []const TypeId
@@ -195,7 +212,7 @@ pub const Type = union(enum) {
 
     pub fn deinit(self: *Self, ally: Allocator) void {
         switch (self.*) {
-            .unit, .hole, .symbol, .any, .ty, .number, .list => {},
+            .unit, .hole, .symbol, .any, .ty, .number, .list, .generic => {},
             .set => |*set| set.deinit(ally),
             .atom => |sym| ally.free(sym.str),
             .tuple => |tup| ally.free(tup),
@@ -212,6 +229,7 @@ pub const Type = union(enum) {
 
         switch (self) {
             .unit, .symbol, .hole, .any, .ty => {},
+            .generic => |gid| wyhash.update(asBytes(&gid)),
             .set => {
                 // NOTE if there is a serious issue here, figure out if there is
                 // a way to hash this in constant space. for now I'm just
@@ -251,6 +269,7 @@ pub const Type = union(enum) {
 
         return switch (self) {
             .unit, .symbol, .hole, .any, .ty => true,
+            .generic => |gid| gid.index == ty.generic.index,
             .set => |set| set: {
                 if (set.count() != ty.set.count()) {
                     break :set false;
@@ -277,7 +296,7 @@ pub const Type = union(enum) {
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch (self) {
-            .unit, .symbol, .hole, .any, .number, .ty, .list => self,
+            .unit, .symbol, .hole, .any, .number, .ty, .list, .generic => self,
             .set => |set| Self{ .set = try set.clone(ally) },
             .atom => |sym| Self{ .atom = try sym.clone(ally) },
             .tuple => |tup| Self{ .tuple = try ally.dupe(TypeId, tup) },
@@ -290,42 +309,104 @@ pub const Type = union(enum) {
     pub fn coercesTo(
         self: Self,
         typewelt: *TypeWelt,
-        ty: Self
+        target: Self
     ) Allocator.Error!bool {
         // manage set matching
-        switch (ty) {
+        switch (target) {
             .any, .hole => return true,
             .set => {
-                // TODO allow subsets to coerce to their supersets
-                return ty.set.contains(try typewelt.identify(self));
+                if (self == .set) {
+                    // subsets coerce to supersets
+                    var subtypes = self.set.keyIterator();
+                    while (subtypes.next()) |subty| {
+                        if (!target.set.contains(subty.*)) return false;
+                    }
+
+                    return true;
+                } else {
+                    // types coerce to sets containing types
+                    return target.set.contains(try typewelt.identify(self));
+                }
             },
-            else => if (@as(Tag, self) != @as(Tag, ty)) return false
+            else => if (@as(Tag, self) != @as(Tag, target)) return false
         }
 
         // concrete matching
-        return switch (ty) {
-            .any, .set, .hole => unreachable,
+        return switch (target) {
+            .any, .set, .hole, .generic => unreachable,
             .unit, .symbol, .ty => true,
-            .atom => |sym| sym.eql(ty.atom),
-            .tuple => self.eql(ty),
+            .atom => |sym| sym.eql(target.atom),
+            .tuple => self.eql(target),
             .number => |num| num: {
                 // layout must match
-                if (num.layout != ty.number.layout) {
+                if (num.layout != target.number.layout) {
                     break :num false;
                 }
 
                 // must not lose bits in coercion
-                if (ty.number.bits != null and num.bits != null) {
-                    break :num num.bits.? <= ty.number.bits.?;
-                } else {
-                    break :num true;
-                }
+                break :num num.bits <= target.number.bits;
             },
             .list => |subty| subty.eql(self.list),
             .func => func: {
                 // TODO I want functions to be able to coerce to functions with
                 // wider effect sets I think?
-                break :func self.eql(ty);
+                break :func self.eql(target);
+            },
+        };
+    }
+
+    /// classifications for the runtime of a type; aka stages of the execution
+    /// when a type is valid
+    pub const RuntimeClass = enum {
+        static, // valid at all stages
+        dynamic, // valid before static compilation
+        analysis, // valid only in semantic analysis
+
+        /// returns the most restrictive class that fits both classes
+        fn unify(self: @This(), other: @This()) @This() {
+            const max_int = std.math.min(@enumToInt(self), @enumToInt(other));
+            return @intToEnum(@This(), max_int);
+        }
+
+        fn unifyList(classes: []const @This()) @This() {
+            var class = @intToEnum(@This(), 0);
+            for (classes) |elem| {
+                class = class.unify(elem);
+            }
+
+            return class;
+        }
+    };
+
+    /// helper for classifyRuntime
+    fn classifyList(list: []const TypeId, typewelt: TypeWelt) RuntimeClass {
+        var class = RuntimeClass.static;
+        for (list) |elem| {
+            const elem_ty = typewelt.get(elem);
+            const elem_class = elem_ty.classifyRuntime(typewelt);
+
+            class = class.unify(elem_class);
+        }
+
+        return class;
+    }
+
+    /// at what point in the compilation cycle is this type valid?
+    pub fn classifyRuntime(self: Self, typewelt: TypeWelt) RuntimeClass {
+        return switch (self) {
+            .any, .set, .hole, .generic => .analysis,
+            .ty, .symbol => .dynamic,
+            .unit, .atom, .number => .static,
+            .list => |subty| typewelt.get(subty).classifyRuntime(typewelt),
+            .tuple => |tup| classifyList(tup, typewelt),
+            .func => |func| func: {
+                var reqs = [3]RuntimeClass{
+                    classifyList(func.takes, typewelt),
+                    classifyList(func.contexts, typewelt),
+                    typewelt.get(func.returns).classifyRuntime(typewelt)
+                };
+
+                break :func RuntimeClass.unifyList(&reqs);
             },
         };
     }
@@ -343,7 +424,7 @@ pub const Type = union(enum) {
         try writer.writeByte('[');
         for (list) |ty, i| {
             if (i > 0) try writer.writeAll(", ");
-            try writeId(ty, ally, typewelt, writer);
+            try ty.write(ally, typewelt, writer);
         }
         try writer.writeByte(']');
     }
@@ -371,10 +452,7 @@ pub const Type = union(enum) {
                 var keys = set.keyIterator();
                 var i: usize = 0;
                 while (keys.next()) |key| : (i += 1) {
-                    var list = std.ArrayList(u8).init(ally);
-                    try writeId(key.*, ally, typewelt, list.writer());
-
-                    subtypes[i] = list.toOwnedSlice();
+                    subtypes[i] = try key.writeAlloc(ally, typewelt);
                 }
 
                 // sort subtypes
@@ -394,35 +472,46 @@ pub const Type = union(enum) {
                 try writer.writeByte(')');
             },
             .number => |num| {
-                const layout = @tagName(num.layout);
-                if (num.bits) |bits| {
-                    try writer.print("{c}{}", .{layout[0], bits});
-                } else {
-                    try writer.writeAll(layout);
-                }
+                try writer.print("{c}{}", .{@tagName(num.layout)[0], num.bits});
             },
             .list => |subty| {
                 try writer.writeAll("(List ");
-                try writeId(subty, ally, typewelt, writer);
+                try subty.write(ally, typewelt, writer);
                 try writer.writeByte(')');
             },
             .tuple => |tup| {
                 try writer.writeAll("(Tuple");
                 for (tup) |ty| {
                     try writer.writeByte(' ');
-                    try writeId(ty, ally, typewelt, writer);
+                    try ty.write(ally, typewelt, writer);
                 }
                 try writer.writeByte(')');
             },
             .func => |func| {
-                try writer.writeAll("(Fn ");
+                try writer.writeAll("(Fn {");
+                for (func.generics) |ty, i| {
+                    if (i > 0) try writer.writeAll(", ");
+                    const gen_ty = Type.initGeneric(i);
+                    try gen_ty.write(ally, typewelt, writer);
+                    try writer.writeAll(": ");
+                    try ty.write(ally, typewelt, writer);
+                }
+                try writer.writeAll("} ");
                 try writeList(func.takes, ally, typewelt, writer);
                 try writer.writeByte(' ');
                 try writeList(func.contexts, ally, typewelt, writer);
                 try writer.writeByte(' ');
-                try writeId(func.returns, ally, typewelt, writer);
+                try func.returns.write(ally, typewelt, writer);
                 try writer.writeByte(')');
-            }
+            },
+            .generic => |gid| {
+                const n = gid.index;
+                if (n >= 26) {
+                    try writer.print("generic-{}", .{n});
+                } else {
+                    try writer.writeByte('A' + @intCast(u8, n));
+                }
+            },
         }
     }
 
@@ -430,7 +519,7 @@ pub const Type = union(enum) {
         self: Self,
         ally: Allocator,
         typewelt: TypeWelt
-    ) WriteError![]const u8 {
+    ) WriteError![]u8 {
         var list = std.ArrayList(u8).init(ally);
         defer list.deinit();
 

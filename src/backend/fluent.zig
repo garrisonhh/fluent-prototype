@@ -40,9 +40,15 @@ fn sym(comptime str: []const u8) Symbol {
     return comptime Symbol.init(str);
 }
 
-fn funcType(takes: []TypeId, contexts: []TypeId, returns: TypeId) Type {
+fn funcType(
+    generics: []TypeId,
+    takes: []TypeId,
+    contexts: []TypeId,
+    returns: TypeId
+) Type {
     return Type{
         .func = Type.Func{
+            .generics = generics,
             .takes = takes,
             .contexts = contexts,
             .returns = returns
@@ -123,10 +129,13 @@ pub fn initPrelude(ally: Allocator) !Env {
     const number = try env.typeDef(sym("Number"), number_ty);
 
     // math functions
+    const generic_a = try env.typeIdentify(Type.initGeneric(0));
+
     const bin_math = try env.typeIdentify(funcType(
-        &.{number, number},
+        &.{number},
+        &.{generic_a, generic_a},
         &.{},
-        number
+        generic_a
     ));
 
     _ = try env.def(sym("+"), .{

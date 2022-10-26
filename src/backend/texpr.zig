@@ -98,6 +98,28 @@ pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
     };
 }
 
+/// calls a predicate on this expr and all subexprs. useful for small compiler
+/// passes.
+///
+/// TODO make sure I'm using this for multiple use cases
+pub fn traverse(
+    self: Self,
+    env: *Env,
+    comptime E: type,
+    pred: *const fn(*Env, Self) E!void
+) E!void {
+    try pred(env, self);
+
+    switch (self.data) {
+        .call, .do, .list => |children| {
+            for (children) |child| {
+                try child.traverse(env, E, pred);
+            }
+        },
+        else => {}
+    }
+}
+
 pub fn render(
     self: Self,
     env: Env,

@@ -14,6 +14,7 @@ const TypeId = types.TypeId;
 const Type = types.Type;
 const Pattern = types.Pattern;
 const FluentError = context.FluentError;
+const Symbol = util.Symbol;
 
 pub const SemaError =
     Allocator.Error
@@ -34,18 +35,29 @@ fn expectError(env: Env, loc: Loc, expected: Type, found: Type) SemaError {
     defer env.ally.free(exp_text);
     defer env.ally.free(found_text);
 
-    const msg = try context.post(.note, loc, "expected {s}", .{exp_text});
+    const msg = try context.post(.err, loc, "expected {s}", .{exp_text});
     _ = try msg.annotate(null, "found {s}", .{found_text});
     return error.FluentError;
 }
 
 fn typeOfNumber(env: *Env, num: SExpr.Number) SemaError!TypeId {
-    return try env.typeIdentify(Type{
-        .number = .{
-            .bits = num.bits,
-            .layout = @as(util.Number.Layout, num.data),
-        }
-    });
+    if (num.bits) |bits| {
+        return try env.typeIdentify(Type{
+            .number = .{
+                .bits = bits,
+                .layout = num.data,
+            }
+        });
+    } else {
+        // TODO there has to be a better way to do this, lol
+        const typename = switch (num.data) {
+            .int => comptime Symbol.init("Int"),
+            .uint => comptime Symbol.init("UInt"),
+            .float => comptime Symbol.init("Float"),
+        };
+
+        return env.getValue(typename).?.ty;
+    }
 }
 
 fn typeOfSymbol(env: *Env, expr: SExpr) SemaError!TypeId {
@@ -58,7 +70,7 @@ fn typeOfSymbol(env: *Env, expr: SExpr) SemaError!TypeId {
 
     // normal symbol
     return env.getType(symbol) orelse {
-        _ = try context.post(.err, expr.loc, "unknown symbol", .{});
+        _ = try context.post(.err, expr.loc, "unknown symbol `{}`", .{symbol});
         return error.FluentError;
     };
 }
@@ -221,7 +233,7 @@ fn unifyTExpr(
     };
 }
 
-pub fn analyze(env: *Env, expr: SExpr, expects: Type) SemaError!TExpr {
+fn analyzeExpr(env: *Env, expr: SExpr, expects: Type) SemaError!TExpr {
     // calls (and builtins)
     if (expr.data == .call) {
         return try analyzeCall(env, expr, expects);
@@ -241,4 +253,28 @@ pub fn analyze(env: *Env, expr: SExpr, expects: Type) SemaError!TExpr {
 
     const data = try TExpr.Data.fromSExprData(env.ally, expr.data);
     return unifyTExpr(env, expr.loc, data, inward, expects);
+}
+
+/// after analysis, it's possible that types that fluent can't actually lower
+/// are produced (e.g. Any and common type sets like Int). this
+fn verifyDynamic(env: *Env, texpr: TExpr) SemaError!void {
+    const ty = env.typeGet(texpr.ty);
+
+    if (ty.classifyRuntime(env.typewelt) == .analysis) {
+        const ty_text = try ty.writeAlloc(env.ally, env.typewelt);
+        defer env.ally.free(ty_text);
+
+        const text = "inferred type `{s}`, which cannot be executed";
+        _ = try context.post(.err, texpr.loc, text, .{ty_text});
+
+        return error.FluentError;
+    }
+}
+
+pub fn analyze(env: *Env, expr: SExpr, expects: Type) SemaError!TExpr {
+    const texpr = try analyzeExpr(env, expr, expects);
+
+    try texpr.traverse(env, SemaError, verifyDynamic);
+
+    return texpr;
 }
