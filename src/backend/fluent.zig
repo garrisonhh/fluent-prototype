@@ -9,6 +9,7 @@ const Allocator = std.mem.Allocator;
 const Symbol = util.Symbol;
 const Type = types.Type;
 const TypeId = types.TypeId;
+const TypeWelt = types.TypeWelt;
 
 pub const Builtin = enum {
     const Self = @This();
@@ -56,12 +57,12 @@ fn funcType(
     };
 }
 
-pub fn initPrelude(ally: Allocator) !Env {
+pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
     var arena = std.heap.ArenaAllocator.init(ally);
     defer arena.deinit();
     const tmp_ally = arena.allocator();
 
-    var env = Env.init(ally);
+    var env = Env.initBase(ally, typewelt);
 
     _ = try env.typeDef(sym("type"), Type{ .ty = {} });
     _ = try env.typeDef(sym("unit"), Type{ .unit = {} });

@@ -8,6 +8,7 @@ const backend = @import("backend.zig");
 const stdout = std.io.getStdOut().writer();
 const stderr = std.io.getStdErr().writer();
 const Allocator = std.mem.Allocator;
+const Env = backend.Env;
 
 const c = @cImport({
     @cInclude("linenoise.h");
@@ -57,7 +58,7 @@ fn replRead(ally: Allocator) !context.FileHandle {
     return context.addExternalSource("repl", buf.items);
 }
 
-fn repl(ally: Allocator) !void {
+fn repl(ally: Allocator, prelude: *Env) !void {
     while (true) {
         const input = try replRead(ally);
 
@@ -73,11 +74,11 @@ fn repl(ally: Allocator) !void {
         if (is_empty) break;
 
         // eval and print
-        try plumbing.execute(ally, input);
+        try plumbing.execute(ally, prelude, input);
     }
 }
 
-fn fluentTests(ally: Allocator) !void {
+fn fluentTests(ally: Allocator, prelude: *Env) !void {
     const tests = [_][]const u8{
         // different kinds of literals
         "0xDEAD_BEEFi64",
@@ -154,7 +155,7 @@ fn fluentTests(ally: Allocator) !void {
         // run test
         const handle = try context.addExternalSource("test", @"test");
 
-        plumbing.execute(ally, handle) catch |e| {
+        plumbing.execute(ally, prelude, handle) catch |e| {
             if (e == error.FluentError) {
                 try context.flushMessages();
                 try stdout.writeAll("test failed.\n\n");
@@ -223,7 +224,7 @@ fn printHelp() @TypeOf(stdout).Error!void {
     }
 }
 
-fn executeFile(ally: Allocator, path: []const u8) !void {
+fn executeFile(ally: Allocator, prelude: *Env, path: []const u8) !void {
     // required backing stuff
     const handle = context.loadSource(path) catch |e| {
         if (e == error.FileNotFound) {
@@ -233,7 +234,7 @@ fn executeFile(ally: Allocator, path: []const u8) !void {
     };
 
     // time execution
-    plumbing.execute(ally, handle) catch |e| {
+    plumbing.execute(ally, prelude, handle) catch |e| {
         try stdout.print("execution failed: {}\n", .{e});
     };
 
@@ -292,6 +293,12 @@ pub fn main() !void {
     context.init(ally);
     defer context.deinit();
 
+    var typewelt = backend.TypeWelt.init(ally);
+    defer typewelt.deinit();
+
+    var prelude = try backend.initPrelude(ally, &typewelt);
+    defer prelude.deinit();
+
     // the rest of the fucking owl
     const cmd = parseArgs(ally) catch |e| err: {
         if (e == CommandError.BadArgs) {
@@ -303,10 +310,10 @@ pub fn main() !void {
 
     switch (cmd) {
         .help => try printHelp(),
-        .repl => try repl(ally),
-        .tests => try fluentTests(ally),
+        .repl => try repl(ally, &prelude),
+        .tests => try fluentTests(ally, &prelude),
         .run => |path| {
-            try executeFile(ally, path);
+            try executeFile(ally, &prelude, path);
             ally.free(path);
         }
     }

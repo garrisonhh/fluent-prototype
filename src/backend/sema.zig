@@ -22,7 +22,7 @@ pub const SemaError =
  || context.FluentError;
 
 fn holeError(env: Env, loc: Loc, ty: Type) SemaError {
-    const ty_text = try ty.writeAlloc(env.ally, env.typewelt);
+    const ty_text = try ty.writeAlloc(env.ally, env.typewelt.*);
     defer env.ally.free(ty_text);
 
     _ = try context.post(.note, loc, "this hole expects {s}", .{ty_text});
@@ -30,8 +30,8 @@ fn holeError(env: Env, loc: Loc, ty: Type) SemaError {
 }
 
 fn expectError(env: Env, loc: Loc, expected: Type, found: Type) SemaError {
-    const exp_text = try expected.writeAlloc(env.ally, env.typewelt);
-    const found_text = try found.writeAlloc(env.ally, env.typewelt);
+    const exp_text = try expected.writeAlloc(env.ally, env.typewelt.*);
+    const found_text = try found.writeAlloc(env.ally, env.typewelt.*);
     defer env.ally.free(exp_text);
     defer env.ally.free(found_text);
 
@@ -56,7 +56,7 @@ fn typeOfNumber(env: *Env, num: SExpr.Number) SemaError!TypeId {
             .float => comptime Symbol.init("Float"),
         };
 
-        return env.getValue(typename).?.ty;
+        return env.getBound(typename).?.ty;
     }
 }
 
@@ -166,7 +166,7 @@ fn analyzeCall(env: *Env, expr: SExpr, expects: Type) SemaError!TExpr{
 
         const fn_ty = env.typeGet(texprs[0].ty);
         if (fn_ty.* != .func) {
-            const ty_text = try fn_ty.writeAlloc(ally, env.typewelt);
+            const ty_text = try fn_ty.writeAlloc(ally, env.typewelt.*);
             defer ally.free(ty_text);
 
             const text = "expected function, found {s}";
@@ -260,8 +260,8 @@ fn analyzeExpr(env: *Env, expr: SExpr, expects: Type) SemaError!TExpr {
 fn verifyDynamic(env: *Env, texpr: TExpr) SemaError!void {
     const ty = env.typeGet(texpr.ty);
 
-    if (ty.classifyRuntime(env.typewelt) == .analysis) {
-        const ty_text = try ty.writeAlloc(env.ally, env.typewelt);
+    if (ty.classifyRuntime(env.typewelt.*) == .analysis) {
+        const ty_text = try ty.writeAlloc(env.ally, env.typewelt.*);
         defer env.ally.free(ty_text);
 
         const text = "inferred type `{s}`, which cannot be executed";

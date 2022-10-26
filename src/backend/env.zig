@@ -1,4 +1,6 @@
 //! env is the fluent namespace abstraction.
+//!
+//! envs own and manage everything inside their namespace.
 
 const std = @import("std");
 const util = @import("util");
@@ -28,54 +30,76 @@ const Binding = struct {
 };
 
 ally: Allocator,
-typewelt: TypeWelt,
-ns: Symbol.HashMapUnmanaged(Binding) = .{}, // keys are owned
+typewelt: *TypeWelt,
+parent: ?*const Self,
 
-pub fn init(ally: Allocator) Self {
+// keys and values are all owned by this env
+ns: Symbol.HashMapUnmanaged(Binding) = .{},
+
+pub fn initBase(ally: Allocator, typewelt: *TypeWelt) Self {
     return Self{
         .ally = ally,
-        .typewelt = TypeWelt.init(ally),
+        .typewelt = typewelt,
+        .parent = null,
+    };
+}
+
+pub fn init(parent: *const Self) Self {
+    return Self{
+        .ally = parent.ally,
+        .typewelt = parent.typewelt,
+        .parent = parent,
     };
 }
 
 pub fn deinit(self: *Self) void {
-    self.typewelt.deinit();
-
     var keys = self.ns.keyIterator();
     while (keys.next()) |key| self.ally.free(key.str);
     self.ns.deinit(self.ally);
 }
 
 pub fn def(self: *Self, sym: Symbol, to: Binding) DefError!void {
-    const res = try self.ns.getOrPut(self.ally, sym);
-    if (res.found_existing) {
-        return error.SymbolRedef;
-    } else {
-        res.key_ptr.* = try sym.clone(self.ally);
-        res.value_ptr.* = to;
-    }
+    if (self.contains(sym)) return error.SymbolRedef;
+
+    try self.ns.put(self.ally, try sym.clone(self.ally), to);
 }
 
 pub fn contains(self: Self, sym: Symbol) bool {
-    return self.ns.contains(sym);
+    if (self.ns.contains(sym)) {
+        return true;
+    } else if (self.parent) |parent| {
+        return parent.contains(sym);
+    } else {
+        return false;
+    }
+}
+
+fn get(self: Self, sym: Symbol) ?*Binding {
+    if (self.ns.getPtr(sym)) |binding| {
+        return binding;
+    } else if (self.parent) |parent| {
+        return parent.get(sym);
+    } else {
+        return null;
+    }
 }
 
 pub fn getType(self: Self, sym: Symbol) ?TypeId {
-    return if (self.ns.get(sym)) |binding| binding.ty else null;
+    return if (self.get(sym)) |binding| binding.ty else null;
 }
 
-pub fn getValue(self: Self, sym: Symbol) ?*const Bound {
-    return if (self.ns.getPtr(sym)) |binding| &binding.value else null;
+pub fn getBound(self: Self, sym: Symbol) ?*const Bound {
+    return if (self.get(sym)) |binding| &binding.value else null;
 }
 
 // type helpers ================================================================
 
-pub fn typeIdentify(self: *Self, ty: Type) Allocator.Error!TypeId {
+pub fn typeIdentify(self: Self, ty: Type) Allocator.Error!TypeId {
     return try self.typewelt.identify(ty);
 }
 
 pub fn typeIdentifyNumber(
-    self: *Self,
+    self: Self,
     layout: util.Number.Layout,
     bits: u8
 ) Allocator.Error!TypeId {
@@ -84,11 +108,11 @@ pub fn typeIdentifyNumber(
 }
 
 pub fn typeUnify(
-    self: *Self,
+    self: Self,
     outward: TypeId,
     inward: TypeId
 ) Allocator.Error!?TypeId {
-    return try types.unify(&self.typewelt, outward, inward);
+    return try types.unify(self.typewelt, outward, inward);
 }
 
 pub fn typeGet(self: Self, ty: TypeId) *const Type {
