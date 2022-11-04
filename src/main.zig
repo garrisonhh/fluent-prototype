@@ -93,9 +93,12 @@ fn fluentTests(ally: Allocator, prelude: *Env) !void {
         "false",
         "[1, -2, 3]",
         "[[1], [2, 3], [4, 5, 6], _what_could_this_be]",
+        "as i64 256",
 
         // math
-        "+ 1 1",
+        \\as i64
+        \\   + 1 1
+        ,
         \\/ (+ 45 69)
         \\  2
         ,
@@ -307,6 +310,14 @@ pub fn main() !void {
 
         return e;
     };
+
+    // display prelude as a sanity check
+    {
+        const prelude_tex = try prelude.render(ally);
+        defer prelude_tex.deinit(ally);
+
+        try prelude_tex.display(stdout);
+    }
 
     switch (cmd) {
         .help => try printHelp(),

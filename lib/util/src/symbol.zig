@@ -4,36 +4,17 @@ const std = @import("std");
 
 const Self = @This();
 
-const HashMapContext = struct {
-    pub fn hash(ctx: @This(), key: Self) u64 {
-        _ = ctx;
-        return key.hash;
-    }
-
-    pub fn eql(ctx: @This(), a: Self, b: Self) bool {
-        _ = ctx;
-        return a.eql(b);
-    }
-};
-const max_load = std.hash_map.default_max_load_percentage;
-pub fn HashMap(comptime V: type) type {
-    return std.HashMap(Self, V, HashMapContext, max_load);
-}
-pub fn HashMapUnmanaged(comptime V: type) type {
-    return std.HashMapUnmanaged(Self, V, HashMapContext, max_load);
-}
-
 hash: u64,
 str: []const u8,
 
 pub fn init(str: []const u8) Self {
     return Self{
-        .hash = hashStr(str),
+        .hash = hash(str),
         .str = str
     };
 }
 
-pub fn hashStr(str: []const u8) u64 {
+pub fn hash(str: []const u8) u64 {
     const SEED = comptime std.hash.Wyhash.hash(0, "Fluent");
     return std.hash.Wyhash.hash(SEED, str);
 }
@@ -59,4 +40,28 @@ pub fn format(
     _ = options;
 
     try writer.writeAll(self.str);
+}
+
+// hashmap =====================================================================
+
+const HashMapContext = struct {
+    pub fn hash(ctx: @This(), key: Self) u64 {
+        _ = ctx;
+        return key.hash;
+    }
+
+    pub fn eql(ctx: @This(), a: Self, b: Self) bool {
+        _ = ctx;
+        return a.eql(b);
+    }
+};
+
+const max_load = std.hash_map.default_max_load_percentage;
+
+pub fn HashMap(comptime V: type) type {
+    return std.HashMap(Self, V, HashMapContext, max_load);
+}
+
+pub fn HashMapUnmanaged(comptime V: type) type {
+    return std.HashMapUnmanaged(Self, V, HashMapContext, max_load);
 }

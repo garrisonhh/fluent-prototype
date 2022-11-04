@@ -44,7 +44,7 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
     var local = Env.init(env);
     defer local.deinit();
 
-    const any = backend.Type{ .any = {} };
+    const any = try env.typeIdentify(backend.Type{ .any = {} });
     const texpr = try backend.analyze(&local, sexpr, any);
     defer texpr.deinit(ally);
 

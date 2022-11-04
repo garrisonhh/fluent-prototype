@@ -27,6 +27,7 @@ pub const Data = union(enum) {
     // special syntax
     do: []Self,
     list: []Self,
+    cast: *Self,
 
     pub fn deinit(self: Data, ally: Allocator) void {
         switch (self) {
@@ -35,7 +36,11 @@ pub const Data = union(enum) {
             .call, .do, .list => |exprs| {
                 for (exprs) |expr| expr.deinit(ally);
                 ally.free(exprs);
-            }
+            },
+            .cast => |expr| {
+                expr.deinit(ally);
+                ally.destroy(expr);
+            },
         }
     }
 
@@ -70,6 +75,9 @@ pub const Data = union(enum) {
             .call => |exprs| Data{ .call = try cloneChildren(exprs, ally) },
             .do => |exprs| Data{ .do = try cloneChildren(exprs, ally) },
             .list => |exprs| Data{ .list = try cloneChildren(exprs, ally) },
+            .cast => |expr| Data{
+                .cast = try util.placeOn(ally, try expr.clone(ally))
+            },
         };
     }
 };
@@ -82,7 +90,7 @@ fn init(loc: Loc, ty: TypeId, data: Data) Self {
     return Self{
         .data = data,
         .loc = loc,
-        .ty = ty
+        .ty = ty,
     };
 }
 
@@ -98,26 +106,15 @@ pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
     };
 }
 
-/// calls a predicate on this expr and all subexprs. useful for small compiler
-/// passes.
+/// gets children of any TExpr if they exist.
 ///
-/// TODO make sure I'm using this for multiple use cases
-pub fn traverse(
-    self: Self,
-    env: *Env,
-    comptime E: type,
-    pred: *const fn(*Env, Self) E!void
-) E!void {
-    try pred(env, self);
-
-    switch (self.data) {
-        .call, .do, .list => |children| {
-            for (children) |child| {
-                try child.traverse(env, E, pred);
-            }
-        },
-        else => {}
-    }
+/// useful for recursive operations on TExprs.
+pub fn getChildren(self: Self) []Self {
+    return switch (self.data) {
+        .call, .do, .list => |children| children,
+        .cast => |expr| @ptrCast([*]Self, expr)[0..1],
+        else => &.{}
+    };
 }
 
 pub fn render(
@@ -125,7 +122,7 @@ pub fn render(
     env: Env,
     ally: Allocator
 ) !kz.Texture {
-    const INDENT = 4;
+    const INDENT = 2;
     const faint = kz.Format{ .special = .faint };
     const magenta = kz.Format{ .fg = .magenta };
     const green = kz.Format{ .fg = .green };
@@ -173,6 +170,17 @@ pub fn render(
             offset = .{INDENT, 1};
             break :call
                 try kz.Texture.stack(ally, list.items, .bottom, .close);
+        },
+        .cast => |expr| cast: {
+            offset = .{INDENT, 1};
+
+            const text_tex = try kz.Texture.from(ally, kz.Format{}, "cast");
+            defer text_tex.deinit(ally);
+
+            const expr_tex = try expr.render(env, ally);
+            defer expr_tex.deinit(ally);
+
+            break :cast try text_tex.unify(ally, expr_tex, .{0, 1});
         },
     };
     defer data_tex.deinit(ally);

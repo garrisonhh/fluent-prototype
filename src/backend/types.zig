@@ -148,7 +148,8 @@ pub const Type = union(enum) {
     pub const Set = std.AutoHashMapUnmanaged(TypeId, void);
 
     pub const Number = struct {
-        bits: u8,
+        // number literals don't always have a bit count
+        bits: ?u8,
         layout: util.Number.Layout,
     };
 
@@ -343,8 +344,13 @@ pub const Type = union(enum) {
                     break :num false;
                 }
 
+                // compiler numbers always coerce if the layout matches
+                if (num.bits == null or target.number.bits == null) {
+                    break :num true;
+                }
+
                 // must not lose bits in coercion
-                break :num num.bits <= target.number.bits;
+                break :num num.bits.? <= target.number.bits.?;
             },
             .list => |subty| subty.eql(self.list),
             .func => func: {
@@ -396,7 +402,8 @@ pub const Type = union(enum) {
         return switch (self) {
             .any, .set, .hole, .generic => .analysis,
             .ty, .symbol => .dynamic,
-            .unit, .atom, .number => .static,
+            .unit, .atom  => .static,
+            .number => |num| if (num.bits != null) .static else .dynamic,
             .list => |subty| typewelt.get(subty).classifyRuntime(typewelt),
             .tuple => |tup| classifyList(tup, typewelt),
             .func => |func| func: {
@@ -472,7 +479,12 @@ pub const Type = union(enum) {
                 try writer.writeByte(')');
             },
             .number => |num| {
-                try writer.print("{c}{}", .{@tagName(num.layout)[0], num.bits});
+                const layout = @tagName(num.layout);
+                if (num.bits) |bits| {
+                    try writer.print("{c}{}", .{layout[0], bits});
+                } else {
+                    try writer.print("compiler-{s}", .{layout});
+                }
             },
             .list => |subty| {
                 try writer.writeAll("(List ");
@@ -542,62 +554,3 @@ pub const Type = union(enum) {
                    ++ "please use Type.write() or Type.writeAlloc()");
     }
 };
-
-/// using an 'outward' expectation for the type of an expression, and the
-/// 'inward' information an expression has about its own type, unify()
-/// determines what the final type of the expression should be.
-///
-/// TODO functions that utilize this need to recognize that unification outward
-/// means that the outward type is narrower than the inward type. therefore,
-/// semantic analysis can then infer (and check the validity of) a narrower type
-/// for inner exprs that use this unified type.
-///
-/// this is basically the core of fluent's 'algorithm w' implementation.
-pub fn unify(
-    typewelt: *TypeWelt,
-    outward: TypeId,
-    inward: TypeId
-) Allocator.Error!?TypeId {
-    const out = typewelt.get(outward);
-    const in = typewelt.get(inward);
-
-    if (out.eql(in.*)) {
-        // already unified
-        return outward;
-    } else if (!try in.coercesTo(typewelt, out.*)) {
-        // cannot coerce
-        return null;
-    }
-
-    // coercion is possible, unify
-    var ty = switch (out.*) {
-        .number => try out.clone(typewelt.ally),
-        else => try in.clone(typewelt.ally)
-    };
-    defer ty.deinit(typewelt.ally);
-
-    // verify unification was successful
-    if (builtin.mode == .Debug) {
-        const ally = typewelt.ally;
-        const in_text = try in.writeAlloc(ally, typewelt.*);
-        const ty_text = try ty.writeAlloc(ally, typewelt.*);
-        const out_text = try out.writeAlloc(ally, typewelt.*);
-        defer ally.free(in_text);
-        defer ally.free(ty_text);
-        defer ally.free(out_text);
-
-        if (!try in.coercesTo(typewelt, ty)) {
-            std.debug.panic(
-                "inward {s} does not coerce to unified {s}",
-                .{in_text, ty_text}
-            );
-        } else if (!try ty.coercesTo(typewelt, out.*)) {
-            std.debug.panic(
-                "unified {s} does not coerce to outward {s}",
-                .{ty_text, out_text}
-            );
-        }
-    }
-
-    return try typewelt.identify(ty);
-}

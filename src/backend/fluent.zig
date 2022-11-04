@@ -15,8 +15,11 @@ pub const Builtin = enum {
     const Self = @This();
 
     do,
+    as,
     list,
 
+    // this obtuse piece of cude just generates a hashmap of the name of
+    // each builtin to the enum value at compile time
     const nmap = nmap: {
         const fields = std.meta.fieldNames(Self);
 
@@ -83,6 +86,17 @@ pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
             _ = try env.typeDef(Symbol.init(name), ty);
         }
     }
+
+
+    const compiler_int = try env.typeDef(sym("compiler-int"), Type{
+        .number = .{ .layout = .int, .bits = null }
+    });
+    const compiler_float = try env.typeDef(sym("compiler-float"), Type{
+        .number = .{ .layout = .float, .bits = null }
+    });
+
+    _ = compiler_int;
+    _ = compiler_float;
 
     const @"i8" = try env.typeIdentifyNumber(.int, 8);
     const @"i16" = try env.typeIdentifyNumber(.int, 16);

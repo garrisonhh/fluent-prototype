@@ -92,7 +92,7 @@ pub fn getBound(self: Self, sym: Symbol) ?*const Bound {
     return if (self.get(sym)) |binding| &binding.value else null;
 }
 
-// type helpers ================================================================
+// type-specific functionality =================================================
 
 pub fn typeIdentify(self: Self, ty: Type) Allocator.Error!TypeId {
     return try self.typewelt.identify(ty);
@@ -101,7 +101,7 @@ pub fn typeIdentify(self: Self, ty: Type) Allocator.Error!TypeId {
 pub fn typeIdentifyNumber(
     self: Self,
     layout: util.Number.Layout,
-    bits: u8
+    bits: ?u8
 ) Allocator.Error!TypeId {
     const ty = Type{ .number = .{ .layout = layout, .bits = bits } };
     return try self.typeIdentify(ty);
@@ -175,7 +175,7 @@ pub fn render(self: Self, ally: Allocator) !kz.Texture {
         const green = kz.Format{ .fg = .green };
 
         const ty = self.typeGet(ev.ty);
-        const ty_text = try ty.writeAlloc(tmp_ally, self.typewelt);
+        const ty_text = try ty.writeAlloc(tmp_ally, self.typewelt.*);
 
         const row = try rows.addOne();
         row[0] = try kz.Texture.from(tmp_ally, kz.Format{}, ev.name);
@@ -184,7 +184,7 @@ pub fn render(self: Self, ally: Allocator) !kz.Texture {
             .unimpl => try kz.Texture.from(tmp_ally, red, "?"),
             .ty => |id| ty: {
                 const got = self.typeGet(id);
-                const text = try got.writeAlloc(tmp_ally, self.typewelt);
+                const text = try got.writeAlloc(tmp_ally, self.typewelt.*);
                 break :ty try kz.Texture.from(tmp_ally, kz.Format{}, text);
             },
         };
