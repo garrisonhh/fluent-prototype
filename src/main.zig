@@ -97,7 +97,7 @@ fn fluentTests(ally: Allocator, prelude: *Env) !void {
 
         // math
         \\as i64
-        \\   + 1 1
+        \\   + 1i32 1
         ,
         \\/ (+ 45 69)
         \\  2

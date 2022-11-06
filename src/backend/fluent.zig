@@ -65,7 +65,7 @@ pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
     defer arena.deinit();
     const tmp_ally = arena.allocator();
 
-    var env = Env.initBase(ally, typewelt);
+    var env = try Env.initBase(ally, typewelt);
 
     _ = try env.typeDef(sym("type"), Type{ .ty = {} });
     _ = try env.typeDef(sym("unit"), Type{ .unit = {} });
@@ -87,16 +87,12 @@ pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
         }
     }
 
-
     const compiler_int = try env.typeDef(sym("compiler-int"), Type{
         .number = .{ .layout = .int, .bits = null }
     });
     const compiler_float = try env.typeDef(sym("compiler-float"), Type{
         .number = .{ .layout = .float, .bits = null }
     });
-
-    _ = compiler_int;
-    _ = compiler_float;
 
     const @"i8" = try env.typeIdentifyNumber(.int, 8);
     const @"i16" = try env.typeIdentifyNumber(.int, 16);
@@ -113,9 +109,9 @@ pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
         .number = .{ .layout = .float, .bits = 64 }
     });
 
-    const int_ids: []TypeId = &.{@"i8", @"i16", @"i32", @"i64"};
+    const int_ids: []TypeId = &.{@"i8", @"i16", @"i32", @"i64", compiler_int};
     const uint_ids: []TypeId = &.{@"u8", @"u16", @"u32", @"u64"};
-    const float_ids: []TypeId = &.{@"f32", @"f64"};
+    const float_ids: []TypeId = &.{@"f32", @"f64", compiler_float};
     const int_ty = try Type.initSet(tmp_ally, int_ids);
     const uint_ty = try Type.initSet(tmp_ally, uint_ids);
     const float_ty = try Type.initSet(tmp_ally, float_ids);
@@ -143,20 +139,28 @@ pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
     const number_ty = try Type.initSet(tmp_ally, number_ids);
     const number = try env.typeDef(sym("Number"), number_ty);
 
-    // math functions
-    const generic_a = try env.typeIdentify(Type.initGeneric(0));
+    // generics
+    const _A = try env.typeIdentify(Type{ .generic = .{ .index = 0 } });
+    const _B = try env.typeIdentify(Type{ .generic = .{ .index = 1 } });
+    const _C = try env.typeIdentify(Type{ .generic = .{ .index = 2 } });
 
-    const bin_math = try env.typeIdentify(funcType(
+    _ = _B;
+    _ = _C;
+
+    // math functions
+    const binary_numeric = try env.typeIdentify(funcType(
         &.{number},
-        &.{generic_a, generic_a},
+        &.{_A, _A},
         &.{},
-        generic_a
+        _A
     ));
 
-    _ = try env.def(sym("+"), .{
-        .ty = bin_math,
-        .value = .{ .unimpl = {} },
-    });
+    inline for ([_][]const u8{"+", "-", "*", "/"}) |ident| {
+        _ = try env.def(sym(ident), .{
+            .ty = binary_numeric,
+            .value = .{ .unimpl = {} },
+        });
+    }
 
     return env;
 }

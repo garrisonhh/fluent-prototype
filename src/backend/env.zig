@@ -12,12 +12,16 @@ const Symbol = util.Symbol;
 const TypeWelt = types.TypeWelt;
 const TypeId = types.TypeId;
 const Type = types.Type;
+const GenericId = Type.GenericId;
 
 const Self = @This();
 
 pub const DefError =
     Allocator.Error
- || error { SymbolRedef };
+ || error {
+    SymbolRedef,
+    MisplacedGenericId,
+};
 
 pub const Bound = union(enum) {
     unimpl,
@@ -30,17 +34,26 @@ const Binding = struct {
 };
 
 ally: Allocator,
-typewelt: *TypeWelt,
 parent: ?*const Self,
+typewelt: *TypeWelt,
+// this is owned by the base env
+typenames: *std.AutoHashMapUnmanaged(TypeId, Symbol),
 
 // keys and values are all owned by this env
 ns: Symbol.HashMapUnmanaged(Binding) = .{},
+// also local to this env
+first_generic: Type.GenericId,
+generics: std.ArrayListUnmanaged(TypeId) = .{},
 
-pub fn initBase(ally: Allocator, typewelt: *TypeWelt) Self {
+pub fn initBase(ally: Allocator, typewelt: *TypeWelt) Allocator.Error!Self {
+    const typenames = std.AutoHashMapUnmanaged(TypeId, Symbol){};
+
     return Self{
         .ally = ally,
         .typewelt = typewelt,
+        .typenames = try util.placeOn(ally, typenames),
         .parent = null,
+        .first_generic = GenericId{ .index = 0 },
     };
 }
 
@@ -48,7 +61,9 @@ pub fn init(parent: *const Self) Self {
     return Self{
         .ally = parent.ally,
         .typewelt = parent.typewelt,
+        .typenames = parent.typenames,
         .parent = parent,
+        .first_generic = parent.nextGenericId(),
     };
 }
 
@@ -56,12 +71,38 @@ pub fn deinit(self: *Self) void {
     var keys = self.ns.keyIterator();
     while (keys.next()) |key| self.ally.free(key.str);
     self.ns.deinit(self.ally);
+
+    if (self.parent == null) {
+        var names = self.typenames.valueIterator();
+        while (names.next()) |name| self.ally.free(name.str);
+
+        self.typenames.deinit(self.ally);
+        self.ally.destroy(self.typenames);
+    }
 }
 
 pub fn def(self: *Self, sym: Symbol, to: Binding) DefError!void {
-    if (self.contains(sym)) return error.SymbolRedef;
+    // place symbol
+    const res = try self.ns.getOrPut(self.ally, sym);
+    if (res.found_existing) return error.SymbolRedef;
 
-    try self.ns.put(self.ally, try sym.clone(self.ally), to);
+    res.key_ptr.* = try sym.clone(self.ally);
+    res.value_ptr.* = to;
+
+    // special type behavior: store any generics or typenames
+    if (to.value == .ty) {
+        const ty = to.value.ty;
+        const got = self.typewelt.get(ty);
+
+        if (got.* == .generic) {
+            const index = got.generic.index;
+            if (index >= self.generics.items.len) {
+                return error.MisplacedGenericId;
+            }
+        }
+
+        try self.typenames.put(self.ally, ty, try sym.clone(self.ally));
+    }
 }
 
 pub fn contains(self: Self, sym: Symbol) bool {
@@ -88,11 +129,35 @@ pub fn getType(self: Self, sym: Symbol) ?TypeId {
     return if (self.get(sym)) |binding| binding.ty else null;
 }
 
+pub fn getTypename(self: Self, ty: TypeId) ?Symbol {
+    return if (self.typenames.get(ty)) |sym| sym else null;
+}
+
 pub fn getBound(self: Self, sym: Symbol) ?*const Bound {
     return if (self.get(sym)) |binding| &binding.value else null;
 }
 
 // type-specific functionality =================================================
+
+fn getGeneric(self: Self, gid: GenericId) TypeId {
+    if (gid.index < self.first_generic.index) {
+        return self.parent.?.getGeneric(gid);
+    }
+
+    return self.generics.items[gid.index - self.first_generic.index];
+}
+
+fn nextGenericId(self: Self) GenericId {
+    const next_index = self.first_generic.index + self.generics.items.len;
+    return GenericId{ .index = next_index };
+}
+
+pub fn defGeneric(self: *Self, ty: TypeId) Allocator.Error!Type {
+    const gid = self.nextGenericId();
+    try self.generics.append(self.ally, ty);
+
+    return Type{ .generic = gid };
+}
 
 pub fn typeIdentify(self: Self, ty: Type) Allocator.Error!TypeId {
     return try self.typewelt.identify(ty);
@@ -107,24 +172,12 @@ pub fn typeIdentifyNumber(
     return try self.typeIdentify(ty);
 }
 
-pub fn typeUnify(
-    self: Self,
-    outward: TypeId,
-    inward: TypeId
-) Allocator.Error!?TypeId {
-    return try types.unify(self.typewelt, outward, inward);
-}
-
 pub fn typeGet(self: Self, ty: TypeId) *const Type {
     return self.typewelt.get(ty);
 }
 
 pub fn typeDef(self: *Self, sym: Symbol, ty: Type) DefError!TypeId {
-    // register in typewelt
     const id = try self.typeIdentify(ty);
-    try self.typewelt.putName(id, sym);
-
-    // define in env
     try self.def(sym, Binding{
         .ty = try self.typeIdentify(Type{ .ty = {} }),
         .value = .{ .ty = id }
@@ -175,7 +228,7 @@ pub fn render(self: Self, ally: Allocator) !kz.Texture {
         const green = kz.Format{ .fg = .green };
 
         const ty = self.typeGet(ev.ty);
-        const ty_text = try ty.writeAlloc(tmp_ally, self.typewelt.*);
+        const ty_text = try ty.writeAlloc(tmp_ally, self);
 
         const row = try rows.addOne();
         row[0] = try kz.Texture.from(tmp_ally, kz.Format{}, ev.name);
@@ -184,7 +237,7 @@ pub fn render(self: Self, ally: Allocator) !kz.Texture {
             .unimpl => try kz.Texture.from(tmp_ally, red, "?"),
             .ty => |id| ty: {
                 const got = self.typeGet(id);
-                const text = try got.writeAlloc(tmp_ally, self.typewelt.*);
+                const text = try got.writeAlloc(tmp_ally, self);
                 break :ty try kz.Texture.from(tmp_ally, kz.Format{}, text);
             },
         };

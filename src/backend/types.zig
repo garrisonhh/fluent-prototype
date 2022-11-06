@@ -4,6 +4,7 @@
 const std = @import("std");
 const util = @import("util");
 const builtin = @import("builtin");
+const Env = @import("env.zig");
 
 const Allocator = std.mem.Allocator;
 const Wyhash = std.hash.Wyhash;
@@ -25,30 +26,29 @@ pub const TypeId = packed struct {
     pub fn write(
         self: Self,
         ally: Allocator,
-        typewelt: TypeWelt,
+        env: Env,
         writer: anytype
     ) WriteError!void {
-        if (typewelt.getName(self)) |name| {
+        if (env.getTypename(self)) |name| {
             try writer.print("{}", .{name});
         } else {
-            try typewelt.get(self).write(ally, typewelt, writer);
+            try env.typeGet(self).write(ally, env, writer);
         }
     }
 
     pub fn writeAlloc(
         self: Self,
         ally: Allocator,
-        typewelt: TypeWelt,
+        env: Env,
     ) WriteError![]u8 {
         var list = std.ArrayList(u8).init(ally);
         defer list.deinit();
 
-        try self.write(ally, typewelt, list.writer());
+        try self.write(ally, env, list.writer());
 
         return list.toOwnedSlice();
     }
 };
-
 
 /// storage for types and the context for type handles.
 ///
@@ -84,9 +84,8 @@ pub const TypeWelt = struct {
     );
 
     ally: Allocator,
-    names: std.AutoHashMapUnmanaged(TypeId, Symbol) = .{},
-    types: std.ArrayListUnmanaged(*Type) = .{},
-    map: TypeMap = .{},
+    types: std.ArrayListUnmanaged(*Type) = .{}, // TypeId -> Type
+    map: TypeMap = .{}, // Type -> TypeId
 
     pub fn init(ally: Allocator) Self {
         return Self{
@@ -101,22 +100,10 @@ pub const TypeWelt = struct {
         }
         self.types.deinit(self.ally);
         self.map.deinit(self.ally);
-
-        var names = self.names.valueIterator();
-        while (names.next()) |name| self.ally.free(name.str);
-        self.names.deinit(self.ally);
     }
 
     pub fn get(self: Self, id: TypeId) *const Type {
         return self.types.items[id.index];
-    }
-
-    pub fn putName(self: *Self, id: TypeId, name: Symbol) Allocator.Error!void {
-        try self.names.put(self.ally, id, try name.clone(self.ally));
-    }
-
-    pub fn getName(self: Self, id: TypeId) ?Symbol {
-        return self.names.get(id);
     }
 
     /// retrieves an established ID or creates a new one.
@@ -156,8 +143,7 @@ pub const Type = union(enum) {
     pub const Func = struct {
         generics: []TypeId,
         takes: []TypeId,
-        // implicit parameters for effect management
-        contexts: []TypeId,
+        contexts: []TypeId, // implicit parameters for effect management
         returns: TypeId,
 
         pub fn clone(self: Func, ally: Allocator) Allocator.Error!Func {
@@ -195,10 +181,6 @@ pub const Type = union(enum) {
 
     func: Func,
 
-    pub fn initGeneric(index: usize) Self {
-        return Self{ .generic = GenericId{ .index = index } };
-    }
-
     pub fn initSet(
         ally: Allocator,
         subtypes: []const TypeId
@@ -218,6 +200,7 @@ pub const Type = union(enum) {
             .atom => |sym| ally.free(sym.str),
             .tuple => |tup| ally.free(tup),
             .func => |func| {
+                ally.free(func.generics);
                 ally.free(func.takes);
                 ally.free(func.contexts);
             },
@@ -245,6 +228,7 @@ pub const Type = union(enum) {
             .list => |subty| wyhash.update(asBytes(&subty)),
             .tuple => |tup| wyhash.update(asBytes(&tup)),
             .func => |func| {
+                wyhash.update(asBytes(&func.generics));
                 wyhash.update(asBytes(&func.takes));
                 wyhash.update(asBytes(&func.contexts));
                 wyhash.update(asBytes(&func.returns));
@@ -289,7 +273,8 @@ pub const Type = union(enum) {
             .list => |subty| subty.eql(ty.list),
             .tuple => |tup| idsEql(tup, ty.tuple),
             .func => |func|
-                idsEql(func.takes, ty.func.takes)
+                idsEql(func.generics, ty.func.generics)
+                and idsEql(func.takes, ty.func.takes)
                 and idsEql(func.contexts, ty.func.contexts)
                 and func.returns.eql(ty.func.returns),
         };
@@ -361,6 +346,34 @@ pub const Type = union(enum) {
         };
     }
 
+    /// given two types, create a type that fits the values of each
+    pub fn unify(
+        self: Self,
+        typewelt: *TypeWelt,
+        other: Self
+    ) Allocator.Error!TypeId {
+        std.debug.assert(self != .generic and other != .generic);
+
+        if (self.eql(other)) {
+            return try typewelt.identify(self);
+        } else if (self == .any or other == .any) {
+            return try typewelt.identify(Type{ .any = {} });
+        } else if (try self.coercesTo(typewelt, other)) {
+            return try typewelt.identify(other);
+        } else if (try other.coercesTo(typewelt, self)) {
+            return try typewelt.identify(self);
+        }
+
+        // need a new set to fit both
+        var unified = try Self.initSet(typewelt.ally, &.{
+            try typewelt.identify(self),
+            try typewelt.identify(other)
+        });
+        defer unified.deinit(typewelt.ally);
+
+        return try typewelt.identify(unified);
+    }
+
     /// classifications for the runtime of a type; aka stages of the execution
     /// when a type is valid
     pub const RuntimeClass = enum {
@@ -425,13 +438,13 @@ pub const Type = union(enum) {
     fn writeList(
         list: []TypeId,
         ally: Allocator,
-        typewelt: TypeWelt,
+        env: Env,
         writer: anytype
     ) WriteError!void {
         try writer.writeByte('[');
         for (list) |ty, i| {
             if (i > 0) try writer.writeAll(", ");
-            try ty.write(ally, typewelt, writer);
+            try ty.write(ally, env, writer);
         }
         try writer.writeByte(']');
     }
@@ -440,7 +453,7 @@ pub const Type = union(enum) {
     pub fn write(
         self: Self,
         ally: Allocator,
-        typewelt: TypeWelt,
+        env: Env,
         writer: anytype
     ) WriteError!void {
         switch (self) {
@@ -459,7 +472,7 @@ pub const Type = union(enum) {
                 var keys = set.keyIterator();
                 var i: usize = 0;
                 while (keys.next()) |key| : (i += 1) {
-                    subtypes[i] = try key.writeAlloc(ally, typewelt);
+                    subtypes[i] = try key.writeAlloc(ally, env);
                 }
 
                 // sort subtypes
@@ -488,32 +501,26 @@ pub const Type = union(enum) {
             },
             .list => |subty| {
                 try writer.writeAll("(List ");
-                try subty.write(ally, typewelt, writer);
+                try subty.write(ally, env, writer);
                 try writer.writeByte(')');
             },
             .tuple => |tup| {
                 try writer.writeAll("(Tuple");
                 for (tup) |ty| {
                     try writer.writeByte(' ');
-                    try ty.write(ally, typewelt, writer);
+                    try ty.write(ally, env, writer);
                 }
                 try writer.writeByte(')');
             },
             .func => |func| {
-                try writer.writeAll("(Fn {");
-                for (func.generics) |ty, i| {
-                    if (i > 0) try writer.writeAll(", ");
-                    const gen_ty = Type.initGeneric(i);
-                    try gen_ty.write(ally, typewelt, writer);
-                    try writer.writeAll(": ");
-                    try ty.write(ally, typewelt, writer);
-                }
-                try writer.writeAll("} ");
-                try writeList(func.takes, ally, typewelt, writer);
+                try writer.writeAll("(Fn ");
+                try writeList(func.generics, ally, env, writer);
                 try writer.writeByte(' ');
-                try writeList(func.contexts, ally, typewelt, writer);
+                try writeList(func.takes, ally, env, writer);
                 try writer.writeByte(' ');
-                try func.returns.write(ally, typewelt, writer);
+                try writeList(func.contexts, ally, env, writer);
+                try writer.writeByte(' ');
+                try func.returns.write(ally, env, writer);
                 try writer.writeByte(')');
             },
             .generic => |gid| {
@@ -527,15 +534,11 @@ pub const Type = union(enum) {
         }
     }
 
-    pub fn writeAlloc(
-        self: Self,
-        ally: Allocator,
-        typewelt: TypeWelt
-    ) WriteError![]u8 {
+    pub fn writeAlloc(self: Self, ally: Allocator, env: Env) WriteError![]u8 {
         var list = std.ArrayList(u8).init(ally);
         defer list.deinit();
 
-        try self.write(ally, typewelt, list.writer());
+        try self.write(ally, env, list.writer());
 
         return list.toOwnedSlice();
     }

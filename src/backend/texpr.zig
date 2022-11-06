@@ -131,7 +131,7 @@ pub fn render(
     // render type
     const ty_tex = render_ty: {
         const ty = env.typeGet(self.ty);
-        const text = try ty.writeAlloc(ally, env.typewelt.*);
+        const text = try ty.writeAlloc(ally, env);
         defer ally.free(text);
 
         break :render_ty try kz.Texture.print(ally, faint, "{s}", .{text});
