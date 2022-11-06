@@ -138,6 +138,14 @@ pub fn render(
     };
     defer ty_tex.deinit(ally);
 
+    // render header if warranted
+    const header_tex = switch (self.data) {
+        .do, .cast, .call
+            => try kz.Texture.from(ally, kz.Format{}, @tagName(self.data)),
+        else => try kz.Texture.from(ally, kz.Format{}, "")
+    };
+    defer header_tex.deinit(ally);
+
     // render data
     var offset = kz.Offset{@intCast(isize, ty_tex.size[0] + 1), 0};
     const data_tex = switch (self.data) {
@@ -153,15 +161,6 @@ pub fn render(
                 list.deinit();
             }
 
-            switch (self.data) {
-                .do => {
-                    const name = @tagName(self.data);
-                    const tex = try kz.Texture.from(ally, kz.Format{}, name);
-                    try list.append(tex);
-                },
-                else => {}
-            }
-
             for (exprs) |expr| {
                 try list.append(try expr.render(env, ally));
             }
@@ -173,17 +172,15 @@ pub fn render(
         },
         .cast => |expr| cast: {
             offset = .{INDENT, 1};
-
-            const text_tex = try kz.Texture.from(ally, kz.Format{}, "cast");
-            defer text_tex.deinit(ally);
-
-            const expr_tex = try expr.render(env, ally);
-            defer expr_tex.deinit(ally);
-
-            break :cast try text_tex.unify(ally, expr_tex, .{0, 1});
+            break :cast try expr.render(env, ally);
         },
     };
     defer data_tex.deinit(ally);
 
-    return ty_tex.unify(ally, data_tex, offset);
+    // put it together
+    const header_offset = kz.Offset{@intCast(isize, ty_tex.size[0]) + 1, 0};
+    const top_tex = try ty_tex.unify(ally, header_tex, header_offset);
+    defer top_tex.deinit(ally);
+
+    return try top_tex.unify(ally, data_tex, offset);
 }
