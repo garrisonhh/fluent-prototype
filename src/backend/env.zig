@@ -23,8 +23,15 @@ pub const DefError =
     MisplacedGenericId,
 };
 
+pub const BuiltinOp = enum {
+    add,
+    sub,
+    mul,
+    div,
+};
+
 pub const Bound = union(enum) {
-    unimpl,
+    builtin_op: BuiltinOp,
     ty: TypeId,
 };
 
@@ -81,18 +88,17 @@ pub fn deinit(self: *Self) void {
     }
 }
 
-pub fn def(self: *Self, sym: Symbol, to: Binding) DefError!void {
+pub fn def(self: *Self, sym: Symbol, ty: TypeId, value: Bound) DefError!void {
     // place symbol
     const res = try self.ns.getOrPut(self.ally, sym);
     if (res.found_existing) return error.SymbolRedef;
 
     res.key_ptr.* = try sym.clone(self.ally);
-    res.value_ptr.* = to;
+    res.value_ptr.* = Binding{ .ty = ty, .value = value };
 
     // special type behavior: store any generics or typenames
-    if (to.value == .ty) {
-        const ty = to.value.ty;
-        const got = self.typewelt.get(ty);
+    if (value == .ty) {
+        const got = self.typewelt.get(value.ty);
 
         if (got.* == .generic) {
             const index = got.generic.index;
@@ -101,7 +107,7 @@ pub fn def(self: *Self, sym: Symbol, to: Binding) DefError!void {
             }
         }
 
-        try self.typenames.put(self.ally, ty, try sym.clone(self.ally));
+        try self.typenames.put(self.ally, value.ty, try sym.clone(self.ally));
     }
 }
 
@@ -178,10 +184,7 @@ pub fn typeGet(self: Self, ty: TypeId) *const Type {
 
 pub fn typeDef(self: *Self, sym: Symbol, ty: Type) DefError!TypeId {
     const id = try self.typeIdentify(ty);
-    try self.def(sym, Binding{
-        .ty = try self.typeIdentify(Type{ .ty = {} }),
-        .value = .{ .ty = id }
-    });
+    try self.def(sym, try self.typeIdentify(Type{ .ty = {} }), .{ .ty = id });
 
     return id;
 }
@@ -234,7 +237,11 @@ pub fn render(self: Self, ally: Allocator) !kz.Texture {
         row[0] = try kz.Texture.from(tmp_ally, kz.Format{}, ev.name);
         row[1] = try kz.Texture.from(tmp_ally, green, ty_text);
         row[2] = switch (ev.bound.*) {
-            .unimpl => try kz.Texture.from(tmp_ally, red, "?"),
+            .builtin_op => |op| op: {
+                const text = "<builtin> {s}";
+                break :op
+                    try kz.Texture.print(tmp_ally, red, text, .{@tagName(op)});
+            },
             .ty => |id| ty: {
                 const got = self.typeGet(id);
                 const text = try got.writeAlloc(tmp_ally, self);

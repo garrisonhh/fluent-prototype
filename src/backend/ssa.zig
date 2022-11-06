@@ -7,47 +7,102 @@
 //! sufficient
 
 const std = @import("std");
+const kz = @import("kritzler");
 const util = @import("util");
 const builtin = @import("builtin");
 const types = @import("types.zig");
+const Env = @import("env.zig");
 
 const Allocator = std.mem.Allocator;
 const Symbol = util.Symbol;
 const TypeId = types.TypeId;
 
-/// symbolic representation of operationss. since blocks store type info,
+pub const Const = packed struct {
+    const Self = @This();
+
+    index: usize,
+
+    pub fn of(index: usize) Self {
+        return Self{ .index = index };
+    }
+
+    pub fn format(
+        self: Self,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype
+    ) @TypeOf(writer).Error!void {
+        _ = fmt;
+        _ = options;
+
+        try writer.print("c{}", .{self.index});
+    }
+};
+
+pub const Local = packed struct {
+    const Self = @This();
+
+    index: usize,
+
+    pub fn of(index: usize) Self {
+        return Self{ .index = index };
+    }
+
+    pub fn format(
+        self: Self,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype
+    ) @TypeOf(writer).Error!void {
+        _ = fmt;
+        _ = options;
+
+        try writer.print("l{}", .{self.index});
+    }
+};
+
+/// symbolic representation of operations. since blocks store type info,
 /// there is no need for operations to be type or size specific; this can be
 /// deduced later on
 pub const Op = union(enum) {
     const Self = @This();
 
+    pub const LoadConst = struct {
+        a: Const,
+        to: Local,
+    };
+
     pub const Unary = struct {
-        a: usize,
-        to: usize,
+        a: Local,
+        to: Local,
     };
 
     pub const Binary = struct {
-        a: usize,
-        b: usize,
-        to: usize,
+        a: Local,
+        b: Local,
+        to: Local,
     };
 
     pub const Jump = struct {
-        dest: *const Symbol,
+        dest: Symbol,
     };
 
+    // TODO along with the tag, Jnz puts the Op union at like 5 words in size. I
+    // could get this down significantly by using u32s and a handle into the
+    // `jmp_symbols` array instead of a copy of the symbol with its pointer, but
+    // for now it's premature for sure
     pub const Jnz = struct {
-        cond: usize,
-        dest: *const Symbol,
+        cond: Local,
+        dest: Symbol,
     };
 
     pub const Arg = struct {
         arg: usize,
-        from: usize,
+        from: Local,
     };
 
     // unique
-    ldc: Unary,
+    ldc: LoadConst,
 
     // math
     add: Binary,
@@ -66,30 +121,30 @@ pub const Op = union(enum) {
 
     pub const Class = union(enum) {
         // unique logic
-        ldc: *Unary,
-        ret: *Jump,
-        jmp: *Jump,
-        jnz: *Jnz,
-        call: *Jump,
-        arg: *Arg,
+        ldc: LoadConst,
+        ret: Jump,
+        jmp: Jump,
+        jnz: Jnz,
+        call: Jump,
+        arg: Arg,
 
         // generalizable logic
-        binary: *Binary,
-        unary: *Unary,
+        binary: Binary,
+        unary: Unary,
     };
 
     /// makes switching on ops much easier
     pub fn classify(self: Self) Class {
         return switch (self) {
-            .ldc => |*ldc| Class{ .ldc = ldc },
-            .ret => |*ret| Class{ .ret = ret },
-            .jmp => |*jmp| Class{ .jmp = jmp },
-            .jnz => |*jnz| Class{ .jnz = jnz },
-            .call => |*call| Class{ .call = call },
-            .arg => |*arg| Class{ .arg = arg },
-
-            .not => |*un| Class{ .unary = un },
-            .add, .sub, .mul, .div, .mod => |*bin| Class{ .binary = bin },
+            .ldc => |ldc| Class{ .ldc = ldc },
+            // .ret => |ret| Class{ .ret = ret },
+            // .jmp => |jmp| Class{ .jmp = jmp },
+            // .jnz => |jnz| Class{ .jnz = jnz },
+            .call => |call| Class{ .call = call },
+            .arg => |arg| Class{ .arg = arg },
+            .not => |un| Class{ .unary = un },
+            .add, .sub, .mul, .div, .mod, .@"or", .@"and", .xor
+                => |bin| Class{ .binary = bin },
         };
     }
 };
@@ -116,10 +171,10 @@ pub const Value = struct {
 
     pub fn asPtr(self: Self, comptime T: type) *align(16) T {
         if (builtin.mode == .Debug) {
-            if (@sizeOf(T) != self.len) {
+            if (@sizeOf(T) != self.ptr.len) {
                 std.debug.panic(
                     "attempted to cast Value of size {} to type {} of size {}",
-                    .{self.len, T, @sizeOf(T)}
+                    .{self.ptr.len, T, @sizeOf(T)}
                 );
             }
         }
@@ -127,15 +182,74 @@ pub const Value = struct {
         return @ptrCast(*align(16) T, self.ptr);
     }
 
-    /// essentially a bitcast to the type desired
+    /// bitcast to the type desired
     pub fn as(self: Self, comptime T: type) T {
         return self.asPtr(T).*;
+    }
+
+    pub const Printable = union(enum) {
+        int: i64,
+        uint: u64,
+        float: f64,
+
+        pub fn format(
+            self: @This(),
+            comptime fmt: []const u8,
+            options: std.fmt.FormatOptions,
+            writer: anytype
+        ) @TypeOf(writer).Error!void {
+            _ = fmt;
+            _ = options;
+
+            switch (self) {
+                .int => |i| try writer.print("{}i", .{i}),
+                .uint => |u| try writer.print("{}u", .{u}),
+                .float => |f| try writer.print("{d}f", .{f}),
+            }
+        }
+    };
+
+    pub fn toPrintable(self: Self, env: Env, tid: TypeId) Printable {
+        const ty = env.typeGet(tid);
+        return switch (ty.*) {
+            .number => |num| num: {
+                const bits = num.bits orelse 64;
+                break :num switch (num.layout) {
+                    .int => Printable{
+                        .int = switch (bits) {
+                            64 => self.as(i64),
+                            32 => self.as(i32),
+                            16 => self.as(i16),
+                            8 => self.as(i8),
+                            else => unreachable
+                         }
+                     },
+                    .uint => Printable{
+                        .uint = switch (bits) {
+                            64 => self.as(u64),
+                            32 => self.as(u32),
+                            16 => self.as(u16),
+                            8 => self.as(u8),
+                            else => unreachable
+                         }
+                     },
+                    .float => Printable{
+                        .float = switch (bits) {
+                            64 => self.as(f64),
+                            32 => self.as(f32),
+                            else => unreachable
+                         }
+                     },
+                };
+            },
+            else => @panic("TODO")
+        };
     }
 };
 
 /// linear block representation
 ///
-/// expects to own all memory
+/// expects to own all memory (except for jump symbols)
 pub const Block = struct {
     const Self = @This();
 
@@ -151,25 +265,83 @@ pub const Block = struct {
         ally.free(self.locals);
         ally.free(self.ops);
     }
+
+    pub fn render(self: Self, env: Env, ally: Allocator) !kz.Texture {
+        // locals
+        const locals = try ally.alloc([]u8, self.locals.len);
+        defer {
+            for (locals) |str| ally.free(str);
+            ally.free(locals);
+        }
+
+        for (self.locals) |ty, i| {
+            locals[i] = try ty.writeAlloc(ally, env);
+        }
+
+        // ops
+        var op_text = std.ArrayList(u8).init(ally);
+        defer op_text.deinit();
+        const op_writer = op_text.writer();
+
+        for (self.ops) |op| {
+            switch (op.classify()) {
+                .ldc => |ldc| {
+                    const l = ldc.to.index;
+                    const @"const" = self.consts[ldc.a.index];
+                    const val = @"const".toPrintable(env, self.locals[l]);
+
+                    try op_writer.print(
+                        "{s} {} = ldc {}\n",
+                        .{locals[l], ldc.to, val}
+                    );
+                },
+                else => @panic("TODO"),
+            }
+        }
+
+        // stack with label
+        const tex = try kz.Texture.from(ally, kz.Format{}, op_text.items);
+        defer tex.deinit(ally);
+        const label =
+            try kz.Texture.print(ally, kz.Format{}, "@{}", .{self.label});
+        defer label.deinit(ally);
+
+        return label.unify(ally, tex, .{2, 1});
+    }
 };
 
 pub const Program = struct {
     const Self = @This();
 
     blocks: Symbol.HashMapUnmanaged(Block),
-    entry: *const Block,
 
     // jump operations use symbols. to avoid having to iterate through ops
     // to deinitialize them, they are pooled here
     jmp_symbols: []Symbol,
 
-    pub fn deinit(self: Self, ally: Allocator) void {
+    pub fn deinit(self: *Self, ally: Allocator) void {
         var blocks = self.blocks.valueIterator();
         while (blocks.next()) |block| block.deinit(ally);
         self.blocks.deinit(ally);
 
         for (self.jmp_symbols) |sym| ally.free(sym.str);
         ally.free(self.jmp_symbols);
+    }
+
+    pub fn render(self: Self, env: Env, ally: Allocator) !kz.Texture {
+        const blocks = try ally.alloc(kz.Texture, self.blocks.count());
+        defer {
+            for (blocks) |tex| tex.deinit(ally);
+            ally.free(blocks);
+        }
+
+        var block_iter = self.blocks.valueIterator();
+        var i: usize = 0;
+        while (block_iter.next()) |block| : (i += 1) {
+            blocks[i] = try block.render(env, ally);
+        }
+
+        return try kz.Texture.stack(ally, blocks, .bottom, .close);
     }
 };
 
@@ -195,25 +367,69 @@ pub const BlockBuilder = struct {
     pub fn build(self: *Self) Block {
         return Block{
             .label = self.label,
-            .consts = self.consts.toOwnedSlice(),
-            .locals = self.locals.toOwnedSlice(),
-            .ops = self.ops.toOwnedSlice(),
+            .consts = self.consts.toOwnedSlice(self.ally),
+            .locals = self.locals.toOwnedSlice(self.ally),
+            .ops = self.ops.toOwnedSlice(self.ally),
         };
     }
 
-    pub fn addConst(self: *Self, data: []const u8) Allocator.Error!void {
+    pub fn addConst(self: *Self, data: []const u8) Allocator.Error!Const {
+        const @"const" = Const.of(self.consts.items.len);
         try self.consts.append(self.ally, try Value.init(self.ally, data));
+
+        return @"const";
     }
 
-    pub fn addLocal(self: *Self, ty: TypeId) Allocator.Error!void {
-        try self.locals.append(ty);
+    pub fn addLocal(self: *Self, ty: TypeId) Allocator.Error!Local {
+        const local = Local.of(self.locals.items.len);
+        try self.locals.append(self.ally, ty);
+
+        return local;
     }
 
     pub fn addOp(self: *Self, op: Op) Allocator.Error!void {
-        try self.ops.append(op);
+        try self.ops.append(self.ally, op);
     }
 };
 
 pub const ProgramBuilder = struct {
-    // TODO
+    const Self = @This();
+
+    ally: Allocator,
+    blocks: std.ArrayListUnmanaged(Block) = .{},
+    jmp_symbols: std.ArrayListUnmanaged(Symbol) = .{},
+
+    pub fn init(ally: Allocator) Self {
+        return Self{
+            .ally = ally,
+        };
+    }
+
+    /// invalidates this builder.
+    pub fn build(self: *Self) Allocator.Error!Program {
+        // construct block map
+        var map = Symbol.HashMapUnmanaged(Block){};
+        for (self.blocks.items) |block| {
+            try map.put(self.ally, block.label, block);
+        }
+
+        self.blocks.deinit(self.ally);
+
+        return Program{
+            .blocks = map,
+            .jmp_symbols = self.jmp_symbols.toOwnedSlice(self.ally),
+        };
+    }
+
+    pub fn addBlock(self: *Self, block: Block) Allocator.Error!void {
+        try self.blocks.append(self.ally, block);
+    }
+
+    /// clones symbol to internal allocator + stores on owned array
+    pub fn storeSymbol(self: *Self, sym: Symbol) Symbol {
+        const owned = try sym.clone(self.ally);
+        try self.jmp_symbols.append(owned);
+
+        return owned;
+    }
 };

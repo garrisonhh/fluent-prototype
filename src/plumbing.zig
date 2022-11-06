@@ -22,17 +22,6 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
     };
     defer ast.deinit(ally);
 
-    if (builtin.mode == .Debug) {
-        var arena = std.heap.ArenaAllocator.init(ally);
-        defer arena.deinit();
-
-        const tex = try ast.render(arena.allocator());
-
-        try stdout.print("[Parsed AST]\n", .{});
-        try tex.display(stdout);
-        try stdout.writeByte('\n');
-    }
-
     // backend
     const sexpr = try backend.translate(ally, ast);
     defer sexpr.deinit(ally);
@@ -57,6 +46,19 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
         try stdout.writeAll("[Analyzed AST]\n");
         try tex.display(stdout);
         try stdout.writeByte('\n');
+    }
+
+    var program = try backend.lower(ally, env.*, texpr);
+    defer program.deinit(ally);
+
+    if (builtin.mode == .Debug) {
+        var arena = std.heap.ArenaAllocator.init(ally);
+        defer arena.deinit();
+
+        const tex = try program.render(local, arena.allocator());
+
+        try stdout.writeAll("[SSA Program]\n");
+        try tex.display(stdout);
     }
 
     // time logging

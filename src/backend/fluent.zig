@@ -60,6 +60,15 @@ fn funcType(
     };
 }
 
+fn defOp(
+    env: *Env,
+    comptime name: []const u8,
+    ty: TypeId,
+    comptime op: Env.BuiltinOp
+) !void {
+    try env.def(sym(name), ty, .{ .builtin_op = op });
+}
+
 pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
     var arena = std.heap.ArenaAllocator.init(ally);
     defer arena.deinit();
@@ -147,7 +156,7 @@ pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
     _ = _B;
     _ = _C;
 
-    // math functions
+    // operators
     const binary_numeric = try env.typeIdentify(funcType(
         &.{number},
         &.{_A, _A},
@@ -155,12 +164,10 @@ pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
         _A
     ));
 
-    inline for ([_][]const u8{"+", "-", "*", "/"}) |ident| {
-        _ = try env.def(sym(ident), .{
-            .ty = binary_numeric,
-            .value = .{ .unimpl = {} },
-        });
-    }
+    try defOp(&env, "+", binary_numeric, .add);
+    try defOp(&env, "-", binary_numeric, .sub);
+    try defOp(&env, "*", binary_numeric, .mul);
+    try defOp(&env, "/", binary_numeric, .div);
 
     return env;
 }
