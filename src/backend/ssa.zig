@@ -25,18 +25,6 @@ pub const Const = packed struct {
     pub fn of(index: usize) Self {
         return Self{ .index = index };
     }
-
-    pub fn format(
-        self: Self,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype
-    ) @TypeOf(writer).Error!void {
-        _ = fmt;
-        _ = options;
-
-        try writer.print("c{}", .{self.index});
-    }
 };
 
 pub const Local = packed struct {
@@ -57,7 +45,7 @@ pub const Local = packed struct {
         _ = fmt;
         _ = options;
 
-        try writer.print("l{}", .{self.index});
+        try writer.print("%{}", .{self.index});
     }
 };
 
@@ -286,13 +274,24 @@ pub const Block = struct {
         for (self.ops) |op| {
             switch (op.classify()) {
                 .ldc => |ldc| {
-                    const l = ldc.to.index;
                     const @"const" = self.consts[ldc.a.index];
-                    const val = @"const".toPrintable(env, self.locals[l]);
+                    const local = self.locals[ldc.to.index];
+                    const val = @"const".toPrintable(env, local);
 
                     try op_writer.print(
                         "{s} {} = ldc {}\n",
-                        .{locals[l], ldc.to, val}
+                        .{locals[ldc.to.index], ldc.to, val}
+                    );
+                },
+                .binary => |bin| {
+                    const tag = @tagName(op);
+                    const ty_to = locals[bin.to.index];
+                    const ty_a = locals[bin.a.index];
+                    const ty_b = locals[bin.b.index];
+
+                    try op_writer.print(
+                        "{s} {} = {s} {s} {}, {s} {}\n",
+                        .{ty_to, bin.to, tag, ty_a, bin.a, ty_b, bin.b}
                     );
                 },
                 else => @panic("TODO"),

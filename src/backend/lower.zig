@@ -26,15 +26,66 @@ fn lowerNumber(block: *ssa.BlockBuilder, expr: TExpr) LowerError!Local {
 
     // load const
     const value = try block.addConst(data);
-    const local = try block.addLocal(expr.ty);
-    try block.addOp(Op{
-        .ldc = Op.LoadConst{
-            .a = value,
-            .to = local
-        }
-    });
+    const out = try block.addLocal(expr.ty);
+    try block.addOp(Op{ .ldc = .{ .a = value, .to = out } });
 
-    return local;
+    return out;
+}
+
+fn lowerBuiltinOp(
+    block: *ssa.BlockBuilder,
+    out: Local,
+    builtin_op: Env.BuiltinOp,
+    args: []const Local
+) LowerError!void {
+    const op = switch (builtin_op) {
+        .add => Op{ .add = .{ .to = out, .a = args[0], .b = args[1] } },
+        .sub => Op{ .sub = .{ .to = out, .a = args[0], .b = args[1] } },
+        .mul => Op{ .mul = .{ .to = out, .a = args[0], .b = args[1] } },
+        .div => Op{ .div = .{ .to = out, .a = args[0], .b = args[1] } },
+    };
+
+    try block.addOp(op);
+}
+
+fn lowerCall(
+    env: Env,
+    prog: *ssa.ProgramBuilder,
+    block: *ssa.BlockBuilder,
+    expr: TExpr
+) LowerError!Local {
+    const ally = block.ally;
+    const exprs = expr.data.call;
+    std.debug.assert(exprs.len > 0);
+
+    const head = exprs[0];
+    const tail = exprs[1..];
+
+    // lower args
+    const args = try ally.alloc(Local, tail.len);
+    defer ally.free(args);
+
+    for (tail) |param_expr, i| {
+        args[i] = try lowerExpr(env, prog, block, param_expr);
+    }
+
+    // output local
+    const out = try block.addLocal(expr.ty);
+
+    // ops are special functions
+    // TODO is this the right way to do this?
+    if (head.data == .symbol) detect_op: {
+        const bound = env.getBound(head.data.symbol) orelse break :detect_op;
+
+        if (bound.* == .builtin_op) {
+            try lowerBuiltinOp(block, out, bound.builtin_op, args);
+            return out;
+        }
+    }
+
+    // regular functions
+
+    @panic("TODO functions for real");
 }
 
 fn lowerDo(
@@ -63,6 +114,7 @@ fn lowerExpr(
 ) LowerError!Local {
     return switch (expr.data) {
         .number => try lowerNumber(block, expr),
+        .call => try lowerCall(env, prog, block, expr),
         .do => try lowerDo(env, prog, block, expr),
         else => @panic("TODO")
     };

@@ -87,20 +87,20 @@ fn fluentTests(ally: Allocator, prelude: *Env) !void {
         "1.0001",
         "0.01f32",
         "0x1.1",
-        "\"Hello, World!\"",
+        // "\"Hello, World!\"",
         "_this_is_a_hole",
         "true",
         "false",
-        "[1, -2, 3]",
-        "[[1], [2, 3], [4, 5, 6], _what_could_this_be]",
-        "as i64 256",
+        // "[1, -2, 3]",
+        // "[[1], [2, 3], [4, 5, 6], _what_could_this_be]",
+        // "as i64 256",
 
         // math
-        \\as i64
-        \\   + 1i32 1
-        ,
         \\/ (+ 45 69)
         \\  2
+        ,
+        \\as i64
+        \\   + 1i32 1
         ,
 
         // \\and
@@ -239,6 +239,7 @@ fn executeFile(ally: Allocator, prelude: *Env, path: []const u8) !void {
     // time execution
     plumbing.execute(ally, prelude, handle) catch |e| {
         try stdout.print("execution failed: {}\n", .{e});
+        return;
     };
 
     try stdout.print("execution succeeded.\n", .{});
