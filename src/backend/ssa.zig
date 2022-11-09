@@ -60,6 +60,15 @@ pub const Op = union(enum) {
         to: Local,
     };
 
+    pub const Call = struct {
+        dest: Symbol,
+    };
+
+    pub const Arg = struct {
+        arg: usize,
+        from: Local,
+    };
+
     pub const Unary = struct {
         a: Local,
         to: Local,
@@ -71,18 +80,19 @@ pub const Op = union(enum) {
         to: Local,
     };
 
-    pub const Call = struct {
-        dest: Symbol,
+    pub const UnaryEffect = struct {
+        a: Local,
     };
 
-    pub const Arg = struct {
-        arg: usize,
-        from: Local,
+    pub const BinaryEffect = struct {
+        a: Local,
+        b: Local,
     };
 
     // unique
     ldc: LoadConst,
     cast: Unary,
+    ret: UnaryEffect,
 
     // calls
     call: Call,
@@ -108,8 +118,10 @@ pub const Op = union(enum) {
         arg: Arg,
 
         // generalizable logic
-        binary: Binary,
         unary: Unary,
+        binary: Binary,
+        unary_eff: UnaryEffect,
+        binary_eff: BinaryEffect,
     };
 
     /// makes switching on ops much easier
@@ -121,6 +133,7 @@ pub const Op = union(enum) {
             .cast, .not => |un| Class{ .unary = un },
             .add, .sub, .mul, .div, .mod, .@"or", .@"and", .xor
                 => |bin| Class{ .binary = bin },
+            .ret => |un_eff| Class{ .unary_eff = un_eff },
         };
     }
 };
@@ -267,7 +280,7 @@ pub const Block = struct {
                     const val = @"const".toPrintable(env, local);
 
                     try op_writer.print(
-                        "{s} {} = ldc {}\n",
+                        "{s} {} = {}\n",
                         .{locals[ldc.to.index], ldc.to, val}
                     );
                 },
@@ -290,6 +303,25 @@ pub const Block = struct {
                     try op_writer.print(
                         "{s} {} = {s} {s} {}, {s} {}\n",
                         .{ty_to, bin.to, tag, ty_a, bin.a, ty_b, bin.b}
+                    );
+                },
+                .unary_eff => |un_eff| {
+                    const tag = @tagName(op);
+                    const ty_a = locals[un_eff.a.index];
+
+                    try op_writer.print(
+                        "{s} {s} {}\n",
+                        .{tag, ty_a, un_eff.a}
+                    );
+                },
+                .binary_eff => |bin_eff| {
+                    const tag = @tagName(op);
+                    const ty_a = locals[bin_eff.a.index];
+                    const ty_b = locals[bin_eff.b.index];
+
+                    try op_writer.print(
+                        "{s} {s} {}, {s} {}\n",
+                        .{tag, ty_a, bin_eff.a, ty_b, bin_eff.b}
                     );
                 },
                 else => @panic("TODO"),

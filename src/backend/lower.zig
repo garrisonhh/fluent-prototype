@@ -141,7 +141,9 @@ pub fn lower(ally: Allocator, env: Env, expr: TExpr) LowerError!ssa.Program {
     var prog = ssa.ProgramBuilder.init(ally);
     var block = try ssa.BlockBuilder.init(ally, comptime Symbol.init("(root)"));
 
-    _ = try lowerExpr(env, &prog, &block, expr);
+    // return value of expr
+    const final = try lowerExpr(env, &prog, &block, expr);
+    try block.addOp(Op{ .ret = .{ .a = final } });
 
     try prog.addBlock(block.build());
     return try prog.build();
