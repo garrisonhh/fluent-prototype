@@ -85,7 +85,6 @@ pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
     _ = any;
     _ = @"type";
     _ = unit;
-    _ = @"bool";
 
     // define number types
     for ([_]util.Number.Layout{.int, .uint}) |layout| {
@@ -165,17 +164,23 @@ pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
     _ = _C;
 
     // operators
-    const binary_numeric = try env.typeIdentify(funcType(
-        &.{number},
-        &.{_A, _A},
-        &.{},
-        _A
+    const binary_numeric = try env.typeIdentify(
+        funcType(&.{number}, &.{_A, _A}, &.{}, _A
     ));
+    const conditional = try env.typeIdentify(
+        funcType(&.{}, &.{@"bool", @"bool"}, &.{}, @"bool")
+    );
+    const not_fn = try env.typeIdentify(
+        funcType(&.{}, &.{@"bool"}, &.{}, @"bool")
+    );
 
     try defOp(&env, "+", binary_numeric, .add);
     try defOp(&env, "-", binary_numeric, .sub);
     try defOp(&env, "*", binary_numeric, .mul);
     try defOp(&env, "/", binary_numeric, .div);
+    try defOp(&env, "and", conditional, .@"and");
+    try defOp(&env, "or", conditional, .@"or");
+    try defOp(&env, "not", not_fn, .@"not");
 
     return env;
 }

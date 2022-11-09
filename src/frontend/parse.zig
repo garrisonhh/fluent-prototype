@@ -291,9 +291,11 @@ fn expectIndentedExpr(
     }
 
     // indented children
-    if (parser.next()) |indent| {
-        const level = indent.slice.len;
-        if (level > parent_level) {
+    if (parser.peek()) |next_expr| {
+        const level = next_expr.slice.len;
+        if (next_expr.tag == .indent and level > parent_level) {
+            parser.mustSkip(1); // now we can skip this indent
+
             while (true) {
                 // parse child
                 const child = try expectIndentedExpr(ally, parser, level);
@@ -307,7 +309,7 @@ fn expectIndentedExpr(
                     return unexpectedIndent(next.loc, level);
                 }
 
-                // next indent is verified; continue to iterate
+                // found another indent, so continue
                 parser.mustSkip(1);
             }
         }

@@ -119,10 +119,9 @@ pub const Op = union(enum) {
     div: Binary,
     mod: Binary,
 
-    // bitwise
+    // conditional
     @"or": Binary,
     @"and": Binary,
-    xor: Binary,
     not: Unary,
 
     pub const Class = union(enum) {
@@ -145,7 +144,7 @@ pub const Op = union(enum) {
             .call => |call| Class{ .call = call },
             .arg => |arg| Class{ .arg = arg },
             .cast, .not => |un| Class{ .unary = un },
-            .add, .sub, .mul, .div, .mod, .@"or", .@"and", .xor
+            .add, .sub, .mul, .div, .mod, .@"or", .@"and"
                 => |bin| Class{ .binary = bin },
             .ret => |un_eff| Class{ .unary_eff = un_eff },
         };
@@ -248,7 +247,12 @@ pub const Value = struct {
                      },
                 };
             },
-            else => @panic("TODO")
+            else => {
+                const text = tid.writeAlloc(env.ally, env) catch unreachable;
+                defer env.ally.free(text);
+
+                std.debug.panic("TODO type {s} toPrintable", .{text});
+            }
         };
     }
 };

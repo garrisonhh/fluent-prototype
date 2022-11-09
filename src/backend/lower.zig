@@ -62,11 +62,15 @@ fn lowerBuiltinOp(
     builtin_op: Env.BuiltinOp,
     args: []const Local
 ) LowerError!void {
+    // can assume args are proper length; this is handled in sema
     const op = switch (builtin_op) {
         .add => Op{ .add = .{ .to = out, .a = args[0], .b = args[1] } },
         .sub => Op{ .sub = .{ .to = out, .a = args[0], .b = args[1] } },
         .mul => Op{ .mul = .{ .to = out, .a = args[0], .b = args[1] } },
         .div => Op{ .div = .{ .to = out, .a = args[0], .b = args[1] } },
+        .@"and" => Op{ .@"and" = .{ .to = out, .a = args[0], .b = args[1] } },
+        .@"or" => Op{ .@"or" = .{ .to = out, .a = args[0], .b = args[1] } },
+        .not => Op{ .not = .{ .to = out, .a = args[0] } },
     };
 
     try block.addOp(op);

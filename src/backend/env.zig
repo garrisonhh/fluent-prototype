@@ -28,6 +28,9 @@ pub const BuiltinOp = enum {
     sub,
     mul,
     div,
+    @"and",
+    @"or",
+    not,
 };
 
 pub const Bound = union(enum) {
