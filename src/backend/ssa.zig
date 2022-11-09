@@ -63,6 +63,16 @@ pub const BlockRef = packed struct {
     }
 };
 
+pub const FuncRef = packed struct {
+    const Self = @This();
+
+    index: usize,
+
+    pub fn of(index: usize) Self {
+        return Self{ .index = index };
+    }
+};
+
 /// symbolic representation of operations. since blocks store type info,
 /// there is no need for operations to be type or size specific; this can be
 /// deduced later on
@@ -75,7 +85,7 @@ pub const Op = union(enum) {
     };
 
     pub const Call = struct {
-        dest: BlockRef,
+        dest: FuncRef,
     };
 
     pub const Arg = struct {
@@ -257,132 +267,245 @@ pub const Value = struct {
     }
 };
 
-/// linear block representation
-///
-/// expects to own all memory (except for jump symbols)
 pub const Block = struct {
     const Self = @This();
 
-    label: Symbol,
-    consts: []Value,
-    locals: []TypeId,
     ops: []Op,
 
     pub fn deinit(self: Self, ally: Allocator) void {
+        ally.free(self.ops);
+    }
+};
+
+pub const Func = struct {
+    const Self = @This();
+
+    label: Symbol,
+    takes: usize,
+    returns: TypeId,
+    entry: BlockRef,
+
+    consts: []Value,
+    locals: []TypeId,
+    blocks: []Block,
+
+    pub fn deinit(self: Self, ally: Allocator) void {
         ally.free(self.label.str);
+
         for (self.consts) |*value| value.deinit(ally);
         ally.free(self.consts);
         ally.free(self.locals);
-        ally.free(self.ops);
+        for (self.blocks) |block| block.deinit(ally);
+        ally.free(self.blocks);
     }
 
-    pub fn render(self: Self, env: Env, ally: Allocator) !kz.Texture {
-        // locals
-        const locals = try ally.alloc([]u8, self.locals.len);
+    fn renderLocal(
+        self: Self,
+        ally: Allocator,
+        env: Env,
+        local: Local
+    ) !kz.Texture {
+        // render type
+        const ty_text = try self.locals[local.index].writeAlloc(ally, env);
+        defer ally.free(ty_text);
+
+        const green = kz.Format{ .fg = .green };
+        const ty_tex = try kz.Texture.from(ally, green, ty_text);
+        defer ty_tex.deinit(ally);
+
+        // render var
+        const n = local.index;
+        const var_tex = try kz.Texture.print(ally, kz.Format{}, " %{}", .{n});
+        defer var_tex.deinit(ally);
+
+        // slap and return
+        return ty_tex.slap(ally, var_tex, .right, .close);
+    }
+
+    fn renderOp(
+        self: Self,
+        ally: Allocator,
+        env: Env,
+        op: Op
+    ) !kz.Texture {
+        var line = std.ArrayList(kz.Texture).init(ally);
         defer {
-            for (locals) |str| ally.free(str);
-            ally.free(locals);
+            for (line.items) |tex| tex.deinit(ally);
+            line.deinit();
         }
 
-        for (self.locals) |ty, i| {
-            locals[i] = try ty.writeAlloc(ally, env);
+        // collect textures
+        const tag = @tagName(op);
+        const class = op.classify();
+        switch (class) {
+            .ldc => |ldc| {
+                const ty = self.locals[ldc.to.index];
+                const data = try kz.Texture.print(
+                    ally,
+                    kz.Format{ .fg = .magenta },
+                    "{}",
+                    .{self.consts[ldc.a.index].toPrintable(env, ty)}
+                );
+
+                try line.appendSlice(&.{
+                    try self.renderLocal(ally, env, ldc.to),
+                    try kz.Texture.from(ally, kz.Format{}, " = "),
+                    data,
+                });
+            },
+            .unary => |un| {
+                try line.appendSlice(&.{
+                    try self.renderLocal(ally, env, un.to),
+                    try kz.Texture.print(ally, kz.Format{}, " = {s} ", .{tag}),
+                    try self.renderLocal(ally, env, un.a),
+                });
+            },
+            .binary => |bin| {
+                try line.appendSlice(&.{
+                    try self.renderLocal(ally, env, bin.to),
+                    try kz.Texture.print(ally, kz.Format{}, " = {s} ", .{tag}),
+                    try self.renderLocal(ally, env, bin.a),
+                    try kz.Texture.from(ally, kz.Format{}, ", "),
+                    try self.renderLocal(ally, env, bin.b),
+                });
+            },
+            .unary_eff => |un| {
+                try line.appendSlice(&.{
+                    try kz.Texture.print(ally, kz.Format{}, "{s} ", .{tag}),
+                    try self.renderLocal(ally, env, un.a),
+                });
+            },
+            .binary_eff => |bin| {
+                try line.appendSlice(&.{
+                    try kz.Texture.print(ally, kz.Format{}, "{s} ", .{tag}),
+                    try self.renderLocal(ally, env, bin.a),
+                    try kz.Texture.from(ally, kz.Format{}, ", "),
+                    try self.renderLocal(ally, env, bin.b),
+                });
+            },
+            else => std.debug.panic(
+                "TODO render op class {s}",
+                .{@tagName(class)}
+            )
         }
 
-        // ops
-        var op_text = std.ArrayList(u8).init(ally);
-        defer op_text.deinit();
-        const op_writer = op_text.writer();
+        // stack and return
+        return kz.Texture.stack(ally, line.items, .right, .close);
+    }
 
-        for (self.ops) |op| {
-            switch (op.classify()) {
-                .ldc => |ldc| {
-                    const @"const" = self.consts[ldc.a.index];
-                    const local = self.locals[ldc.to.index];
-                    const val = @"const".toPrintable(env, local);
+    fn renderBlock(
+        self: Self,
+        ally: Allocator,
+        env: Env,
+        ref: BlockRef
+    ) !kz.Texture {
+        const block = self.blocks[ref.index];
 
-                    try op_writer.print(
-                        "{s} {} = {}\n",
-                        .{locals[ldc.to.index], ldc.to, val}
-                    );
-                },
-                .unary => |un| {
-                    const tag = @tagName(op);
-                    const ty_to = locals[un.to.index];
-                    const ty_a = locals[un.a.index];
-
-                    try op_writer.print(
-                        "{s} {} = {s} {s} {}\n",
-                        .{ty_to, un.to, tag, ty_a, un.a}
-                    );
-                },
-                .binary => |bin| {
-                    const tag = @tagName(op);
-                    const ty_to = locals[bin.to.index];
-                    const ty_a = locals[bin.a.index];
-                    const ty_b = locals[bin.b.index];
-
-                    try op_writer.print(
-                        "{s} {} = {s} {s} {}, {s} {}\n",
-                        .{ty_to, bin.to, tag, ty_a, bin.a, ty_b, bin.b}
-                    );
-                },
-                .unary_eff => |un_eff| {
-                    const tag = @tagName(op);
-                    const ty_a = locals[un_eff.a.index];
-
-                    try op_writer.print(
-                        "{s} {s} {}\n",
-                        .{tag, ty_a, un_eff.a}
-                    );
-                },
-                .binary_eff => |bin_eff| {
-                    const tag = @tagName(op);
-                    const ty_a = locals[bin_eff.a.index];
-                    const ty_b = locals[bin_eff.b.index];
-
-                    try op_writer.print(
-                        "{s} {s} {}, {s} {}\n",
-                        .{tag, ty_a, bin_eff.a, ty_b, bin_eff.b}
-                    );
-                },
-                else => @panic("TODO"),
-            }
-        }
-
-        // stack with label
-        const tex = try kz.Texture.from(ally, kz.Format{}, op_text.items);
-        defer tex.deinit(ally);
-        const label =
-            try kz.Texture.print(ally, kz.Format{}, "@{}", .{self.label});
+        // render label
+        const cyan = kz.Format{ .fg = .cyan };
+        const label = try kz.Texture.print(ally, cyan, "@{}:", .{ref.index});
         defer label.deinit(ally);
 
-        return label.unify(ally, tex, .{2, 1});
+        // render ops
+        var ops = std.ArrayList(kz.Texture).init(ally);
+        defer {
+            for (ops.items) |tex| tex.deinit(ally);
+            ops.deinit();
+        }
+
+        for (block.ops) |op| {
+            try ops.append(try self.renderOp(ally, env, op));
+        }
+
+        const op_tex = try kz.Texture.stack(ally, ops.items, .bottom, .close);
+        defer op_tex.deinit(ally);
+
+        // unify and return
+        const INDENT = 4;
+        return try label.unify(ally, op_tex, .{INDENT, 1});
+    }
+
+    pub fn render(self: Self, ally: Allocator, env: Env) !kz.Texture {
+        // function header
+        var header_texs = std.ArrayList(kz.Texture).init(ally);
+        defer {
+            for (header_texs.items) |tex| tex.deinit(ally);
+            header_texs.deinit();
+        }
+
+        try header_texs.appendSlice(&.{
+            try kz.Texture.from(ally, kz.Format{ .fg = .red }, self.label.str),
+            try kz.Texture.from(ally, kz.Format{}, " :: (")
+        });
+
+        var param = Local.of(0);
+        while (param.index < self.takes) : (param.index += 1) {
+            if (param.index > 0) {
+                const comma = try kz.Texture.from(ally, kz.Format{}, ", ");
+                try header_texs.append(comma);
+            }
+            try header_texs.append(try self.renderLocal(ally, env, param));
+        }
+
+        const returns = try self.returns.writeAlloc(ally, env);
+        defer ally.free(returns);
+
+        try header_texs.appendSlice(&.{
+            try kz.Texture.from(ally, kz.Format{}, ") -> "),
+            try kz.Texture.from(ally, kz.Format{ .fg = .green }, returns),
+        });
+
+        const header =
+            try kz.Texture.stack(ally, header_texs.items, .right, .close);
+        defer header.deinit(ally);
+
+        // render blocks
+        var blocks = std.ArrayList(kz.Texture).init(ally);
+        defer {
+            for (blocks.items) |tex| tex.deinit(ally);
+            blocks.deinit();
+        }
+
+        var block = BlockRef.of(0);
+        while (block.index < self.blocks.len) : (block.index += 1) {
+            if (block.index == self.entry.index) {
+                const cyan = kz.Format{ .fg = .cyan };
+                try blocks.append(try kz.Texture.from(ally, cyan, "<ENTRY>"));
+            }
+            try blocks.append(try self.renderBlock(ally, env, block));
+        }
+
+        const body = try kz.Texture.stack(ally, blocks.items, .bottom, .close);
+        defer body.deinit(ally);
+
+        // slap and return
+        return header.slap(ally, body, .bottom, .close);
     }
 };
 
 pub const Program = struct {
     const Self = @This();
 
-    blocks: []Block,
-    entry: BlockRef,
+    funcs: []Func,
+    entry: FuncRef,
 
     pub fn deinit(self: Self, ally: Allocator) void {
-        for (self.blocks) |block| block.deinit(ally);
-        ally.free(self.blocks);
+        for (self.funcs) |func| func.deinit(ally);
+        ally.free(self.funcs);
     }
 
     pub fn render(self: Self, env: Env, ally: Allocator) !kz.Texture {
-        const blocks = try ally.alloc(kz.Texture, self.blocks.len);
+        const funcs = try ally.alloc(kz.Texture, self.funcs.len);
         defer {
-            for (blocks) |tex| tex.deinit(ally);
-            ally.free(blocks);
+            for (funcs) |tex| tex.deinit(ally);
+            ally.free(funcs);
         }
 
-        for (self.blocks) |block, i| {
-            blocks[i] = try block.render(env, ally);
+        for (self.funcs) |func, i| {
+            funcs[i] = try func.render(ally, env);
         }
 
-        return try kz.Texture.stack(ally, blocks, .bottom, .close);
+        return try kz.Texture.stack(ally, funcs, .bottom, .close);
     }
 };
 
@@ -392,25 +515,65 @@ pub const BlockBuilder = struct {
     const Self = @This();
 
     ally: Allocator,
-    label: Symbol,
-    consts: std.ArrayListUnmanaged(Value) = .{},
-    locals: std.ArrayListUnmanaged(TypeId) = .{},
     ops: std.ArrayListUnmanaged(Op) = .{},
 
-    pub fn init(ally: Allocator, label: Symbol) Allocator.Error!Self {
-        return Self{
-            .ally = ally,
-            .label = try label.clone(ally),
+    pub fn init(ally: Allocator) Self {
+        return Self{ .ally = ally };
+    }
+
+    /// invalidates the builder
+    pub fn build(self: *Self) Block {
+        return Block{
+            .ops = self.ops.toOwnedSlice(self.ally),
         };
     }
 
+    pub fn addOp(self: *Self, op: Op) Allocator.Error!void {
+        try self.ops.append(self.ally, op);
+    }
+};
+
+pub const FuncBuilder = struct {
+    const Self = @This();
+
+    ally: Allocator,
+
+    label: Symbol,
+    takes: usize, // number of parameters; these are the first n local values
+    returns: TypeId,
+
+    consts: std.ArrayListUnmanaged(Value) = .{},
+    locals: std.ArrayListUnmanaged(TypeId) = .{},
+    blocks: std.ArrayListUnmanaged(Block) = .{},
+
+    pub fn init(
+        ally: Allocator,
+        label: Symbol,
+        takes: []const TypeId,
+        returns: TypeId
+    ) Allocator.Error!Self {
+        var self = Self{
+            .ally = ally,
+            .label = try label.clone(ally),
+            .takes = takes.len,
+            .returns = returns,
+        };
+
+        try self.locals.appendSlice(self.ally, takes);
+
+        return self;
+    }
+
     /// invalidates this builder.
-    pub fn build(self: *Self) Block {
-        return Block{
+    pub fn build(self: *Self, entry: BlockRef) Func {
+        return Func{
             .label = self.label,
+            .takes = self.takes,
+            .returns = self.returns,
+            .entry = entry,
             .consts = self.consts.toOwnedSlice(self.ally),
             .locals = self.locals.toOwnedSlice(self.ally),
-            .ops = self.ops.toOwnedSlice(self.ally),
+            .blocks = self.blocks.toOwnedSlice(self.ally),
         };
     }
 
@@ -428,8 +591,11 @@ pub const BlockBuilder = struct {
         return local;
     }
 
-    pub fn addOp(self: *Self, op: Op) Allocator.Error!void {
-        try self.ops.append(self.ally, op);
+    pub fn addBlock(self: *Self, block: Block) Allocator.Error!BlockRef {
+        const ref = BlockRef.of(self.blocks.items.len);
+        try self.blocks.append(self.ally, block);
+
+        return ref;
     }
 };
 
@@ -437,7 +603,7 @@ pub const ProgramBuilder = struct {
     const Self = @This();
 
     ally: Allocator,
-    blocks: std.ArrayListUnmanaged(Block) = .{},
+    funcs: std.ArrayListUnmanaged(Func) = .{},
 
     pub fn init(ally: Allocator) Self {
         return Self{
@@ -446,16 +612,16 @@ pub const ProgramBuilder = struct {
     }
 
     /// invalidates this builder.
-    pub fn build(self: *Self, entry: BlockRef) Allocator.Error!Program {
+    pub fn build(self: *Self, entry: FuncRef) Allocator.Error!Program {
         return Program{
-            .blocks = self.blocks.toOwnedSlice(self.ally),
+            .funcs = self.funcs.toOwnedSlice(self.ally),
             .entry = entry,
         };
     }
 
-    pub fn addBlock(self: *Self, block: Block) Allocator.Error!BlockRef {
-        const ref = BlockRef.of(self.blocks.items.len);
-        try self.blocks.append(self.ally, block);
+    pub fn addFunc(self: *Self, func: Func) Allocator.Error!FuncRef {
+        const ref = FuncRef.of(self.funcs.items.len);
+        try self.funcs.append(self.ally, func);
 
         return ref;
     }

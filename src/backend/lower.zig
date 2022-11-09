@@ -17,18 +17,26 @@ const Op = ssa.Op;
 pub const LowerError =
     Allocator.Error;
 
-fn lowerBool(block: *ssa.BlockBuilder, expr: TExpr) LowerError!Local {
+fn lowerBool(
+    func: *ssa.FuncBuilder,
+    block: *ssa.BlockBuilder,
+    expr: TExpr
+) LowerError!Local {
     const byte: u8 = if (expr.data.@"bool") 1 else 0;
 
     // load const
-    const value = try block.addConst(&.{byte});
-    const out = try block.addLocal(expr.ty);
+    const value = try func.addConst(&.{byte});
+    const out = try func.addLocal(expr.ty);
     try block.addOp(Op{ .ldc = .{ .a = value, .to = out } });
 
     return out;
 }
 
-fn lowerNumber(block: *ssa.BlockBuilder, expr: TExpr) LowerError!Local {
+fn lowerNumber(
+    func: *ssa.FuncBuilder,
+    block: *ssa.BlockBuilder,
+    expr: TExpr
+) LowerError!Local {
     const ally = block.ally;
 
     // get raw bytes
@@ -36,8 +44,8 @@ fn lowerNumber(block: *ssa.BlockBuilder, expr: TExpr) LowerError!Local {
     defer ally.free(data);
 
     // load const
-    const value = try block.addConst(data);
-    const out = try block.addLocal(expr.ty);
+    const value = try func.addConst(data);
+    const out = try func.addLocal(expr.ty);
     try block.addOp(Op{ .ldc = .{ .a = value, .to = out } });
 
     return out;
@@ -46,11 +54,12 @@ fn lowerNumber(block: *ssa.BlockBuilder, expr: TExpr) LowerError!Local {
 fn lowerCast(
     env: Env,
     prog: *ssa.ProgramBuilder,
+    func: *ssa.FuncBuilder,
     block: *ssa.BlockBuilder,
     expr: TExpr
 ) LowerError!Local {
-    const in = try lowerExpr(env, prog, block, expr.data.cast.*);
-    const out = try block.addLocal(expr.ty);
+    const in = try lowerExpr(env, prog, func, block, expr.data.cast.*);
+    const out = try func.addLocal(expr.ty);
     try block.addOp(Op{ .cast = .{ .a = in, .to = out } });
 
     return out;
@@ -79,6 +88,7 @@ fn lowerBuiltinOp(
 fn lowerCall(
     env: Env,
     prog: *ssa.ProgramBuilder,
+    func: *ssa.FuncBuilder,
     block: *ssa.BlockBuilder,
     expr: TExpr
 ) LowerError!Local {
@@ -94,11 +104,11 @@ fn lowerCall(
     defer ally.free(args);
 
     for (tail) |param_expr, i| {
-        args[i] = try lowerExpr(env, prog, block, param_expr);
+        args[i] = try lowerExpr(env, prog, func, block, param_expr);
     }
 
     // output local
-    const out = try block.addLocal(expr.ty);
+    const out = try func.addLocal(expr.ty);
 
     // ops are special functions
     // TODO is this the right way to do this?
@@ -119,6 +129,7 @@ fn lowerCall(
 fn lowerDo(
     env: Env,
     prog: *ssa.ProgramBuilder,
+    func: *ssa.FuncBuilder,
     block: *ssa.BlockBuilder,
     expr: TExpr
 ) LowerError!Local {
@@ -128,7 +139,7 @@ fn lowerDo(
     const children = expr.getChildren();
     std.debug.assert(children.len > 0);
     for (children) |child| {
-        final = try lowerExpr(env, prog, block, child);
+        final = try lowerExpr(env, prog, func, block, child);
     }
 
     return final;
@@ -137,15 +148,16 @@ fn lowerDo(
 fn lowerExpr(
     env: Env,
     prog: *ssa.ProgramBuilder,
+    func: *ssa.FuncBuilder,
     block: *ssa.BlockBuilder,
     expr: TExpr
 ) LowerError!Local {
     return switch (expr.data) {
-        .@"bool" => try lowerBool(block, expr),
-        .number => try lowerNumber(block, expr),
-        .cast => try lowerCast(env, prog, block, expr),
-        .call => try lowerCall(env, prog, block, expr),
-        .do => try lowerDo(env, prog, block, expr),
+        .@"bool" => try lowerBool(func, block, expr),
+        .number => try lowerNumber(func, block, expr),
+        .cast => try lowerCast(env, prog, func, block, expr),
+        .call => try lowerCall(env, prog, func, block, expr),
+        .do => try lowerDo(env, prog, func, block, expr),
         else => std.debug.panic(
             "TODO lower {s} exprs\n",
             .{@tagName(expr.data)}
@@ -154,13 +166,18 @@ fn lowerExpr(
 }
 
 pub fn lower(ally: Allocator, env: Env, expr: TExpr) LowerError!ssa.Program {
+    // set up context
     var prog = ssa.ProgramBuilder.init(ally);
-    var block = try ssa.BlockBuilder.init(ally, comptime Symbol.init("(root)"));
+    const root = comptime Symbol.init("root");
+    var func = try ssa.FuncBuilder.init(ally, root, &.{}, expr.ty);
+    var block = ssa.BlockBuilder.init(ally);
 
-    // lower expr and return value :)
-    const final = try lowerExpr(env, &prog, &block, expr);
+    // lower program expr
+    const final = try lowerExpr(env, &prog, &func, &block, expr);
     try block.addOp(Op{ .ret = .{ .a = final } });
 
-    const entry = try prog.addBlock(block.build());
-    return try prog.build(entry);
+    // build program with root as entry point
+    const func_entry = try func.addBlock(block.build());
+    const prog_entry = try prog.addFunc(func.build(func_entry));
+    return try prog.build(prog_entry);
 }

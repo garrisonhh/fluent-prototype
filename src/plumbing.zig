@@ -68,6 +68,7 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
 
         try stdout.writeAll("[SSA Program]\n");
         try tex.display(stdout);
+        try stdout.writeByte('\n');
 
         render_time += now() - t;
     }
