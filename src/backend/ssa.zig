@@ -71,16 +71,7 @@ pub const Op = union(enum) {
         to: Local,
     };
 
-    pub const Jump = struct {
-        dest: Symbol,
-    };
-
-    // TODO along with the tag, Jnz puts the Op union at like 5 words in size. I
-    // could get this down significantly by using u32s and a handle into the
-    // `jmp_symbols` array instead of a copy of the symbol with its pointer, but
-    // for now it's premature for sure
-    pub const Jnz = struct {
-        cond: Local,
+    pub const Call = struct {
         dest: Symbol,
     };
 
@@ -91,6 +82,11 @@ pub const Op = union(enum) {
 
     // unique
     ldc: LoadConst,
+    cast: Unary,
+
+    // calls
+    call: Call,
+    arg: Arg,
 
     // math
     add: Binary,
@@ -104,16 +100,11 @@ pub const Op = union(enum) {
     @"and": Binary,
     xor: Binary,
     not: Unary,
-    call: Jump,
-    arg: Arg,
 
     pub const Class = union(enum) {
         // unique logic
         ldc: LoadConst,
-        ret: Jump,
-        jmp: Jump,
-        jnz: Jnz,
-        call: Jump,
+        call: Call,
         arg: Arg,
 
         // generalizable logic
@@ -125,12 +116,9 @@ pub const Op = union(enum) {
     pub fn classify(self: Self) Class {
         return switch (self) {
             .ldc => |ldc| Class{ .ldc = ldc },
-            // .ret => |ret| Class{ .ret = ret },
-            // .jmp => |jmp| Class{ .jmp = jmp },
-            // .jnz => |jnz| Class{ .jnz = jnz },
             .call => |call| Class{ .call = call },
             .arg => |arg| Class{ .arg = arg },
-            .not => |un| Class{ .unary = un },
+            .cast, .not => |un| Class{ .unary = un },
             .add, .sub, .mul, .div, .mod, .@"or", .@"and", .xor
                 => |bin| Class{ .binary = bin },
         };
@@ -281,6 +269,16 @@ pub const Block = struct {
                     try op_writer.print(
                         "{s} {} = ldc {}\n",
                         .{locals[ldc.to.index], ldc.to, val}
+                    );
+                },
+                .unary => |un| {
+                    const tag = @tagName(op);
+                    const ty_to = locals[un.to.index];
+                    const ty_a = locals[un.a.index];
+
+                    try op_writer.print(
+                        "{s} {} = {s} {s} {}\n",
+                        .{ty_to, un.to, tag, ty_a, un.a}
                     );
                 },
                 .binary => |bin| {

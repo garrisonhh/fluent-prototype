@@ -32,6 +32,19 @@ fn lowerNumber(block: *ssa.BlockBuilder, expr: TExpr) LowerError!Local {
     return out;
 }
 
+fn lowerCast(
+    env: Env,
+    prog: *ssa.ProgramBuilder,
+    block: *ssa.BlockBuilder,
+    expr: TExpr
+) LowerError!Local {
+    const in = try lowerExpr(env, prog, block, expr.data.cast.*);
+    const out = try block.addLocal(expr.ty);
+    try block.addOp(Op{ .cast = .{ .a = in, .to = out } });
+
+    return out;
+}
+
 fn lowerBuiltinOp(
     block: *ssa.BlockBuilder,
     out: Local,
@@ -114,9 +127,13 @@ fn lowerExpr(
 ) LowerError!Local {
     return switch (expr.data) {
         .number => try lowerNumber(block, expr),
+        .cast => try lowerCast(env, prog, block, expr),
         .call => try lowerCall(env, prog, block, expr),
         .do => try lowerDo(env, prog, block, expr),
-        else => @panic("TODO")
+        else => std.debug.panic(
+            "TODO lower {s} exprs\n",
+            .{@tagName(expr.data)}
+        )
     };
 }
 
