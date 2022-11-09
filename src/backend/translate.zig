@@ -10,6 +10,7 @@ const SExpr = @import("sexpr.zig");
 const Allocator = std.mem.Allocator;
 const RawExpr = frontend.RawExpr;
 const Loc = context.Loc;
+const Symbol = util.Symbol;
 
 pub const TranslateError =
     Allocator.Error
@@ -112,13 +113,30 @@ fn translateString(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
     return try SExpr.initString(ally, expr.loc, slice[1..slice.len - 1]);
 }
 
+fn translateSymbol(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
+    const symbol = Symbol.init(try ally.dupe(u8, expr.loc.getSlice()));
+
+    // detect reserved keywords
+    if (symbol.eql(comptime Symbol.init("true"))) {
+        return SExpr.initBool(expr.loc, true);
+    } else if (symbol.eql(comptime Symbol.init("false"))) {
+        return SExpr.initBool(expr.loc, false);
+    }
+
+    // regular symbol
+    return SExpr{
+        .data = .{ .symbol = symbol },
+        .loc = expr.loc,
+    };
+}
+
 pub fn translate(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
     return switch (expr.tag) {
         .file => try translateCallTo(ally, "do", expr),
         .group => try translateGroup(ally, expr),
         .number => try translateNumber(ally, expr),
         .string => try translateString(ally, expr),
-        .symbol => try SExpr.initSymbol(ally, expr.loc, expr.loc.getSlice()),
+        .symbol => try translateSymbol(ally, expr),
         .list => try translateCallTo(ally, "list", expr),
     };
 }

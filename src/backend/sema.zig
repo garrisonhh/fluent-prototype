@@ -325,6 +325,7 @@ fn analyzeExpr(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr {
     // literals
     const texpr = TExpr{
         .ty = switch (expr.data) {
+            .@"bool" => try env.typeIdentify(Type{ .@"bool" = {} }),
             .number => |num| try typeOfNumber(env, num),
             .symbol => try typeOfSymbol(env, expr),
             // string literals are (List u8)

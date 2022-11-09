@@ -13,7 +13,9 @@ const Env = backend.Env;
 const stdout = std.io.getStdOut().writer();
 
 pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
-    const start = std.time.nanoTimestamp();
+    const now = std.time.nanoTimestamp;
+    const start = now();
+    var render_time: i128 = 0;
 
     // parse stuff
     const ast = frontend.parse(ally, handle) catch {
@@ -27,7 +29,10 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
     defer sexpr.deinit(ally);
 
     if (builtin.mode == .Debug) {
+        const t = now();
         try stdout.print("[Translated AST]\n{}\n\n", .{sexpr});
+
+        render_time += now() - t;
     }
 
     var local = Env.init(env);
@@ -38,6 +43,7 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
     defer texpr.deinit(ally);
 
     if (builtin.mode == .Debug) {
+        const t = now();
         var arena = std.heap.ArenaAllocator.init(ally);
         defer arena.deinit();
 
@@ -46,12 +52,15 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
         try stdout.writeAll("[Analyzed AST]\n");
         try tex.display(stdout);
         try stdout.writeByte('\n');
+
+        render_time += now() - t;
     }
 
     var program = try backend.lower(ally, env.*, texpr);
     defer program.deinit(ally);
 
     if (builtin.mode == .Debug) {
+        const t = now();
         var arena = std.heap.ArenaAllocator.init(ally);
         defer arena.deinit();
 
@@ -59,11 +68,13 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
 
         try stdout.writeAll("[SSA Program]\n");
         try tex.display(stdout);
+
+        render_time += now() - t;
     }
 
     // time logging
     const stop = std.time.nanoTimestamp();
-    const seconds = @intToFloat(f64, stop - start) * 1e-9;
+    const seconds = @intToFloat(f64, stop - start - render_time) * 1e-9;
 
     try stdout.print("execution finished in {d:.6}s.\n", .{seconds});
 }

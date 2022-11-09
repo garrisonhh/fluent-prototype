@@ -93,7 +93,7 @@ fn fluentTests(ally: Allocator, prelude: *Env) !void {
         "false",
         // "[1, -2, 3]",
         // "[[1], [2, 3], [4, 5, 6], _what_could_this_be]",
-        // "as i64 256",
+        "as i64 256",
 
         // math
         \\/ (+ 45 69)

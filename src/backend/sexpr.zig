@@ -93,6 +93,7 @@ pub const Number = struct {
 pub const Tag = std.meta.Tag(Data);
 
 pub const Data = union(enum) {
+    @"bool": bool,
     number: Number,
     string: Symbol,
     symbol: Symbol,
@@ -123,20 +124,16 @@ pub fn initCall(loc: Loc, exprs: []Self) Self {
     };
 }
 
-pub fn initNumber(loc: Loc, num: Number) Self {
+pub fn initBool(loc: Loc, @"bool": bool) Self {
     return Self{
-        .data = .{ .number = num },
+        .data = .{ .@"bool" = @"bool" },
         .loc = loc,
     };
 }
 
-pub fn initString(
-    ally: Allocator,
-    loc: Loc,
-    str: []const u8
-) Allocator.Error!Self {
+pub fn initNumber(loc: Loc, num: Number) Self {
     return Self{
-        .data = .{ .string = Symbol.init(try ally.dupe(u8, str)) },
+        .data = .{ .number = num },
         .loc = loc,
     };
 }
@@ -148,6 +145,17 @@ pub fn initSymbol(
 ) Allocator.Error!Self {
     return Self{
         .data = .{ .symbol = Symbol.init(try ally.dupe(u8, str)) },
+        .loc = loc,
+    };
+}
+
+pub fn initString(
+    ally: Allocator,
+    loc: Loc,
+    str: []const u8
+) Allocator.Error!Self {
+    return Self{
+        .data = .{ .string = Symbol.init(try ally.dupe(u8, str)) },
         .loc = loc,
     };
 }
@@ -180,6 +188,7 @@ pub fn format(
     _ = options;
 
     switch (self.data) {
+        .@"bool" => |val| try writer.print("{}", .{val}),
         .number => |num| try writer.print("{}", .{num}),
         .string => |sym| try writer.print("\"{s}\"", .{sym.str}),
         .symbol => |sym| try writer.print("{s}", .{sym.str}),

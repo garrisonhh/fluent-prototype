@@ -17,6 +17,17 @@ const Op = ssa.Op;
 pub const LowerError =
     Allocator.Error;
 
+fn lowerBool(block: *ssa.BlockBuilder, expr: TExpr) LowerError!Local {
+    const byte: u8 = if (expr.data.@"bool") 1 else 0;
+
+    // load const
+    const value = try block.addConst(&.{byte});
+    const out = try block.addLocal(expr.ty);
+    try block.addOp(Op{ .ldc = .{ .a = value, .to = out } });
+
+    return out;
+}
+
 fn lowerNumber(block: *ssa.BlockBuilder, expr: TExpr) LowerError!Local {
     const ally = block.ally;
 
@@ -126,6 +137,7 @@ fn lowerExpr(
     expr: TExpr
 ) LowerError!Local {
     return switch (expr.data) {
+        .@"bool" => try lowerBool(block, expr),
         .number => try lowerNumber(block, expr),
         .cast => try lowerCast(env, prog, block, expr),
         .call => try lowerCall(env, prog, block, expr),
@@ -141,10 +153,10 @@ pub fn lower(ally: Allocator, env: Env, expr: TExpr) LowerError!ssa.Program {
     var prog = ssa.ProgramBuilder.init(ally);
     var block = try ssa.BlockBuilder.init(ally, comptime Symbol.init("(root)"));
 
-    // return value of expr
+    // lower expr and return value :)
     const final = try lowerExpr(env, &prog, &block, expr);
     try block.addOp(Op{ .ret = .{ .a = final } });
 
-    try prog.addBlock(block.build());
-    return try prog.build();
+    const entry = try prog.addBlock(block.build());
+    return try prog.build(entry);
 }

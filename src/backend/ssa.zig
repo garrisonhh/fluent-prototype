@@ -25,6 +25,8 @@ pub const Const = packed struct {
     pub fn of(index: usize) Self {
         return Self{ .index = index };
     }
+
+    // TODO render() function with type for consistent output
 };
 
 pub const Local = packed struct {
@@ -36,6 +38,8 @@ pub const Local = packed struct {
         return Self{ .index = index };
     }
 
+    // TODO render() function with type for consistent output
+
     pub fn format(
         self: Self,
         comptime fmt: []const u8,
@@ -46,6 +50,16 @@ pub const Local = packed struct {
         _ = options;
 
         try writer.print("%{}", .{self.index});
+    }
+};
+
+pub const BlockRef = packed struct {
+    const Self = @This();
+
+    index: usize,
+
+    pub fn of(index: usize) Self {
+        return Self{ .index = index };
     }
 };
 
@@ -61,7 +75,7 @@ pub const Op = union(enum) {
     };
 
     pub const Call = struct {
-        dest: Symbol,
+        dest: BlockRef,
     };
 
     pub const Arg = struct {
@@ -177,6 +191,7 @@ pub const Value = struct {
     }
 
     pub const Printable = union(enum) {
+        @"bool": bool,
         int: i64,
         uint: u64,
         float: f64,
@@ -191,6 +206,7 @@ pub const Value = struct {
             _ = options;
 
             switch (self) {
+                .@"bool" => |b| try writer.print("{}", .{b}),
                 .int => |i| try writer.print("{}i", .{i}),
                 .uint => |u| try writer.print("{}u", .{u}),
                 .float => |f| try writer.print("{d}f", .{f}),
@@ -201,6 +217,7 @@ pub const Value = struct {
     pub fn toPrintable(self: Self, env: Env, tid: TypeId) Printable {
         const ty = env.typeGet(tid);
         return switch (ty.*) {
+            .@"bool" => Printable{ .@"bool" = self.as(u8) > 0 },
             .number => |num| num: {
                 const bits = num.bits orelse 64;
                 break :num switch (num.layout) {
@@ -342,31 +359,22 @@ pub const Block = struct {
 pub const Program = struct {
     const Self = @This();
 
-    blocks: Symbol.HashMapUnmanaged(Block),
+    blocks: []Block,
+    entry: BlockRef,
 
-    // jump operations use symbols. to avoid having to iterate through ops
-    // to deinitialize them, they are pooled here
-    jmp_symbols: []Symbol,
-
-    pub fn deinit(self: *Self, ally: Allocator) void {
-        var blocks = self.blocks.valueIterator();
-        while (blocks.next()) |block| block.deinit(ally);
-        self.blocks.deinit(ally);
-
-        for (self.jmp_symbols) |sym| ally.free(sym.str);
-        ally.free(self.jmp_symbols);
+    pub fn deinit(self: Self, ally: Allocator) void {
+        for (self.blocks) |block| block.deinit(ally);
+        ally.free(self.blocks);
     }
 
     pub fn render(self: Self, env: Env, ally: Allocator) !kz.Texture {
-        const blocks = try ally.alloc(kz.Texture, self.blocks.count());
+        const blocks = try ally.alloc(kz.Texture, self.blocks.len);
         defer {
             for (blocks) |tex| tex.deinit(ally);
             ally.free(blocks);
         }
 
-        var block_iter = self.blocks.valueIterator();
-        var i: usize = 0;
-        while (block_iter.next()) |block| : (i += 1) {
+        for (self.blocks) |block, i| {
             blocks[i] = try block.render(env, ally);
         }
 
@@ -426,7 +434,6 @@ pub const ProgramBuilder = struct {
 
     ally: Allocator,
     blocks: std.ArrayListUnmanaged(Block) = .{},
-    jmp_symbols: std.ArrayListUnmanaged(Symbol) = .{},
 
     pub fn init(ally: Allocator) Self {
         return Self{
@@ -435,30 +442,17 @@ pub const ProgramBuilder = struct {
     }
 
     /// invalidates this builder.
-    pub fn build(self: *Self) Allocator.Error!Program {
-        // construct block map
-        var map = Symbol.HashMapUnmanaged(Block){};
-        for (self.blocks.items) |block| {
-            try map.put(self.ally, block.label, block);
-        }
-
-        self.blocks.deinit(self.ally);
-
+    pub fn build(self: *Self, entry: BlockRef) Allocator.Error!Program {
         return Program{
-            .blocks = map,
-            .jmp_symbols = self.jmp_symbols.toOwnedSlice(self.ally),
+            .blocks = self.blocks.toOwnedSlice(self.ally),
+            .entry = entry,
         };
     }
 
-    pub fn addBlock(self: *Self, block: Block) Allocator.Error!void {
+    pub fn addBlock(self: *Self, block: Block) Allocator.Error!BlockRef {
+        const ref = BlockRef.of(self.blocks.items.len);
         try self.blocks.append(self.ally, block);
-    }
 
-    /// clones symbol to internal allocator + stores on owned array
-    pub fn storeSymbol(self: *Self, sym: Symbol) Symbol {
-        const owned = try sym.clone(self.ally);
-        try self.jmp_symbols.append(owned);
-
-        return owned;
+        return ref;
     }
 };

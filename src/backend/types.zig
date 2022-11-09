@@ -173,9 +173,11 @@ pub const Type = union(enum) {
     set: Set,
 
     // concrete (exist at static runtime)
-    atom: Symbol,
+    @"bool",
     number: Number,
+    atom: Symbol,
 
+    // structured
     list: TypeId, // stores subtype; lists are slices
     tuple: []TypeId,
 
@@ -195,7 +197,8 @@ pub const Type = union(enum) {
 
     pub fn deinit(self: *Self, ally: Allocator) void {
         switch (self.*) {
-            .unit, .hole, .symbol, .any, .ty, .number, .list, .generic => {},
+            .unit, .hole, .symbol, .any, .ty, .number, .list, .generic, .@"bool"
+                => {},
             .set => |*set| set.deinit(ally),
             .atom => |sym| ally.free(sym.str),
             .tuple => |tup| ally.free(tup),
@@ -212,7 +215,7 @@ pub const Type = union(enum) {
         wyhash.update(asBytes(&std.meta.activeTag(self)));
 
         switch (self) {
-            .unit, .symbol, .hole, .any, .ty => {},
+            .unit, .symbol, .hole, .any, .ty, .@"bool" => {},
             .generic => |gid| wyhash.update(asBytes(&gid)),
             .set => {
                 // NOTE if there is a serious issue here, figure out if there is
@@ -253,7 +256,7 @@ pub const Type = union(enum) {
         if (@as(Tag, self) != @as(Tag, ty)) return false;
 
         return switch (self) {
-            .unit, .symbol, .hole, .any, .ty => true,
+            .unit, .symbol, .hole, .any, .ty, .@"bool" => true,
             .generic => |gid| gid.index == ty.generic.index,
             .set => |set| set: {
                 if (set.count() != ty.set.count()) {
@@ -282,7 +285,8 @@ pub const Type = union(enum) {
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch (self) {
-            .unit, .symbol, .hole, .any, .number, .ty, .list, .generic => self,
+            .unit, .symbol, .hole, .any, .number, .ty, .list, .generic, .@"bool"
+                => self,
             .set => |set| Self{ .set = try set.clone(ally) },
             .atom => |sym| Self{ .atom = try sym.clone(ally) },
             .tuple => |tup| Self{ .tuple = try ally.dupe(TypeId, tup) },
@@ -320,7 +324,7 @@ pub const Type = union(enum) {
         // concrete matching
         return switch (target) {
             .any, .set, .hole, .generic => unreachable,
-            .unit, .symbol, .ty => true,
+            .unit, .@"bool", .symbol, .ty => true,
             .atom => |sym| sym.eql(target.atom),
             .tuple => self.eql(target),
             .number => |num| num: {
@@ -415,7 +419,7 @@ pub const Type = union(enum) {
         return switch (self) {
             .any, .set, .hole, .generic => .analysis,
             .ty, .symbol => .dynamic,
-            .unit, .atom  => .static,
+            .unit, .atom, .@"bool" => .static,
             .number => |num| if (num.bits != null) .static else .dynamic,
             .list => |subty| typewelt.get(subty).classifyRuntime(typewelt),
             .tuple => |tup| classifyList(tup, typewelt),
@@ -457,7 +461,7 @@ pub const Type = union(enum) {
         writer: anytype
     ) WriteError!void {
         switch (self) {
-            .unit => try writer.writeAll(@tagName(self)),
+            .unit, .@"bool" => try writer.writeAll(@tagName(self)),
             .ty => try writer.writeAll("Type"),
             .hole, .symbol, .any => try util.writeCaps(@tagName(self), writer),
             .atom => |sym| try writer.print("#{s}", .{sym.str}),

@@ -76,8 +76,16 @@ pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
 
     var env = try Env.initBase(ally, typewelt);
 
-    _ = try env.typeDef(sym("type"), Type{ .ty = {} });
-    _ = try env.typeDef(sym("unit"), Type{ .unit = {} });
+    // basic typedefs
+    const any = try env.typeDef(sym("Any"), Type{ .any = {} });
+    const @"type" = try env.typeDef(sym("type"), Type{ .ty = {} });
+    const unit = try env.typeDef(sym("unit"), Type{ .unit = {} });
+    const @"bool" = try env.typeDef(sym("bool"), Type{ .@"bool" = {} });
+
+    _ = any;
+    _ = @"type";
+    _ = unit;
+    _ = @"bool";
 
     // define number types
     for ([_]util.Number.Layout{.int, .uint}) |layout| {

@@ -19,6 +19,7 @@ const Self = @This();
 
 pub const Tag = std.meta.Tag(Data);
 pub const Data = union(enum) {
+    @"bool": bool,
     number: SExpr.Number,
     string: Symbol,
     symbol: Symbol,
@@ -31,7 +32,7 @@ pub const Data = union(enum) {
 
     pub fn deinit(self: Data, ally: Allocator) void {
         switch (self) {
-            .number => {},
+            .@"bool", .number => {},
             .string, .symbol => |sym| ally.free(sym.str),
             .call, .do, .list => |exprs| {
                 for (exprs) |expr| expr.deinit(ally);
@@ -50,6 +51,7 @@ pub const Data = union(enum) {
         data: SExpr.Data
     ) Allocator.Error!Data {
         return switch (data) {
+            .@"bool" => |val| Data{ .@"bool" = val },
             .number => |num| Data{ .number = num },
             .string => |sym| Data{ .string = try sym.clone(ally) },
             .symbol => |sym| Data{ .symbol = try sym.clone(ally) },
@@ -69,7 +71,7 @@ pub const Data = union(enum) {
 
     pub fn clone(data: Data, ally: Allocator) Allocator.Error!Data {
         return switch (data) {
-            .number => data,
+            .@"bool", .number => data,
             .string => |sym| Data{ .string = try sym.clone(ally) },
             .symbol => |sym| Data{ .symbol = try sym.clone(ally) },
             .call => |exprs| Data{ .call = try cloneChildren(exprs, ally) },
@@ -149,6 +151,7 @@ pub fn render(
     // render data
     var offset = kz.Offset{@intCast(isize, ty_tex.size[0] + 1), 0};
     const data_tex = switch (self.data) {
+        .@"bool" => |val| try kz.Texture.print(ally, magenta, "{}", .{val}),
         .number => |num| try kz.Texture.print(ally, magenta, "{}", .{num}),
         .string => |sym|
             try kz.Texture.print(ally, green, "\"{}\"", .{sym}),
