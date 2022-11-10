@@ -112,6 +112,12 @@ fn fluentTests(ally: Allocator, prelude: *Env) !void {
         \\  not true
         ,
 
+        \\// control flow
+        \\if (or true false)
+        \\   + 34 35
+        \\   * 34 27
+        ,
+
         // \\// function type
         // \\def int-to-int Type
         // \\    Fn [Int] Int
@@ -137,13 +143,6 @@ fn fluentTests(ally: Allocator, prelude: *Env) !void {
         // \\    fn [a, b] (+ a b)
         // \\
         // \\my-add 45 56
-        // ,
-
-        // \\// conditional
-        // \\[
-        // \\  (if true 1 0),
-        // \\  (if false 1 0),
-        // \\]
         // ,
     };
 

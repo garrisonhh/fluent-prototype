@@ -69,6 +69,15 @@ fn defOp(
     try env.def(sym(name), ty, .{ .builtin_op = op });
 }
 
+fn defFlow(
+    env: *Env,
+    comptime name: []const u8,
+    ty: TypeId,
+    comptime flow: Env.BuiltinFlow
+) !void {
+    try env.def(sym(name), ty, .{ .builtin_flow = flow });
+}
+
 pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
     var arena = std.heap.ArenaAllocator.init(ally);
     defer arena.deinit();
@@ -82,7 +91,6 @@ pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
     const unit = try env.typeDef(sym("unit"), Type{ .unit = {} });
     const @"bool" = try env.typeDef(sym("bool"), Type{ .@"bool" = {} });
 
-    _ = any;
     _ = @"type";
     _ = unit;
 
@@ -155,15 +163,9 @@ pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
     const number_ty = try Type.initSet(tmp_ally, number_ids);
     const number = try env.typeDef(sym("Number"), number_ty);
 
-    // generics
+    // builtins
     const _A = try env.typeIdentify(Type{ .generic = .{ .index = 0 } });
-    const _B = try env.typeIdentify(Type{ .generic = .{ .index = 1 } });
-    const _C = try env.typeIdentify(Type{ .generic = .{ .index = 2 } });
 
-    _ = _B;
-    _ = _C;
-
-    // operators
     const binary_numeric = try env.typeIdentify(
         funcType(&.{number}, &.{_A, _A}, &.{}, _A
     ));
@@ -173,6 +175,9 @@ pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
     const not_fn = try env.typeIdentify(
         funcType(&.{}, &.{@"bool"}, &.{}, @"bool")
     );
+    const if_fn = try env.typeIdentify(
+        funcType(&.{any}, &.{@"bool", _A, _A}, &.{}, _A)
+    );
 
     try defOp(&env, "+", binary_numeric, .add);
     try defOp(&env, "-", binary_numeric, .sub);
@@ -181,6 +186,7 @@ pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
     try defOp(&env, "and", conditional, .@"and");
     try defOp(&env, "or", conditional, .@"or");
     try defOp(&env, "not", not_fn, .@"not");
+    try defFlow(&env, "if", if_fn, .@"if");
 
     return env;
 }

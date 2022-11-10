@@ -93,6 +93,16 @@ pub const Op = union(enum) {
         from: Local,
     };
 
+    pub const Branch = struct {
+        cond: Local,
+        a: BlockRef,
+        b: BlockRef,
+    };
+
+    pub const Jump = struct {
+        dst: BlockRef,
+    };
+
     pub const Unary = struct {
         a: Local,
         to: Local,
@@ -122,6 +132,15 @@ pub const Op = union(enum) {
     call: Call,
     arg: Arg,
 
+    // control flow
+    br: Branch,
+    jmp: Jump,
+
+    // memory
+    alloca: Unary, // allocates a number of bytes and returns pointer
+    store: BinaryEffect, // stores local b at address in ptr a
+    load: Unary, // loads data from ptr a
+
     // math
     add: Binary,
     sub: Binary,
@@ -139,6 +158,8 @@ pub const Op = union(enum) {
         ldc: LoadConst,
         call: Call,
         arg: Arg,
+        branch: Branch,
+        jump: Jump,
 
         // generalizable logic
         unary: Unary,
@@ -153,10 +174,13 @@ pub const Op = union(enum) {
             .ldc => |ldc| Class{ .ldc = ldc },
             .call => |call| Class{ .call = call },
             .arg => |arg| Class{ .arg = arg },
-            .cast, .not => |un| Class{ .unary = un },
+            .br => |br| Class{ .branch = br },
+            .jmp => |jmp| Class{ .jump = jmp },
+            .cast, .not, .load, .alloca => |un| Class{ .unary = un },
             .add, .sub, .mul, .div, .mod, .@"or", .@"and"
                 => |bin| Class{ .binary = bin },
             .ret => |un_eff| Class{ .unary_eff = un_eff },
+            .store => |bin_eff| Class{ .binary_eff = bin_eff },
         };
     }
 };
@@ -336,6 +360,9 @@ pub const Func = struct {
 
         // collect textures
         const tag = @tagName(op);
+        const comma = try kz.Texture.from(ally, kz.Format{}, ", ");
+        defer comma.deinit(ally);
+
         const class = op.classify();
         switch (class) {
             .ldc => |ldc| {
@@ -353,6 +380,22 @@ pub const Func = struct {
                     data,
                 });
             },
+            .branch => |br| {
+                try line.appendSlice(&.{
+                    try kz.Texture.print(ally, kz.Format{}, "{s} ", .{tag}),
+                    try self.renderLocal(ally, env, br.cond),
+                    try comma.clone(ally),
+                    try renderLabel(ally, br.a),
+                    try comma.clone(ally),
+                    try renderLabel(ally, br.b),
+                });
+            },
+            .jump => |jmp| {
+                try line.appendSlice(&.{
+                    try kz.Texture.print(ally, kz.Format{}, "{s} ", .{tag}),
+                    try renderLabel(ally, jmp.dst),
+                });
+            },
             .unary => |un| {
                 try line.appendSlice(&.{
                     try self.renderLocal(ally, env, un.to),
@@ -365,7 +408,7 @@ pub const Func = struct {
                     try self.renderLocal(ally, env, bin.to),
                     try kz.Texture.print(ally, kz.Format{}, " = {s} ", .{tag}),
                     try self.renderLocal(ally, env, bin.a),
-                    try kz.Texture.from(ally, kz.Format{}, ", "),
+                    try comma.clone(ally),
                     try self.renderLocal(ally, env, bin.b),
                 });
             },
@@ -379,7 +422,7 @@ pub const Func = struct {
                 try line.appendSlice(&.{
                     try kz.Texture.print(ally, kz.Format{}, "{s} ", .{tag}),
                     try self.renderLocal(ally, env, bin.a),
-                    try kz.Texture.from(ally, kz.Format{}, ", "),
+                    try comma.clone(ally),
                     try self.renderLocal(ally, env, bin.b),
                 });
             },
@@ -393,6 +436,11 @@ pub const Func = struct {
         return kz.Texture.stack(ally, line.items, .right, .close);
     }
 
+    fn renderLabel(ally: Allocator, ref: BlockRef) !kz.Texture {
+        const cyan = kz.Format{ .fg = .cyan };
+        return try kz.Texture.print(ally, cyan, "@{}", .{ref.index});
+    }
+
     fn renderBlock(
         self: Self,
         ally: Allocator,
@@ -402,8 +450,7 @@ pub const Func = struct {
         const block = self.blocks[ref.index];
 
         // render label
-        const cyan = kz.Format{ .fg = .cyan };
-        const label = try kz.Texture.print(ally, cyan, "@{}:", .{ref.index});
+        const label = try renderLabel(ally, ref);
         defer label.deinit(ally);
 
         // render ops
@@ -511,25 +558,35 @@ pub const Program = struct {
 
 // builders ====================================================================
 
+/// obtain and use through a FuncBuilder
 pub const BlockBuilder = struct {
     const Self = @This();
 
-    ally: Allocator,
+    func: *FuncBuilder,
+    ref: BlockRef,
     ops: std.ArrayListUnmanaged(Op) = .{},
 
-    pub fn init(ally: Allocator) Self {
-        return Self{ .ally = ally };
-    }
-
-    /// invalidates the builder
-    pub fn build(self: *Self) Block {
-        return Block{
-            .ops = self.ops.toOwnedSlice(self.ally),
+    fn init(func: *FuncBuilder, ref: BlockRef) Self {
+        return Self{
+            .func = func,
+            .ref = ref,
         };
     }
 
+    /// invalidates the builder
+    pub fn build(self: *Self) void {
+        self.func.setBlock(self.ref, Block{
+            .ops = self.ops.toOwnedSlice(self.func.ally),
+        });
+    }
+
     pub fn addOp(self: *Self, op: Op) Allocator.Error!void {
-        try self.ops.append(self.ally, op);
+        try self.ops.append(self.func.ally, op);
+    }
+
+    pub fn replace(self: *Self, replacement: BlockBuilder) void {
+        self.build();
+        self.* = replacement;
     }
 };
 
@@ -545,6 +602,7 @@ pub const FuncBuilder = struct {
     consts: std.ArrayListUnmanaged(Value) = .{},
     locals: std.ArrayListUnmanaged(TypeId) = .{},
     blocks: std.ArrayListUnmanaged(Block) = .{},
+    used_blocks: usize = 0,
 
     pub fn init(
         ally: Allocator,
@@ -566,6 +624,8 @@ pub const FuncBuilder = struct {
 
     /// invalidates this builder.
     pub fn build(self: *Self, entry: BlockRef) Func {
+        std.debug.assert(self.used_blocks == self.blocks.items.len);
+
         return Func{
             .label = self.label,
             .takes = self.takes,
@@ -591,11 +651,17 @@ pub const FuncBuilder = struct {
         return local;
     }
 
-    pub fn addBlock(self: *Self, block: Block) Allocator.Error!BlockRef {
-        const ref = BlockRef.of(self.blocks.items.len);
-        try self.blocks.append(self.ally, block);
+    pub fn newBlockBuilder(self: *Self) Allocator.Error!BlockBuilder {
+        const ref = BlockRef.of(self.used_blocks);
+        self.used_blocks += 1;
 
-        return ref;
+        _ = try self.blocks.addOne(self.ally);
+
+        return BlockBuilder.init(self, ref);
+    }
+
+    fn setBlock(self: *Self, ref: BlockRef, block: Block) void {
+        self.blocks.items[ref.index] = block;
     }
 };
 

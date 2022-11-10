@@ -178,7 +178,8 @@ pub const Type = union(enum) {
     atom: Symbol,
 
     // structured
-    list: TypeId, // stores subtype; lists are slices
+    ptr: TypeId, // stores child type
+    list: TypeId, // lists are slices
     tuple: []TypeId,
 
     func: Func,
@@ -197,7 +198,8 @@ pub const Type = union(enum) {
 
     pub fn deinit(self: *Self, ally: Allocator) void {
         switch (self.*) {
-            .unit, .hole, .symbol, .any, .ty, .number, .list, .generic, .@"bool"
+            .unit, .hole, .symbol, .any, .ty, .number, .list, .generic,
+            .@"bool", .@"ptr"
                 => {},
             .set => |*set| set.deinit(ally),
             .atom => |sym| ally.free(sym.str),
@@ -228,7 +230,7 @@ pub const Type = union(enum) {
                 wyhash.update(asBytes(&num.layout));
                 wyhash.update(asBytes(&num.bits));
             },
-            .list => |subty| wyhash.update(asBytes(&subty)),
+            .list, .ptr => |subty| wyhash.update(asBytes(&subty)),
             .tuple => |tup| wyhash.update(asBytes(&tup)),
             .func => |func| {
                 wyhash.update(asBytes(&func.generics));
@@ -273,7 +275,7 @@ pub const Type = union(enum) {
             .atom => |sym| sym.eql(ty.atom),
             .number => |num|
                 num.layout == ty.number.layout and num.bits == ty.number.bits,
-            .list => |subty| subty.eql(ty.list),
+            .list, .ptr => |subty| subty.eql(ty.list),
             .tuple => |tup| idsEql(tup, ty.tuple),
             .func => |func|
                 idsEql(func.generics, ty.func.generics)
@@ -285,7 +287,8 @@ pub const Type = union(enum) {
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch (self) {
-            .unit, .symbol, .hole, .any, .number, .ty, .list, .generic, .@"bool"
+            .unit, .symbol, .hole, .any, .number, .ty, .list, .generic,
+            .@"bool", .ptr
                 => self,
             .set => |set| Self{ .set = try set.clone(ally) },
             .atom => |sym| Self{ .atom = try sym.clone(ally) },
@@ -341,7 +344,7 @@ pub const Type = union(enum) {
                 // must not lose bits in coercion
                 break :num num.bits.? <= target.number.bits.?;
             },
-            .list => |subty| subty.eql(self.list),
+            .list, .ptr => |subty| subty.eql(self.list),
             .func => func: {
                 // TODO I want functions to be able to coerce to functions with
                 // wider effect sets I think?
@@ -421,7 +424,8 @@ pub const Type = union(enum) {
             .ty, .symbol => .dynamic,
             .unit, .atom, .@"bool" => .static,
             .number => |num| if (num.bits != null) .static else .dynamic,
-            .list => |subty| typewelt.get(subty).classifyRuntime(typewelt),
+            .list, .ptr
+                => |subty| typewelt.get(subty).classifyRuntime(typewelt),
             .tuple => |tup| classifyList(tup, typewelt),
             .func => |func| func: {
                 var reqs = [3]RuntimeClass{
@@ -432,6 +436,20 @@ pub const Type = union(enum) {
 
                 break :func RuntimeClass.unifyList(&reqs);
             },
+        };
+    }
+
+    /// this function assumes that types have been checked to be part of the
+    /// dynamic runtime at least
+    pub fn sizeOf(self: Self, typewelt: TypeWelt) usize {
+        _ = typewelt;
+
+        return switch (self) {
+            .any, .set, .hole, .generic => unreachable,
+            .number => |num| (num.bits orelse 64) / 8,
+            .@"bool" => 1,
+            .ptr => 8,
+            else => std.debug.panic("TODO sizeOf {s}", .{@tagName(self)})
         };
     }
 
@@ -502,6 +520,11 @@ pub const Type = union(enum) {
                 } else {
                     try writer.print("compiler-{s}", .{layout});
                 }
+            },
+            .ptr => |subty| {
+                try writer.writeAll("(Ptr ");
+                try subty.write(ally, env, writer);
+                try writer.writeByte(')');
             },
             .list => |subty| {
                 try writer.writeAll("(List ");

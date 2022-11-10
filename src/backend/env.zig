@@ -33,8 +33,13 @@ pub const BuiltinOp = enum {
     not,
 };
 
+pub const BuiltinFlow = enum {
+    @"if",
+};
+
 pub const Bound = union(enum) {
     builtin_op: BuiltinOp,
+    builtin_flow: BuiltinFlow,
     ty: TypeId,
 };
 
@@ -241,9 +246,14 @@ pub fn render(self: Self, ally: Allocator) !kz.Texture {
         row[1] = try kz.Texture.from(tmp_ally, green, ty_text);
         row[2] = switch (ev.bound.*) {
             .builtin_op => |op| op: {
-                const text = "<builtin> {s}";
-                break :op
-                    try kz.Texture.print(tmp_ally, red, text, .{@tagName(op)});
+                const tag = @tagName(op);
+                const text = "<operator> {s}";
+                break :op try kz.Texture.print(tmp_ally, red, text, .{tag});
+            },
+            .builtin_flow => |flow| flow: {
+                const tag = @tagName(flow);
+                const text = "<flow> {s}";
+                break :flow try kz.Texture.print(tmp_ally, red, text, .{tag});
             },
             .ty => |id| ty: {
                 const got = self.typeGet(id);

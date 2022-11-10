@@ -56,7 +56,7 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
         render_time += now() - t;
     }
 
-    var program = try backend.lower(ally, env.*, texpr);
+    var program = try backend.lower(ally, env, texpr);
     defer program.deinit(ally);
 
     if (builtin.mode == .Debug) {
