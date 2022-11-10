@@ -127,14 +127,14 @@ fn lowerIf(
     }
 
     // add branch op and replace block builder
-    try merge.addOp(Op{
+    try block.addOp(Op{
         .br = .{ .cond = cond, .a = branches[0], .b = branches[1] }
     });
     block.replace(merge);
 
     // finally, load value from stack
     const final = try func.addLocal(expr.ty);
-    try merge.addOp(Op{ .load = .{ .to = final, .a = out_ptr } });
+    try block.addOp(Op{ .load = .{ .to = final, .a = out_ptr } });
 
     return final;
 }
