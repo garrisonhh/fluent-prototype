@@ -45,16 +45,17 @@ fn sym(comptime str: []const u8) Symbol {
 }
 
 fn funcType(
-    generics: []TypeId,
-    takes: []TypeId,
-    contexts: []TypeId,
+    ally: Allocator,
+    generics: []const TypeId,
+    takes: []const TypeId,
+    contexts: []const TypeId,
     returns: TypeId
-) Type {
+) Allocator.Error!Type {
     return Type{
         .func = Type.Func{
-            .generics = generics,
-            .takes = takes,
-            .contexts = contexts,
+            .generics = try ally.dupe(TypeId, generics),
+            .takes = try ally.dupe(TypeId, takes),
+            .contexts = try ally.dupe(TypeId, contexts),
             .returns = returns
         }
     };
@@ -81,7 +82,7 @@ fn defFlow(
 pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
     var arena = std.heap.ArenaAllocator.init(ally);
     defer arena.deinit();
-    const tmp_ally = arena.allocator();
+    const tmp = arena.allocator();
 
     var env = try Env.initBase(ally, typewelt);
 
@@ -133,12 +134,12 @@ pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
         .number = .{ .layout = .float, .bits = 64 }
     });
 
-    const int_ids: []TypeId = &.{@"i8", @"i16", @"i32", @"i64", compiler_int};
-    const uint_ids: []TypeId = &.{@"u8", @"u16", @"u32", @"u64"};
-    const float_ids: []TypeId = &.{@"f32", @"f64", compiler_float};
-    const int_ty = try Type.initSet(tmp_ally, int_ids);
-    const uint_ty = try Type.initSet(tmp_ally, uint_ids);
-    const float_ty = try Type.initSet(tmp_ally, float_ids);
+    const int_ids = &[_]TypeId{@"i8", @"i16", @"i32", @"i64", compiler_int};
+    const uint_ids = &[_]TypeId{@"u8", @"u16", @"u32", @"u64"};
+    const float_ids = &[_]TypeId{@"f32", @"f64", compiler_float};
+    const int_ty = try Type.initSet(tmp, int_ids);
+    const uint_ty = try Type.initSet(tmp, uint_ids);
+    const float_ty = try Type.initSet(tmp, float_ids);
 
     const int = try env.typeDef(sym("Int"), int_ty);
     const uint = try env.typeDef(sym("UInt"), uint_ty);
@@ -148,7 +149,7 @@ pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
     _ = uint;
     _ = float;
 
-    const number_ids = try tmp_ally.alloc(
+    const number_ids = try tmp.alloc(
         TypeId,
         int_ids.len + uint_ids.len + float_ids.len
     );
@@ -160,23 +161,23 @@ pub fn initPrelude(ally: Allocator, typewelt: *TypeWelt) !Env {
         }
     }
 
-    const number_ty = try Type.initSet(tmp_ally, number_ids);
+    const number_ty = try Type.initSet(tmp, number_ids);
     const number = try env.typeDef(sym("Number"), number_ty);
 
     // builtins
     const _A = try env.typeIdentify(Type{ .generic = .{ .index = 0 } });
 
     const binary_numeric = try env.typeIdentify(
-        funcType(&.{number}, &.{_A, _A}, &.{}, _A
+        try funcType(tmp, &.{number}, &.{_A, _A}, &.{}, _A
     ));
     const conditional = try env.typeIdentify(
-        funcType(&.{}, &.{@"bool", @"bool"}, &.{}, @"bool")
+        try funcType(tmp, &.{}, &.{@"bool", @"bool"}, &.{}, @"bool")
     );
     const not_fn = try env.typeIdentify(
-        funcType(&.{}, &.{@"bool"}, &.{}, @"bool")
+        try funcType(tmp, &.{}, &.{@"bool"}, &.{}, @"bool")
     );
     const if_fn = try env.typeIdentify(
-        funcType(&.{any}, &.{@"bool", _A, _A}, &.{}, _A)
+        try funcType(tmp, &.{any}, &.{@"bool", _A, _A}, &.{}, _A)
     );
 
     try defOp(&env, "+", binary_numeric, .add);
