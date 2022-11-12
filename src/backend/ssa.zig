@@ -17,62 +17,6 @@ const Allocator = std.mem.Allocator;
 const Symbol = util.Symbol;
 const TypeId = types.TypeId;
 
-pub const Const = packed struct {
-    const Self = @This();
-
-    index: usize,
-
-    pub fn of(index: usize) Self {
-        return Self{ .index = index };
-    }
-
-    // TODO render() function with type for consistent output
-};
-
-pub const Local = packed struct {
-    const Self = @This();
-
-    index: usize,
-
-    pub fn of(index: usize) Self {
-        return Self{ .index = index };
-    }
-
-    // TODO render() function with type for consistent output
-
-    pub fn format(
-        self: Self,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype
-    ) @TypeOf(writer).Error!void {
-        _ = fmt;
-        _ = options;
-
-        try writer.print("%{}", .{self.index});
-    }
-};
-
-pub const BlockRef = packed struct {
-    const Self = @This();
-
-    index: usize,
-
-    pub fn of(index: usize) Self {
-        return Self{ .index = index };
-    }
-};
-
-pub const FuncRef = packed struct {
-    const Self = @This();
-
-    index: usize,
-
-    pub fn of(index: usize) Self {
-        return Self{ .index = index };
-    }
-};
-
 /// symbolic representation of operations. since blocks store type info,
 /// there is no need for operations to be type or size specific; this can be
 /// deduced later on
@@ -95,12 +39,12 @@ pub const Op = union(enum) {
 
     pub const Branch = struct {
         cond: Local,
-        a: BlockRef,
-        b: BlockRef,
+        a: Label,
+        b: Label,
     };
 
     pub const Jump = struct {
-        dst: BlockRef,
+        dst: Label,
     };
 
     pub const Unary = struct {
@@ -291,13 +235,59 @@ pub const Value = struct {
     }
 };
 
-pub const Block = struct {
+pub const Const = packed struct {
     const Self = @This();
 
-    ops: []Op,
+    index: usize,
 
-    pub fn deinit(self: Self, ally: Allocator) void {
-        ally.free(self.ops);
+    pub fn of(index: usize) Self {
+        return Self{ .index = index };
+    }
+
+    // TODO render() function with type for consistent output
+};
+
+pub const Local = packed struct {
+    const Self = @This();
+
+    index: usize,
+
+    pub fn of(index: usize) Self {
+        return Self{ .index = index };
+    }
+
+    // TODO render() function with type for consistent output
+
+    pub fn format(
+        self: Self,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype
+    ) @TypeOf(writer).Error!void {
+        _ = fmt;
+        _ = options;
+
+        try writer.print("%{}", .{self.index});
+    }
+};
+
+pub const Label = packed struct {
+    const Self = @This();
+
+    index: usize,
+
+    pub fn of(index: usize) Self {
+        return Self{ .index = index };
+    }
+};
+
+pub const FuncRef = packed struct {
+    const Self = @This();
+
+    index: usize,
+
+    pub fn of(index: usize) Self {
+        return Self{ .index = index };
     }
 };
 
@@ -307,11 +297,12 @@ pub const Func = struct {
     label: Symbol,
     takes: usize,
     returns: TypeId,
-    entry: BlockRef,
+    entry: Label,
 
     consts: []Value,
     locals: []TypeId,
-    blocks: []Block,
+    ops: []Op,
+    labels: []usize, // 'maps' label -> op index
 
     pub fn deinit(self: Self, ally: Allocator) void {
         ally.free(self.label.str);
@@ -319,8 +310,8 @@ pub const Func = struct {
         for (self.consts) |*value| value.deinit(ally);
         ally.free(self.consts);
         ally.free(self.locals);
-        for (self.blocks) |block| block.deinit(ally);
-        ally.free(self.blocks);
+        ally.free(self.ops);
+        ally.free(self.labels);
     }
 
     fn renderLocal(
@@ -436,40 +427,54 @@ pub const Func = struct {
         return kz.Texture.stack(ally, line.items, .right, .close);
     }
 
-    fn renderLabel(ally: Allocator, ref: BlockRef) !kz.Texture {
+    fn renderLabel(ally: Allocator, label: Label) !kz.Texture {
         const cyan = kz.Format{ .fg = .cyan };
-        return try kz.Texture.print(ally, cyan, "@{}", .{ref.index});
+        return try kz.Texture.print(ally, cyan, "@{}", .{label.index});
     }
 
-    fn renderBlock(
-        self: Self,
-        ally: Allocator,
-        env: Env,
-        ref: BlockRef
-    ) !kz.Texture {
-        const block = self.blocks[ref.index];
+    fn renderBody(self: Self, ally: Allocator, env: Env) !kz.Texture {
+        // entry point
+        const entry = try kz.Texture.from(ally, kz.Format{}, "enter ");
+        defer entry.deinit(ally);
 
-        // render label
-        const label = try renderLabel(ally, ref);
-        defer label.deinit(ally);
+        const entry_label = try renderLabel(ally, self.entry);
+        defer entry_label.deinit(ally);
+
+        var body = try entry.slap(ally, entry_label, .right, .close);
+
+        // construct reverse label map
+        var labels = std.AutoHashMap(usize, Label).init(ally);
+        defer labels.deinit();
+
+        for (self.labels) |index, i| {
+            try labels.put(index, Label.of(i));
+        }
 
         // render ops
-        var ops = std.ArrayList(kz.Texture).init(ally);
-        defer {
-            for (ops.items) |tex| tex.deinit(ally);
-            ops.deinit();
+        var y: isize = 1;
+        for (self.ops) |op, i| {
+            if (labels.get(i)) |label| {
+                const tex = try renderLabel(ally, label);
+                defer tex.deinit(ally);
+
+                const new = try body.unify(ally, tex, .{0, y});
+                body.deinit(ally);
+                body = new;
+                y += 1;
+            }
+
+            const INDENT = 4;
+
+            const tex = try self.renderOp(ally, env, op);
+            defer tex.deinit(ally);
+
+            const new = try body.unify(ally, tex, .{INDENT, y});
+            body.deinit(ally);
+            body = new;
+            y += 1;
         }
 
-        for (block.ops) |op| {
-            try ops.append(try self.renderOp(ally, env, op));
-        }
-
-        const op_tex = try kz.Texture.stack(ally, ops.items, .bottom, .close);
-        defer op_tex.deinit(ally);
-
-        // unify and return
-        const INDENT = 4;
-        return try label.unify(ally, op_tex, .{INDENT, 1});
+        return body;
     }
 
     pub fn render(self: Self, ally: Allocator, env: Env) !kz.Texture {
@@ -506,23 +511,8 @@ pub const Func = struct {
             try kz.Texture.stack(ally, header_texs.items, .right, .close);
         defer header.deinit(ally);
 
-        // render blocks
-        var blocks = std.ArrayList(kz.Texture).init(ally);
-        defer {
-            for (blocks.items) |tex| tex.deinit(ally);
-            blocks.deinit();
-        }
-
-        var block = BlockRef.of(0);
-        while (block.index < self.blocks.len) : (block.index += 1) {
-            if (block.index == self.entry.index) {
-                const cyan = kz.Format{ .fg = .cyan };
-                try blocks.append(try kz.Texture.from(ally, cyan, "<ENTRY>"));
-            }
-            try blocks.append(try self.renderBlock(ally, env, block));
-        }
-
-        const body = try kz.Texture.stack(ally, blocks.items, .bottom, .close);
+        // function body
+        const body = try self.renderBody(ally, env);
         defer body.deinit(ally);
 
         // slap and return
@@ -558,38 +548,6 @@ pub const Program = struct {
 
 // builders ====================================================================
 
-/// obtain and use through a FuncBuilder
-pub const BlockBuilder = struct {
-    const Self = @This();
-
-    func: *FuncBuilder,
-    ref: BlockRef,
-    ops: std.ArrayListUnmanaged(Op) = .{},
-
-    fn init(func: *FuncBuilder, ref: BlockRef) Self {
-        return Self{
-            .func = func,
-            .ref = ref,
-        };
-    }
-
-    /// invalidates the builder
-    pub fn build(self: *Self) void {
-        self.func.setBlock(self.ref, Block{
-            .ops = self.ops.toOwnedSlice(self.func.ally),
-        });
-    }
-
-    pub fn addOp(self: *Self, op: Op) Allocator.Error!void {
-        try self.ops.append(self.func.ally, op);
-    }
-
-    pub fn replace(self: *Self, replacement: BlockBuilder) void {
-        self.build();
-        self.* = replacement;
-    }
-};
-
 pub const FuncBuilder = struct {
     const Self = @This();
 
@@ -601,8 +559,8 @@ pub const FuncBuilder = struct {
 
     consts: std.ArrayListUnmanaged(Value) = .{},
     locals: std.ArrayListUnmanaged(TypeId) = .{},
-    blocks: std.ArrayListUnmanaged(Block) = .{},
-    used_blocks: usize = 0,
+    ops: std.ArrayListUnmanaged(Op) = .{},
+    labels: std.ArrayListUnmanaged(usize) = .{},
 
     pub fn init(
         ally: Allocator,
@@ -623,9 +581,7 @@ pub const FuncBuilder = struct {
     }
 
     /// invalidates this builder.
-    pub fn build(self: *Self, entry: BlockRef) Func {
-        std.debug.assert(self.used_blocks == self.blocks.items.len);
-
+    pub fn build(self: *Self, entry: Label) Func {
         return Func{
             .label = self.label,
             .takes = self.takes,
@@ -633,7 +589,8 @@ pub const FuncBuilder = struct {
             .entry = entry,
             .consts = self.consts.toOwnedSlice(self.ally),
             .locals = self.locals.toOwnedSlice(self.ally),
-            .blocks = self.blocks.toOwnedSlice(self.ally),
+            .ops = self.ops.toOwnedSlice(self.ally),
+            .labels = self.labels.toOwnedSlice(self.ally),
         };
     }
 
@@ -651,17 +608,22 @@ pub const FuncBuilder = struct {
         return local;
     }
 
-    pub fn newBlockBuilder(self: *Self) Allocator.Error!BlockBuilder {
-        const ref = BlockRef.of(self.used_blocks);
-        self.used_blocks += 1;
+    pub fn addLabel(self: *Self) Allocator.Error!Label {
+        const label = Label.of(self.labels.items.len);
+        try self.labels.append(self.ally, self.ops.items.len);
 
-        _ = try self.blocks.addOne(self.ally);
-
-        return BlockBuilder.init(self, ref);
+        return label;
     }
 
-    fn setBlock(self: *Self, ref: BlockRef, block: Block) void {
-        self.blocks.items[ref.index] = block;
+    pub fn addOp(self: *Self, op: Op) Allocator.Error!void {
+        try self.ops.append(self.ally, op);
+    }
+
+    /// this replaces a label's original op index with the next op index.
+    ///
+    /// this allows generating SSA IR without messing with backrefs!
+    pub fn replaceLabel(self: *Self, label: Label) Allocator.Error!void {
+        self.labels.items[label.index] = self.ops.items.len;
     }
 };
 
