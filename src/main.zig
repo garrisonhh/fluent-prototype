@@ -313,12 +313,7 @@ pub fn main() !void {
     };
 
     // display prelude as a sanity check
-    {
-        const prelude_tex = try prelude.render(ally);
-        defer prelude_tex.deinit(ally);
-
-        try prelude_tex.display(stdout);
-    }
+    try prelude.dump(ally, stdout);
 
     switch (cmd) {
         .help => try printHelp(),

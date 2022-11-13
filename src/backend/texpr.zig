@@ -121,69 +121,42 @@ pub fn getChildren(self: Self) []Self {
 
 pub fn render(
     self: Self,
-    env: Env,
-    ally: Allocator
-) !kz.Texture {
+    ctx: *kz.Context,
+    env: Env
+) Allocator.Error!kz.Ref {
     const INDENT = 2;
-    const faint = kz.Format{ .special = .faint };
-    const magenta = kz.Format{ .fg = .magenta };
-    const green = kz.Format{ .fg = .green };
-    const red = kz.Format{ .fg = .red };
+    const faint = kz.Style{ .special = .faint };
+    const magenta = kz.Style{ .fg = .magenta };
+    const green = kz.Style{ .fg = .green };
+    const red = kz.Style{ .fg = .red };
 
-    // render type
-    const ty_tex = render_ty: {
-        const ty = env.typeGet(self.ty);
-        const text = try ty.writeAlloc(ally, env);
-        defer ally.free(text);
+    // type for header
+    const ty_text = try env.typeGet(self.ty).writeAlloc(ctx.ally, env);
+    defer ctx.ally.free(ty_text);
 
-        break :render_ty try kz.Texture.print(ally, faint, "{s}", .{text});
+    const ty = try ctx.print(faint, "{s}", .{ty_text});
+
+    // other inline header stuff
+    const data = switch (self.data) {
+        .@"bool" => |val| try ctx.print(magenta, "{}", .{val}),
+        .number => |num| try ctx.print(magenta, "{}", .{num}),
+        .string => |sym| try ctx.print(green, "\"{}\"", .{sym}),
+        .symbol => |sym| try ctx.print(red, "{}", .{sym}),
+        .do, .cast, .call, .list
+            => try ctx.print(.{}, "{s}", .{@tagName(self.data)}),
     };
-    defer ty_tex.deinit(ally);
 
-    // render header if warranted
-    const header_tex = switch (self.data) {
-        .do, .cast, .call
-            => try kz.Texture.from(ally, kz.Format{}, @tagName(self.data)),
-        else => try kz.Texture.from(ally, kz.Format{}, "")
-    };
-    defer header_tex.deinit(ally);
+    // header
+    const header = try ctx.slap(ty, data, .right, .{ .space = 1 });
 
-    // render data
-    var offset = kz.Offset{@intCast(isize, ty_tex.size[0] + 1), 0};
-    const data_tex = switch (self.data) {
-        .@"bool" => |val| try kz.Texture.print(ally, magenta, "{}", .{val}),
-        .number => |num| try kz.Texture.print(ally, magenta, "{}", .{num}),
-        .string => |sym|
-            try kz.Texture.print(ally, green, "\"{}\"", .{sym}),
-        .symbol => |sym| try kz.Texture.print(ally, red, "{}", .{sym}),
-        .call, .do, .list => |exprs| call: {
-            // collect
-            var list = std.ArrayList(kz.Texture).init(ally);
-            defer {
-                for (list.items) |tex| tex.deinit(ally);
-                list.deinit();
-            }
+    // any children
+    var children = ctx.stub();
+    for (self.getChildren()) |child| {
+        const tex = try child.render(ctx, env);
+        children = try ctx.slap(children, tex, .bottom, .{});
+    }
 
-            for (exprs) |expr| {
-                try list.append(try expr.render(env, ally));
-            }
-
-            // stack
-            offset = .{INDENT, 1};
-            break :call
-                try kz.Texture.stack(ally, list.items, .bottom, .close);
-        },
-        .cast => |expr| cast: {
-            offset = .{INDENT, 1};
-            break :cast try expr.render(env, ally);
-        },
-    };
-    defer data_tex.deinit(ally);
-
-    // put it together
-    const header_offset = kz.Offset{@intCast(isize, ty_tex.size[0]) + 1, 0};
-    const top_tex = try ty_tex.unify(ally, header_tex, header_offset);
-    defer top_tex.deinit(ally);
-
-    return try top_tex.unify(ally, data_tex, offset);
+    // slap and return everything
+    const offset = kz.Offset{INDENT, @intCast(isize, ctx.getSize(header)[1])};
+    return try ctx.unify(header, children, offset);
 }

@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const kz = @import("kritzler");
 const frontend = @import("frontend.zig");
 const backend = @import("backend.zig");
 const context = @import("context.zig");
@@ -44,13 +45,13 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
 
     if (builtin.mode == .Debug) {
         const t = now();
-        var arena = std.heap.ArenaAllocator.init(ally);
-        defer arena.deinit();
+        var ctx = kz.Context.init(ally);
+        defer ctx.deinit();
 
-        const tex = try texpr.render(local, arena.allocator());
+        const tex = try texpr.render(&ctx, local);
 
         try stdout.writeAll("[Analyzed AST]\n");
-        try tex.display(stdout);
+        try ctx.write(tex, stdout);
         try stdout.writeByte('\n');
 
         render_time += now() - t;
@@ -61,13 +62,13 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
 
     if (builtin.mode == .Debug) {
         const t = now();
-        var arena = std.heap.ArenaAllocator.init(ally);
-        defer arena.deinit();
+        var ctx = kz.Context.init(ally);
+        defer ctx.deinit();
 
-        const tex = try program.render(local, arena.allocator());
+        const tex = try program.render(&ctx, local);
 
         try stdout.writeAll("[SSA Program]\n");
-        try tex.display(stdout);
+        try ctx.write(tex, stdout);
         try stdout.writeByte('\n');
 
         render_time += now() - t;
@@ -78,4 +79,8 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
     const seconds = @intToFloat(f64, stop - start - render_time) * 1e-9;
 
     try stdout.print("execution finished in {d:.6}s.\n", .{seconds});
+    if (render_time > 0) {
+        const render_secs = @intToFloat(f64, render_time) * 1e-9;
+        try stdout.print("render time {d:.6}s.\n", .{render_secs});
+    }
 }

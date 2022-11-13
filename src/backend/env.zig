@@ -199,10 +199,9 @@ pub fn typeDef(self: *Self, sym: Symbol, ty: Type) DefError!TypeId {
 
 // display =====================================================================
 
-pub fn render(self: Self, ally: Allocator) !kz.Texture {
-    var arena = std.heap.ArenaAllocator.init(ally);
-    defer arena.deinit();
-    const tmp_ally = arena.allocator();
+pub fn dump(self: Self, ally: Allocator, writer: anytype) !void {
+    var ctx = kz.Context.init(ally);
+    defer ctx.deinit();
 
     // collect variables and sort alphabetically
     const EnvVar = struct {
@@ -210,8 +209,8 @@ pub fn render(self: Self, ally: Allocator) !kz.Texture {
         ty: TypeId,
         bound: *const Bound,
 
-        pub fn lessThan(ctx: void, a: @This(), b: @This()) bool {
-            _ = ctx;
+        pub fn lessThan(context: void, a: @This(), b: @This()) bool {
+            _ = context;
             return std.ascii.lessThanIgnoreCase(a.name, b.name);
         }
     };
@@ -231,91 +230,39 @@ pub fn render(self: Self, ally: Allocator) !kz.Texture {
     std.sort.sort(EnvVar, vars.items, {}, EnvVar.lessThan);
 
     // render variables
-    var rows = std.ArrayList([3]kz.Texture).init(ally);
-    defer rows.deinit();
-
+    var list = ctx.stub();
     for (vars.items) |ev| {
-        const red = kz.Format{ .fg = .red };
-        const green = kz.Format{ .fg = .green };
+        const ty_text = try self.typeGet(ev.ty).writeAlloc(ally, self);
+        defer ally.free(ty_text);
 
-        const ty = self.typeGet(ev.ty);
-        const ty_text = try ty.writeAlloc(tmp_ally, self);
-
-        const row = try rows.addOne();
-        row[0] = try kz.Texture.from(tmp_ally, kz.Format{}, ev.name);
-        row[1] = try kz.Texture.from(tmp_ally, green, ty_text);
-        row[2] = switch (ev.bound.*) {
-            .builtin_op => |op| op: {
-                const tag = @tagName(op);
-                const text = "<operator> {s}";
-                break :op try kz.Texture.print(tmp_ally, red, text, .{tag});
-            },
-            .builtin_flow => |flow| flow: {
-                const tag = @tagName(flow);
-                const text = "<flow> {s}";
-                break :flow try kz.Texture.print(tmp_ally, red, text, .{tag});
-            },
-            .ty => |id| ty: {
-                const got = self.typeGet(id);
-                const text = try got.writeAlloc(tmp_ally, self);
-                break :ty try kz.Texture.from(tmp_ally, kz.Format{}, text);
-            },
+        const red = kz.Style{ .fg = .red };
+        const row = [_]kz.Ref{
+            try ctx.print(.{}, "{s}: ", .{ev.name}),
+            try ctx.print(.{ .fg = .green }, "{s}", .{ty_text}),
+            try ctx.print(.{}, " = ", .{}),
+            switch (ev.bound.*) {
+                .builtin_op => |op| op: {
+                    const tag = @tagName(op);
+                    const text = "<operator> {s}";
+                    break :op try ctx.print(red, text, .{tag});
+                },
+                .builtin_flow => |flow| flow: {
+                    const tag = @tagName(flow);
+                    const text = "<flow> {s}";
+                    break :flow try ctx.print(red, text, .{tag});
+                },
+                .ty => |id| ty: {
+                    const got = self.typeGet(id);
+                    const text = try got.writeAlloc(ally, self);
+                    defer ally.free(text);
+                    break :ty try ctx.print(.{}, "{s}", .{text});
+                },
+            }
         };
+
+        const row_tex = try ctx.stack(&row, .right, .{});
+        list = try ctx.slap(list, row_tex, .bottom, .{});
     }
 
-    // final rendering
-    const titles = [_][]const u8{"name", "type", "binding"};
-    const sep = 2;
-
-    // figure out proper column widths
-    var widths: [3]usize = undefined;
-    for (titles) |title, i| widths[i] = title.len;
-
-    for (rows.items) |row| {
-        for (row) |tex, i| {
-            widths[i] = std.math.max(widths[i], tex.size[0]);
-        }
-    }
-
-    // render titles
-    const width = width: {
-        var total: usize = 0;
-        for (widths) |w, i| {
-            if (i > 0) total += sep;
-            total += w;
-        }
-
-        break :width total;
-    };
-
-    var rendered = try kz.Texture.init(tmp_ally, .{width, 2});
-
-    var i: usize = 0;
-    for (titles) |title, j| {
-        for (title) |ch, k| {
-            rendered.set(.{i + k, 0}, kz.Format{}, ch);
-        }
-        i += widths[j] + sep;
-    }
-
-    i = 0;
-    while (i < width) : (i += 1) {
-        rendered.set(.{i, 1}, kz.Format{}, '-');
-    }
-
-    // slap all the rows together
-    for (rows.items) |row| {
-        var row_tex = try kz.Texture.init(tmp_ally, .{width, 0});
-
-        i = 0;
-        for (row) |tex, j| {
-            const x = @intCast(isize, i);
-            row_tex = try row_tex.unify(tmp_ally, tex, .{x, 0});
-            i += widths[j] + sep;
-        }
-
-        rendered = try rendered.slap(tmp_ally, row_tex, .bottom, .close);
-    }
-
-    return try rendered.clone(ally);
+    try ctx.write(list, writer);
 }

@@ -316,105 +316,86 @@ pub const Func = struct {
 
     fn renderLocal(
         self: Self,
-        ally: Allocator,
+        ctx: *kz.Context,
         env: Env,
         local: Local
-    ) !kz.Texture {
-        // render type
-        const ty_text = try self.locals[local.index].writeAlloc(ally, env);
-        defer ally.free(ty_text);
+    ) !kz.Ref {
+        const ty_text = try self.locals[local.index].writeAlloc(ctx.ally, env);
+        defer ctx.ally.free(ty_text);
 
-        const green = kz.Format{ .fg = .green };
-        const ty_tex = try kz.Texture.from(ally, green, ty_text);
-        defer ty_tex.deinit(ally);
+        const ty = try ctx.print(.{ .fg = .green }, "{s}", .{ty_text});
+        const var_tex = try ctx.print(.{}, "%{}", .{local.index});
 
-        // render var
-        const n = local.index;
-        const var_tex = try kz.Texture.print(ally, kz.Format{}, " %{}", .{n});
-        defer var_tex.deinit(ally);
-
-        // slap and return
-        return ty_tex.slap(ally, var_tex, .right, .close);
+        return try ctx.slap(ty, var_tex, .right, .{ .space = 1 });
     }
 
     fn renderOp(
         self: Self,
-        ally: Allocator,
+        ctx: *kz.Context,
         env: Env,
         op: Op
-    ) !kz.Texture {
-        var line = std.ArrayList(kz.Texture).init(ally);
-        defer {
-            for (line.items) |tex| tex.deinit(ally);
-            line.deinit();
-        }
+    ) !kz.Ref {
+        var line = std.ArrayList(kz.Ref).init(ctx.ally);
+        defer line.deinit();
 
         // collect textures
         const tag = @tagName(op);
-        const comma = try kz.Texture.from(ally, kz.Format{}, ", ");
-        defer comma.deinit(ally);
-
+        const comma = try ctx.print(.{}, ", ", .{});
         const class = op.classify();
         switch (class) {
             .ldc => |ldc| {
                 const ty = self.locals[ldc.to.index];
-                const data = try kz.Texture.print(
-                    ally,
-                    kz.Format{ .fg = .magenta },
-                    "{}",
-                    .{self.consts[ldc.a.index].toPrintable(env, ty)}
-                );
-
+                const p = self.consts[ldc.a.index].toPrintable(env, ty);
                 try line.appendSlice(&.{
-                    try self.renderLocal(ally, env, ldc.to),
-                    try kz.Texture.from(ally, kz.Format{}, " = "),
-                    data,
+                    try self.renderLocal(ctx, env, ldc.to),
+                    try ctx.print(.{}, " = ", .{}),
+                    try ctx.print(.{ .fg = .magenta }, "{}", .{p}),
                 });
             },
             .branch => |br| {
                 try line.appendSlice(&.{
-                    try kz.Texture.print(ally, kz.Format{}, "{s} ", .{tag}),
-                    try self.renderLocal(ally, env, br.cond),
-                    try comma.clone(ally),
-                    try renderLabel(ally, br.a),
-                    try comma.clone(ally),
-                    try renderLabel(ally, br.b),
+                    try ctx.print(.{}, "{s} ", .{tag}),
+                    try self.renderLocal(ctx, env, br.cond),
+                    try ctx.clone(comma),
+                    try renderLabel(ctx, br.a),
+                    try ctx.clone(comma),
+                    try renderLabel(ctx, br.b),
                 });
             },
             .jump => |jmp| {
                 try line.appendSlice(&.{
-                    try kz.Texture.print(ally, kz.Format{}, "{s} ", .{tag}),
-                    try renderLabel(ally, jmp.dst),
+                    try ctx.print(.{}, "{s} ", .{tag}),
+                    try renderLabel(ctx, jmp.dst),
                 });
             },
             .unary => |un| {
                 try line.appendSlice(&.{
-                    try self.renderLocal(ally, env, un.to),
-                    try kz.Texture.print(ally, kz.Format{}, " = {s} ", .{tag}),
-                    try self.renderLocal(ally, env, un.a),
+                    try self.renderLocal(ctx, env, un.to),
+                    try ctx.print(.{}, " = {s} ", .{tag}),
+                    try self.renderLocal(ctx, env, un.a),
                 });
             },
             .binary => |bin| {
                 try line.appendSlice(&.{
-                    try self.renderLocal(ally, env, bin.to),
-                    try kz.Texture.print(ally, kz.Format{}, " = {s} ", .{tag}),
-                    try self.renderLocal(ally, env, bin.a),
-                    try comma.clone(ally),
-                    try self.renderLocal(ally, env, bin.b),
+                    try self.renderLocal(ctx, env, bin.to),
+                    try ctx.print(.{}, " = {s} ", .{tag}),
+                    try self.renderLocal(ctx, env, bin.a),
+                    try ctx.clone(comma),
+                    try self.renderLocal(ctx, env, bin.b),
                 });
             },
             .unary_eff => |un| {
                 try line.appendSlice(&.{
-                    try kz.Texture.print(ally, kz.Format{}, "{s} ", .{tag}),
-                    try self.renderLocal(ally, env, un.a),
+                    try ctx.print(.{}, "{s} ", .{tag}),
+                    try self.renderLocal(ctx, env, un.a),
                 });
             },
             .binary_eff => |bin| {
                 try line.appendSlice(&.{
-                    try kz.Texture.print(ally, kz.Format{}, "{s} ", .{tag}),
-                    try self.renderLocal(ally, env, bin.a),
-                    try comma.clone(ally),
-                    try self.renderLocal(ally, env, bin.b),
+                    try ctx.print(.{}, "{s} ", .{tag}),
+                    try self.renderLocal(ctx, env, bin.a),
+                    try ctx.clone(comma),
+                    try self.renderLocal(ctx, env, bin.b),
                 });
             },
             else => std.debug.panic(
@@ -424,26 +405,30 @@ pub const Func = struct {
         }
 
         // stack and return
-        return kz.Texture.stack(ally, line.items, .right, .close);
+        return ctx.stack(line.items, .right, .{});
     }
 
-    fn renderLabel(ally: Allocator, label: Label) !kz.Texture {
-        const cyan = kz.Format{ .fg = .cyan };
-        return try kz.Texture.print(ally, cyan, "@{}", .{label.index});
+    fn renderLabel(ctx: *kz.Context, label: Label) !kz.Ref {
+        return try ctx.print(.{ .fg = .cyan }, "@{}", .{label.index});
     }
 
-    fn renderBody(self: Self, ally: Allocator, env: Env) !kz.Texture {
+    fn renderBody(self: Self, ctx: *kz.Context, env: Env) !kz.Ref {
+        const INDENT = 4;
+
+        var body = ctx.stub();
+
         // entry point
-        const entry = try kz.Texture.from(ally, kz.Format{}, "enter ");
-        defer entry.deinit(ally);
+        const entry = try ctx.slap(
+            try ctx.print(.{}, "enter", .{}),
+            try renderLabel(ctx, self.entry),
+            .right,
+            .{ .space = 1 }
+        );
 
-        const entry_label = try renderLabel(ally, self.entry);
-        defer entry_label.deinit(ally);
-
-        var body = try entry.slap(ally, entry_label, .right, .close);
+        body = try ctx.slap(body, entry, .bottom, .{});
 
         // construct reverse label map
-        var labels = std.AutoHashMap(usize, Label).init(ally);
+        var labels = std.AutoHashMap(usize, Label).init(ctx.ally);
         defer labels.deinit();
 
         for (self.labels) |index, i| {
@@ -454,69 +439,50 @@ pub const Func = struct {
         var y: isize = 1;
         for (self.ops) |op, i| {
             if (labels.get(i)) |label| {
-                const tex = try renderLabel(ally, label);
-                defer tex.deinit(ally);
-
-                const new = try body.unify(ally, tex, .{0, y});
-                body.deinit(ally);
-                body = new;
+                const tex = try renderLabel(ctx, label);
+                body = try ctx.unify(body, tex, .{0, y});
                 y += 1;
             }
 
-            const INDENT = 4;
-
-            const tex = try self.renderOp(ally, env, op);
-            defer tex.deinit(ally);
-
-            const new = try body.unify(ally, tex, .{INDENT, y});
-            body.deinit(ally);
-            body = new;
+            const tex = try self.renderOp(ctx, env, op);
+            body = try ctx.unify(body, tex, .{INDENT, y});
             y += 1;
         }
 
         return body;
     }
 
-    pub fn render(self: Self, ally: Allocator, env: Env) !kz.Texture {
+    pub fn render(self: Self, ctx: *kz.Context, env: Env) !kz.Ref {
         // function header
-        var header_texs = std.ArrayList(kz.Texture).init(ally);
-        defer {
-            for (header_texs.items) |tex| tex.deinit(ally);
-            header_texs.deinit();
-        }
+        var header_texs = std.ArrayList(kz.Ref).init(ctx.ally);
+        defer header_texs.deinit();
 
         try header_texs.appendSlice(&.{
-            try kz.Texture.from(ally, kz.Format{ .fg = .red }, self.label.str),
-            try kz.Texture.from(ally, kz.Format{}, " :: (")
+            try ctx.print(.{ .fg = .red }, "{s}", .{self.label.str}),
+            try ctx.print(.{}, " :: (", .{}),
         });
+
 
         var param = Local.of(0);
         while (param.index < self.takes) : (param.index += 1) {
             if (param.index > 0) {
-                const comma = try kz.Texture.from(ally, kz.Format{}, ", ");
-                try header_texs.append(comma);
+                try header_texs.append(try ctx.print(.{}, ", ", .{}));
             }
-            try header_texs.append(try self.renderLocal(ally, env, param));
+            try header_texs.append(try self.renderLocal(ctx, env, param));
         }
 
-        const returns = try self.returns.writeAlloc(ally, env);
-        defer ally.free(returns);
+        const returns = try self.returns.writeAlloc(ctx.ally, env);
+        defer ctx.ally.free(returns);
 
         try header_texs.appendSlice(&.{
-            try kz.Texture.from(ally, kz.Format{}, ") -> "),
-            try kz.Texture.from(ally, kz.Format{ .fg = .green }, returns),
+            try ctx.print(.{}, ") -> ", .{}),
+            try ctx.print(.{ .fg = .green }, "{s}", .{returns}),
         });
 
-        const header =
-            try kz.Texture.stack(ally, header_texs.items, .right, .close);
-        defer header.deinit(ally);
-
-        // function body
-        const body = try self.renderBody(ally, env);
-        defer body.deinit(ally);
-
-        // slap and return
-        return header.slap(ally, body, .bottom, .close);
+        // put it together
+        const header = try ctx.stack(header_texs.items, .right, .{});
+        const body = try self.renderBody(ctx, env);
+        return ctx.slap(header, body, .bottom, .{});
     }
 };
 
@@ -531,18 +497,13 @@ pub const Program = struct {
         ally.free(self.funcs);
     }
 
-    pub fn render(self: Self, env: Env, ally: Allocator) !kz.Texture {
-        const funcs = try ally.alloc(kz.Texture, self.funcs.len);
-        defer {
-            for (funcs) |tex| tex.deinit(ally);
-            ally.free(funcs);
+    pub fn render(self: Self, ctx: *kz.Context, env: Env) !kz.Ref {
+        var tex = ctx.stub();
+        for (self.funcs) |func| {
+            tex = try ctx.slap(tex, try func.render(ctx, env), .bottom, .{});
         }
 
-        for (self.funcs) |func, i| {
-            funcs[i] = try func.render(ally, env);
-        }
-
-        return try kz.Texture.stack(ally, funcs, .bottom, .close);
+        return tex;
     }
 };
 

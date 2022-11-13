@@ -239,15 +239,15 @@ pub const Message = struct {
         log,
         debug,
 
-        const meta = util.EnumTable(@This(), kz.Format, .{
-            .{.note,  kz.Format{ .fg = .cyan    }},
-            .{.err,   kz.Format{ .fg = .red     }},
-            .{.warn,  kz.Format{ .fg = .magenta }},
-            .{.log,   kz.Format{                }},
-            .{.debug, kz.Format{ .fg = .green   }},
+        const meta = util.EnumTable(@This(), kz.Style, .{
+            .{.note,  kz.Style{ .fg = .cyan    }},
+            .{.err,   kz.Style{ .fg = .red     }},
+            .{.warn,  kz.Style{ .fg = .magenta }},
+            .{.log,   kz.Style{                }},
+            .{.debug, kz.Style{ .fg = .green   }},
         });
 
-        fn getFormat(self: @This()) kz.Format {
+        fn getStyle(self: @This()) kz.Style {
             return @This().meta.get(self);
         }
     };
@@ -290,91 +290,31 @@ pub const Message = struct {
         return msg_ptr;
     }
 
-    fn render(self: Self, ally: Allocator) Allocator.Error!kz.Texture {
-        // message text
-        const text_tex = try kz.Texture.from(ally, kz.Format{}, self.text);
-        defer text_tex.deinit(ally);
+    fn render(self: Self, ctx: *kz.Context) Allocator.Error!kz.Ref {
+        const INDENT = 4;
 
-        // text + level label
-        const labeled_tex = msg: {
-            const tag = @tagName(self.level);
-            var tag_tex = try kz.Texture.init(ally, .{tag.len + 3, 1});
-            defer tag_tex.deinit(ally);
-
-            tag_tex.set(.{0, 0}, kz.Format{}, '[');
-            tag_tex.write(.{1, 0}, self.level.getFormat(), tag);
-            tag_tex.write(.{tag.len + 1, 0}, kz.Format{}, "] ");
-
-            break :msg try text_tex.slap(ally, tag_tex, .left, .close);
+        // message header
+        const level_tag = @tagName(self.level);
+        const head_refs = [_]kz.Ref{
+            try ctx.print(.{}, "[", .{}),
+            try ctx.print(self.level.getStyle(), "{s}", .{level_tag}),
+            try ctx.print(.{}, "] ", .{}),
+            try ctx.print(.{}, "{s}", .{self.text}),
         };
-        defer labeled_tex.deinit(ally);
+        const head = try ctx.stack(&head_refs, .right, .{});
 
         // render with contextual location
-        var rendered = if (self.loc) |loc| locate: {
-            const faint_fmt = kz.Format{ .special = .faint };
-
-            // `loc` header
-            const header_tex =
-                try kz.Texture.print(ally, faint_fmt, "{}", .{loc});
-            defer header_tex.deinit(ally);
-
-            // line with line number
-            const line_num_tex =
-                try kz.Texture.print(ally, faint_fmt, "{} | ", .{loc.line + 1});
-            defer line_num_tex.deinit(ally);
-
-            const line = loc.file.getLines()[loc.line];
-            const line_tex = try kz.Texture.from(ally, kz.Format{}, line);
-            defer line_tex.deinit(ally);
-
-            const numbered_tex =
-                try line_tex.slap(ally, line_num_tex, .left, .close);
-            defer numbered_tex.deinit(ally);
-
-            // span highlighting (arrow or underline)
-            const hl_fmt = self.level.getFormat();
-            const hl_to_x =
-                @intCast(isize, line_num_tex.size[0] + loc.span.start);
-
-            const highlighted_tex = if (loc.span.len > 0) underline: {
-                var ul_tex = try kz.Texture.init(ally, .{loc.span.len, 1});
-                defer ul_tex.deinit(ally);
-
-                ul_tex.fill(hl_fmt, '~');
-
-                break :underline
-                    try numbered_tex.unify(ally, ul_tex, .{hl_to_x, 1});
-            } else arrow: {
-                const arrow_tex = try kz.Texture.from(ally, hl_fmt, "v");
-                defer arrow_tex.deinit(ally);
-
-                break :arrow
-                    try numbered_tex.unify(ally, arrow_tex, .{hl_to_x, -1});
-            };
-            defer highlighted_tex.deinit(ally);
-
-            // slap it together!
-            const located_tex =
-                try highlighted_tex.slap(ally, header_tex, .top, .close);
-
-            break :locate
-                try labeled_tex.slap(ally, located_tex, .bottom, .close);
-        } else try labeled_tex.clone(ally);
+        // TODO
 
         // append annotations
-        const INDENT = 4;
+        var notes = ctx.stub();
         for (self.children.items) |child| {
-            const child_tex = try child.render(ally);
-            defer child_tex.deinit(ally);
-
-            const to = kz.Offset{INDENT, @intCast(isize, rendered.size[1])};
-            const updated = try rendered.unify(ally, child_tex, to);
-
-            rendered.deinit(ally);
-            rendered = updated;
+            notes = try ctx.slap(notes, try child.render(ctx), .bottom, .{});
         }
 
-        return rendered;
+        // put it all together
+        const final = try ctx.unify(head, notes, .{INDENT, 1});
+        return final;
     }
 };
 
@@ -407,32 +347,18 @@ const MessageTree = struct {
         return try res.value_ptr.addOne(this.ally);
     }
 
-    fn render(self: Self, ally: Allocator) Allocator.Error!kz.Texture {
-        const buf = try kz.Texture.init(ally, .{0, 1});
-        defer buf.deinit(ally);
-
-        var tex = try kz.Texture.init(ally, .{0, 0});
+    fn render(self: Self, ctx: *kz.Context) Allocator.Error!kz.Ref {
+        var tree = ctx.stub();
 
         var lists = self.map.valueIterator();
         while (lists.next()) |list| {
             for (list.items) |msg| {
-                const msg_tex = try msg.render(ally);
-                defer msg_tex.deinit(ally);
-
-                // append msg to message list
-                const new_tex = try kz.Texture.stack(
-                    ally,
-                    &.{msg_tex, buf},
-                    .bottom,
-                    .close
-                );
-
-                tex.deinit(ally);
-                tex = new_tex;
+                const tex = try msg.render(ctx);
+                tree = try ctx.slap(tree, tex, .bottom, .{ .space = 1 });
             }
         }
 
-        return tex;
+        return tree;
     }
 
     fn clear(self: *Self) void {
@@ -465,15 +391,8 @@ pub fn post(
 }
 
 pub fn flushMessages() MessageError!void {
-    const ally = this.arena.allocator();
-    defer {
-        this.arena.deinit();
-        this.arena = std.heap.ArenaAllocator.init(this.ally);
-    }
+    var ctx = kz.Context.init(this.ally);
+    defer ctx.deinit();
 
-    const tex = try this.messages.render(ally);
-    defer tex.deinit(ally);
-    defer this.messages.clear();
-
-    try tex.display(stderr);
+    try ctx.write(try this.messages.render(&ctx), stderr);
 }
