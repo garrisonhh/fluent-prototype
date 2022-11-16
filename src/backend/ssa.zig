@@ -139,13 +139,17 @@ pub const Value = struct {
 
     /// allocates and dupes data to aligned ptr
     pub fn init(ally: Allocator, data: []const u8) Allocator.Error!Self {
-        const mem = try ally.alignedAlloc(u8, 16, data.len);
-        std.mem.copy(u8, mem, data);
+        const self = try initEmpty(ally, data.len);
+        std.mem.copy(u8, self.ptr, data);
 
-        return Self{ .ptr = mem };
+        return self;
     }
 
-    pub fn deinit(self: *Self, ally: Allocator) void {
+    pub fn initEmpty(ally: Allocator, size: usize) Allocator.Error!Self {
+        return Self{ .ptr = try ally.alignedAlloc(u8, 16, size) };
+    }
+
+    pub fn deinit(self: Self, ally: Allocator) void {
         ally.free(self.ptr);
     }
 
@@ -243,8 +247,6 @@ pub const Const = packed struct {
     pub fn of(index: usize) Self {
         return Self{ .index = index };
     }
-
-    // TODO render() function with type for consistent output
 };
 
 pub const Local = packed struct {
@@ -255,8 +257,6 @@ pub const Local = packed struct {
     pub fn of(index: usize) Self {
         return Self{ .index = index };
     }
-
-    // TODO render() function with type for consistent output
 
     pub fn format(
         self: Self,
@@ -312,6 +312,18 @@ pub const Func = struct {
         ally.free(self.locals);
         ally.free(self.ops);
         ally.free(self.labels);
+    }
+
+    pub const LabelMap = std.AutoHashMapUnmanaged(usize, Label);
+
+    /// constructs a hashmap mapping op index -> label
+    pub fn mapLabels(self: Self, ally: Allocator) Allocator.Error!LabelMap {
+        var map = LabelMap{};
+        for (self.labels) |index, i| {
+            try map.put(ally, index, Label.of(i));
+        }
+
+        return map;
     }
 
     fn renderLocal(
@@ -428,12 +440,8 @@ pub const Func = struct {
         body = try ctx.slap(body, entry, .bottom, .{});
 
         // construct reverse label map
-        var labels = std.AutoHashMap(usize, Label).init(ctx.ally);
-        defer labels.deinit();
-
-        for (self.labels) |index, i| {
-            try labels.put(index, Label.of(i));
-        }
+        var labels = try self.mapLabels(ctx.ally);
+        defer labels.deinit(ctx.ally);
 
         // render ops
         var y: isize = 1;
@@ -461,7 +469,6 @@ pub const Func = struct {
             try ctx.print(.{ .fg = .red }, "{s}", .{self.label.str}),
             try ctx.print(.{}, " :: (", .{}),
         });
-
 
         var param = Local.of(0);
         while (param.index < self.takes) : (param.index += 1) {

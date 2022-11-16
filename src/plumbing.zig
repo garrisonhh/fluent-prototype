@@ -18,14 +18,14 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
     const start = now();
     var render_time: i128 = 0;
 
-    // parse stuff
+    // parse
     const ast = frontend.parse(ally, handle) catch {
         try context.flushMessages();
         return;
     };
     defer ast.deinit(ally);
 
-    // backend
+    // translate
     const sexpr = try backend.translate(ally, ast);
     defer sexpr.deinit(ally);
 
@@ -36,6 +36,7 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
         render_time += now() - t;
     }
 
+    // analyze
     var local = Env.init(env);
     defer local.deinit();
 
@@ -57,15 +58,16 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
         render_time += now() - t;
     }
 
-    var program = try backend.lower(ally, env, texpr);
-    defer program.deinit(ally);
+    // lower to ssa ir
+    var ssa = try backend.lower(ally, env, texpr);
+    defer ssa.deinit(ally);
 
     if (builtin.mode == .Debug) {
         const t = now();
         var ctx = kz.Context.init(ally);
         defer ctx.deinit();
 
-        const tex = try program.render(&ctx, local);
+        const tex = try ssa.render(&ctx, local);
 
         try stdout.writeAll("[SSA Program]\n");
         try ctx.write(tex, stdout);
@@ -73,6 +75,51 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
 
         render_time += now() - t;
     }
+
+    // compile to bytecode
+    const bc = try backend.compile(ally, env.typewelt, ssa);
+    defer bc.deinit(ally);
+
+    if (builtin.mode == .Debug) {
+        const t = now();
+        var ctx = kz.Context.init(ally);
+        defer ctx.deinit();
+
+        try stdout.writeAll("[Raw Bytecode]\n");
+        for (bc.program) |inst| {
+            const n = @bitCast(u32, inst);
+            try stdout.print("#{x:0>8}", .{n});
+
+            const fields = std.meta.fieldNames(@TypeOf(inst.op));
+            if (@enumToInt(inst.op) < fields.len) {
+                try stdout.print(
+                    " ({s} {d} {d} {d})",
+                    .{@tagName(inst.op), inst.a, inst.b, inst.c}
+                );
+            }
+
+            try stdout.writeByte('\n');
+        }
+        try stdout.writeByte('\n');
+
+        const tex = try bc.render(&ctx);
+
+        try stdout.writeAll("[Bytecode]\n");
+        try ctx.write(tex, stdout);
+        try stdout.writeByte('\n');
+
+        render_time += now() - t;
+    }
+
+    // run compiled bytecode
+    const final_ty = bc.returns;
+    const final = try backend.run(ally, env.typewelt, bc);
+    defer final.deinit(ally);
+
+    try stdout.print(
+        "program returned: {}\n",
+        .{final.toPrintable(env.*, final_ty)}
+    );
 
     // time logging
     const stop = std.time.nanoTimestamp();

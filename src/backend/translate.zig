@@ -46,13 +46,11 @@ fn translateCallTo(
 }
 
 fn numberError(loc: Loc) TranslateError {
-    const text = "can't understand this number literal";
+    const text = "malformed number literal";
     _ = try context.post(.err, loc, text, .{});
-
     return error.FluentError;
 }
 
-// TODO produce fluent errors for bad numbers
 fn translateNumber(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
     const num = util.parseNumber(ally, expr.loc.getSlice()) catch |e| {
         return switch (e) {

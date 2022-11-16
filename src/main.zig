@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const kz = @import("kritzler");
 const util = @import("util");
 const context = @import("context.zig");
@@ -74,7 +75,13 @@ fn repl(ally: Allocator, prelude: *Env) !void {
         if (is_empty) break;
 
         // eval and print
-        try plumbing.execute(ally, prelude, input);
+        plumbing.execute(ally, prelude, input) catch |e| {
+            if (e == error.FluentError) {
+                try context.flushMessages();
+            } else {
+                return e;
+            }
+        };
     }
 }
 
@@ -312,8 +319,12 @@ pub fn main() !void {
         return e;
     };
 
-    // display prelude as a sanity check
-    try prelude.dump(ally, stdout);
+    if (builtin.mode == .Debug) {
+        // display prelude as a sanity check
+        try stdout.writeAll("[Prelude]\n");
+        try prelude.dump(ally, stdout);
+        try stdout.writeByte('\n');
+    }
 
     switch (cmd) {
         .help => try printHelp(),

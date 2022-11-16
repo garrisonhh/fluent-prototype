@@ -348,17 +348,17 @@ const MessageTree = struct {
     }
 
     fn render(self: Self, ctx: *kz.Context) Allocator.Error!kz.Ref {
-        var tree = ctx.stub();
+        var texs = std.ArrayList(kz.Ref).init(this.ally);
+        defer texs.deinit();
 
         var lists = self.map.valueIterator();
         while (lists.next()) |list| {
             for (list.items) |msg| {
-                const tex = try msg.render(ctx);
-                tree = try ctx.slap(tree, tex, .bottom, .{ .space = 1 });
+                try texs.append(try msg.render(ctx));
             }
         }
 
-        return tree;
+        return try ctx.stack(texs.items, .bottom, .{ .space = 1 });
     }
 
     fn clear(self: *Self) void {
@@ -391,6 +391,8 @@ pub fn post(
 }
 
 pub fn flushMessages() MessageError!void {
+    defer this.messages.clear();
+
     var ctx = kz.Context.init(this.ally);
     defer ctx.deinit();
 

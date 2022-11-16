@@ -1,9 +1,9 @@
 const std = @import("std");
-const context = @import("../context.zig");
-
 const Allocator = std.mem.Allocator;
+const context = @import("../context.zig");
 const Loc = context.Loc;
 const FileHandle = context.FileHandle;
+const FluentError = context.FluentError;
 
 const CharClass = enum {
     const Self = @This();
@@ -21,9 +21,7 @@ const CharClass = enum {
     digit,
     lexical,
 
-    const Error = error { BadChar };
-
-    fn of(ch: u8) Error!Self {
+    fn of(ch: u8, loc: Loc) (context.MessageError || FluentError)!Self {
         return switch (ch) {
             ' ' => .space,
 
@@ -37,7 +35,10 @@ const CharClass = enum {
 
             '0'...'9' => .digit,
 
-            else => if (std.ascii.isPrint(ch)) Self.lexical else error.BadChar
+            else => if (std.ascii.isPrint(ch)) Self.lexical else err: {
+                _ = try context.post(.err, loc, "invalid character", .{});
+                break :err error.FluentError;
+            },
         };
     }
 
@@ -104,7 +105,7 @@ fn at(text: []const u8, index: usize) ?u8 {
 pub const TokenizeError =
     Allocator.Error
  || context.MessageError
- || context.FluentError;
+ || FluentError;
 
 /// returns array of tokens allocated on ally
 ///
@@ -140,10 +141,7 @@ pub fn tokenize(ally: Allocator, file: FileHandle) TokenizeError![]Token {
         while (at(line, i)) |ch| {
             const ch_loc = Loc.init(file, line_idx, i, 0);
 
-            switch (CharClass.of(ch) catch {
-                _ = try context.post(.err, ch_loc, "unknown character", .{});
-                return error.FluentError;
-            }) {
+            switch (try CharClass.of(ch, ch_loc)) {
                 .space => i += 1,
 
                 // number or symbol
@@ -153,10 +151,7 @@ pub fn tokenize(ally: Allocator, file: FileHandle) TokenizeError![]Token {
                     i += 1;
 
                     while (at(line, i)) |sch| : (i += 1) {
-                        const class = CharClass.of(sch) catch {
-                            // TODO bad number/symbol
-                            return error.FluentError;
-                        };
+                        const class = try CharClass.of(sch, ch_loc);
                         if (!class.in(&.{ .lexical, .digit })) break;
                     }
 
@@ -169,7 +164,7 @@ pub fn tokenize(ally: Allocator, file: FileHandle) TokenizeError![]Token {
                             break :maybe_neg;
                         };
 
-                        if (CharClass.of(next_ch) catch unreachable == .digit) {
+                        if (try CharClass.of(next_ch, ch_loc) == .digit) {
                             tag = .number;
                         }
                     }
