@@ -7,15 +7,15 @@
 //! sufficient
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const kz = @import("kritzler");
 const util = @import("util");
+const Symbol = util.Symbol;
 const builtin = @import("builtin");
 const types = @import("types.zig");
-const Env = @import("env.zig");
-
-const Allocator = std.mem.Allocator;
-const Symbol = util.Symbol;
 const TypeId = types.TypeId;
+const Env = @import("env.zig");
+const Value = @import("value.zig");
 
 /// symbolic representation of operations. since blocks store type info,
 /// there is no need for operations to be type or size specific; this can be
@@ -125,116 +125,6 @@ pub const Op = union(enum) {
                 => |bin| Class{ .binary = bin },
             .ret => |un_eff| Class{ .unary_eff = un_eff },
             .store => |bin_eff| Class{ .binary_eff = bin_eff },
-        };
-    }
-};
-
-/// essentially just a system-v aligned pointer with some operations added.
-/// this allows for generic operations over bits and easy c interop.
-pub const Value = struct {
-    const Self = @This();
-
-    // NOTE potential optimization here would be to store only the raw array ptr
-    ptr: []align(16) u8,
-
-    /// allocates and dupes data to aligned ptr
-    pub fn init(ally: Allocator, data: []const u8) Allocator.Error!Self {
-        const self = try initEmpty(ally, data.len);
-        std.mem.copy(u8, self.ptr, data);
-
-        return self;
-    }
-
-    pub fn initEmpty(ally: Allocator, size: usize) Allocator.Error!Self {
-        return Self{ .ptr = try ally.alignedAlloc(u8, 16, size) };
-    }
-
-    pub fn deinit(self: Self, ally: Allocator) void {
-        ally.free(self.ptr);
-    }
-
-    pub fn asPtr(self: Self, comptime T: type) *align(16) T {
-        if (builtin.mode == .Debug) {
-            if (@sizeOf(T) != self.ptr.len) {
-                std.debug.panic(
-                    "attempted to cast Value of size {} to type {} of size {}",
-                    .{self.ptr.len, T, @sizeOf(T)}
-                );
-            }
-        }
-
-        return @ptrCast(*align(16) T, self.ptr);
-    }
-
-    /// bitcast to the type desired
-    pub fn as(self: Self, comptime T: type) T {
-        return self.asPtr(T).*;
-    }
-
-    pub const Printable = union(enum) {
-        @"bool": bool,
-        int: i64,
-        uint: u64,
-        float: f64,
-
-        pub fn format(
-            self: @This(),
-            comptime fmt: []const u8,
-            options: std.fmt.FormatOptions,
-            writer: anytype
-        ) @TypeOf(writer).Error!void {
-            _ = fmt;
-            _ = options;
-
-            switch (self) {
-                .@"bool" => |b| try writer.print("{}", .{b}),
-                .int => |i| try writer.print("{}i", .{i}),
-                .uint => |u| try writer.print("{}u", .{u}),
-                .float => |f| try writer.print("{d}f", .{f}),
-            }
-        }
-    };
-
-    pub fn toPrintable(self: Self, env: Env, tid: TypeId) Printable {
-        const ty = env.typeGet(tid);
-        return switch (ty.*) {
-            .@"bool" => Printable{ .@"bool" = self.as(u8) > 0 },
-            .number => |num| num: {
-                const bits = num.bits orelse 64;
-                break :num switch (num.layout) {
-                    .int => Printable{
-                        .int = switch (bits) {
-                            64 => self.as(i64),
-                            32 => self.as(i32),
-                            16 => self.as(i16),
-                            8 => self.as(i8),
-                            else => unreachable
-                         }
-                     },
-                    .uint => Printable{
-                        .uint = switch (bits) {
-                            64 => self.as(u64),
-                            32 => self.as(u32),
-                            16 => self.as(u16),
-                            8 => self.as(u8),
-                            else => unreachable
-                         }
-                     },
-                    .float => Printable{
-                        .float = switch (bits) {
-                            64 => self.as(f64),
-                            32 => self.as(f32),
-                            else => unreachable
-                         }
-                     },
-                };
-            },
-            else => {
-                const text = tid.writeAlloc(env.ally, env) catch unreachable;
-                defer env.ally.free(text);
-
-                std.debug.panic("TODO type {s} toPrintable", .{text});
-            }
         };
     }
 };
@@ -357,11 +247,14 @@ pub const Func = struct {
         switch (class) {
             .ldc => |ldc| {
                 const ty = self.locals[ldc.to.index];
-                const p = self.consts[ldc.a.index].toPrintable(env, ty);
+                const value = self.consts[ldc.a.index];
+                const expr = try value.revive(ctx.ally, env, ty);
+                defer expr.deinit(ctx.ally);
+
                 try line.appendSlice(&.{
                     try self.renderLocal(ctx, env, ldc.to),
                     try ctx.print(.{}, " = ", .{}),
-                    try ctx.print(.{ .fg = .magenta }, "{}", .{p}),
+                    try expr.render(ctx, env),
                 });
             },
             .branch => |br| {

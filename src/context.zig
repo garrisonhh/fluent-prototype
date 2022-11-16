@@ -143,13 +143,20 @@ const GlobalContext = struct {
 
 var this: GlobalContext = undefined;
 
-pub fn init(ally: Allocator) void {
+pub fn init(ally: Allocator) Allocator.Error!void {
     this = GlobalContext{
         .ally = ally,
         .arena = std.heap.ArenaAllocator.init(ally),
         .files = .{},
         .messages = .{},
     };
+
+    _ = try addSource(
+        "nowhere",
+        \\TODO the fluent context system doesn't know what to do with
+        \\values that were produced by bytecode execution (yet, at least)
+        \\so in the meantime, they point to this file.
+    );
 }
 
 pub fn deinit() void {
@@ -337,9 +344,11 @@ const MessageTree = struct {
         self.map.deinit(this.ally);
     }
 
-    fn allocMessage(self: *Self, file: FileHandle) Allocator.Error!*Message {
+    fn allocMessage(
+        self: *Self,
+        file: FileHandle
+    ) Allocator.Error!*Message {
         const res = try self.map.getOrPut(this.ally, file);
-
         if (!res.found_existing) {
             res.value_ptr.* = std.ArrayListUnmanaged(Message){};
         }
@@ -380,11 +389,12 @@ pub const MessageError =
 /// generates a new message which may have sub-messages
 pub fn post(
     level: Message.Level,
-    loc: Loc,
+    loc: ?Loc,
     comptime fmt: []const u8,
     args: anytype
 ) MessageError!*Message {
-    const msg_ptr = try this.messages.allocMessage(loc.file);
+    const file: FileHandle = if (loc) |l| l.file else FileHandle{ .index = 0 };
+    const msg_ptr = try this.messages.allocMessage(file);
     msg_ptr.* = try Message.init(level, loc, fmt, args);
 
     return msg_ptr;

@@ -17,10 +17,12 @@ const TypeId = types.TypeId;
 
 const Self = @This();
 
+pub const Number = SExpr.Number;
+
 pub const Tag = std.meta.Tag(Data);
 pub const Data = union(enum) {
     @"bool": bool,
-    number: SExpr.Number,
+    number: Number,
     string: Symbol,
     symbol: Symbol,
     call: []Self,
@@ -85,10 +87,10 @@ pub const Data = union(enum) {
 };
 
 data: Data,
-loc: Loc,
+loc: ?Loc,
 ty: TypeId,
 
-fn init(loc: Loc, ty: TypeId, data: Data) Self {
+pub fn init(loc: ?Loc, ty: TypeId, data: Data) Self {
     return Self{
         .data = data,
         .loc = loc,

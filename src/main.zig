@@ -100,15 +100,15 @@ fn fluentTests(ally: Allocator, prelude: *Env) !void {
         "false",
         // "[1, -2, 3]",
         // "[[1], [2, 3], [4, 5, 6], _what_could_this_be]",
-        "as i64 256",
+        // "as i64 256",
 
         // math
         \\/ (+ 45 69)
         \\  2
         ,
-        \\as i64
-        \\   + 1i32 1
-        ,
+        // \\as i64
+        // \\   + 1i32 1
+        // ,
 
         // conditions
         \\and
@@ -301,7 +301,7 @@ pub fn main() !void {
     // const ally = gpa.allocator();
     const ally = std.heap.page_allocator;
 
-    context.init(ally);
+    try context.init(ally);
     defer context.deinit();
 
     var typewelt = backend.TypeWelt.init(ally);

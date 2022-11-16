@@ -23,7 +23,7 @@ pub const SemaError =
  || context.FluentError
  || Env.DefError;
 
-fn holeError(env: Env, loc: Loc, ty: TypeId) SemaError {
+fn holeError(env: Env, loc: ?Loc, ty: TypeId) SemaError {
     const ty_text = try ty.writeAlloc(env.ally, env);
     defer env.ally.free(ty_text);
 
@@ -31,7 +31,7 @@ fn holeError(env: Env, loc: Loc, ty: TypeId) SemaError {
     return error.FluentError;
 }
 
-fn expectError(env: Env, loc: Loc, expected: TypeId, found: TypeId) SemaError {
+fn expectError(env: Env, loc: ?Loc, expected: TypeId, found: TypeId) SemaError {
     const exp_text = try expected.writeAlloc(env.ally, env);
     defer env.ally.free(exp_text);
     const found_text = try found.writeAlloc(env.ally, env);

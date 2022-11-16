@@ -7,6 +7,7 @@ const ssa = @import("ssa.zig");
 const types = @import("types.zig");
 const TypeId = types.TypeId;
 const TypeWelt = types.TypeWelt;
+const Value = @import("value.zig");
 
 /// a single operation
 const BcOpcode = enum(u8) {
@@ -105,7 +106,7 @@ const BcProgram = struct {
 
     fn renderImm(ctx: *kz.Context, imm: u64) !kz.Ref {
         const sym = try ctx.print(.{}, "$", .{});
-        const num = try ctx.print(.{ .fg = .magenta }, "{}", .{imm});
+        const num = try ctx.print(.{ .fg = .magenta }, "{X}", .{imm});
         return try ctx.slap(sym, num, .right, .{});
     }
 
@@ -383,18 +384,19 @@ const Vm = struct {
         self.scratch[dst.n] = self.scratch[src.n];
     }
 
-    fn push(self: *Self, src: Register) void {
+    fn push(self: *Self, bytes: usize, src: Register) void {
         const dst = self.stack[self.scratch[SP.n]..];
-        std.mem.copy(u8, dst, @ptrCast(*const [8]u8, &self.scratch[src.n]));
-        self.scratch[SP.n] += 8;
+        const src_bytes = @ptrCast([*]u8, &self.scratch[src.n])[0..bytes];
+        std.mem.copy(u8, dst, src_bytes);
+        self.scratch[SP.n] += bytes;
     }
 
-    fn pop(self: *Self, dst: Register) void {
-        self.scratch[SP.n] -= 8;
+    fn pop(self: *Self, bytes: usize, dst: Register) void {
+        self.scratch[SP.n] -= bytes;
         const sp = self.scratch[SP.n];
-        const src = self.stack[sp..sp + 8];
-        const reg = @ptrCast(*[8]u8, &self.scratch[dst.n]);
-        std.mem.copy(u8, reg, src);
+        const src = self.stack[sp..sp + bytes];
+        const dst_bytes = @ptrCast([*]u8, &self.scratch[dst.n])[0..bytes];
+        std.mem.copy(u8, dst_bytes, src);
     }
 
     fn run(self: *Self, program: BcProgram) RuntimeError!void {
@@ -451,16 +453,14 @@ const Vm = struct {
                 .call => {
                     const n = insts[ip.* + 1].toInt();
                     ip.* += 1;
-                    self.push(IP);
+                    self.push(8, IP);
                     self.mov(SP, FP);
                     self.set(IP, n);
-                    std.debug.print("calling @{}\n", .{self.get(IP)});
                     continue;
                 },
                 .ret => {
                     self.mov(FP, SP);
-                    self.pop(IP);
-                    std.debug.print("returning to @{}\n", .{self.get(IP)});
+                    self.pop(8, IP);
                 },
                 .debug => {
                     const src = Register.of(args[0]);
@@ -508,17 +508,22 @@ const Register = packed struct {
 fn compileLoadConst(
     b: *BcBuilder,
     reg: Register,
-    value: ssa.Value
+    value: Value
 ) CompileError!void {
-    const width = value.ptr.len;
-    if (width <= 8) {
-        // copy value into a u64
-        var n: u64 = 0;
-        const slice: []u8 = @ptrCast(*[8]u8, &n);
-        std.mem.copy(u8, slice[8 - width..], value.ptr);
+    if (value.ptr.len <= 8) {
+        // convert value to uint
+        var bytes: [8]u8 align(8) = undefined;
+        std.mem.set(u8, &bytes, 0);
+
+        var i: usize = 1;
+        while (i <= value.ptr.len) : (i += 1) {
+            bytes[bytes.len - i] = value.ptr[value.ptr.len - i];
+        }
+
+        var n = @ptrCast(*const u64, &bytes).*;
+        const zeroes = @clz(n);
 
         // store with smallest imm op possible
-        const zeroes = @clz(n);
         if (zeroes >= 0x30) {
             const hi = @intCast(u8, n >> 8);
             const lo = @truncate(u8, n);
@@ -528,7 +533,7 @@ fn compileLoadConst(
             try b.addInst(BcInst.fromInt(@intCast(u32, n)));
         } else {
             try b.addInst(BcInst.of(.imm8, reg.n, 0, 0));
-            try b.addInst(BcInst.fromInt(@truncate(u32, n >> 32)));
+            try b.addInst(BcInst.fromInt(@intCast(u32, n >> 32)));
             try b.addInst(BcInst.fromInt(@truncate(u32, n)));
         }
     } else {
@@ -657,7 +662,7 @@ pub fn run(
     ally: Allocator,
     typewelt: *TypeWelt,
     program: BcProgram
-) RuntimeError!ssa.Value {
+) RuntimeError!Value {
     // run program
     var vm = try Vm.init(ally, 32 * 1024);
     defer vm.deinit();
@@ -666,7 +671,7 @@ pub fn run(
 
     // copy return value
     const ret_size = typewelt.get(program.returns).sizeOf(typewelt.*);
-    const value = try ssa.Value.initEmpty(ally, ret_size);
+    const value = try Value.initEmpty(ally, ret_size);
 
     const out: u64 = vm.scratch[Vm.RESERVED];
     if (ret_size > 8) {
@@ -674,8 +679,8 @@ pub fn run(
         const data = @intToPtr([*]const u8, out)[0..ret_size];
         std.mem.copy(u8, value.ptr, data);
     } else {
-        // copy r0
-        const data = @ptrCast([*]const u8, &out)[0..ret_size];
+        // copy lowest bytes of r0
+        const data = @ptrCast(*const [8]u8, &out)[8 - ret_size..];
         std.mem.copy(u8, value.ptr, data);
     }
 

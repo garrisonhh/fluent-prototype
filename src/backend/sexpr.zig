@@ -20,12 +20,14 @@ pub const Number = struct {
     const UInt = u64;
     const Float = f64;
 
-    bits: ?u8,
-    data: union(util.Number.Layout) {
+    pub const Concrete = union(util.Number.Layout) {
         int: Int,
         uint: UInt,
         float: Float,
-    },
+    };
+
+    bits: ?u8,
+    data: Concrete,
 
     pub fn from(num: util.Number) util.ParseNumberError!Number {
         return Number{

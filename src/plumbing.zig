@@ -116,10 +116,23 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
     const final = try backend.run(ally, env.typewelt, bc);
     defer final.deinit(ally);
 
-    try stdout.print(
-        "program returned: {}\n",
-        .{final.toPrintable(env.*, final_ty)}
-    );
+    // render final value
+    {
+        const t = now();
+        const revived = try final.revive(ally, env.*, final_ty);
+        defer revived.deinit(ally);
+
+        var ctx = kz.Context.init(ally);
+        defer ctx.deinit();
+
+        const tex = try revived.render(&ctx, local);
+
+        try stdout.writeAll("[Value]\n");
+        try ctx.write(tex, stdout);
+        try stdout.writeByte('\n');
+
+        render_time += now() - t;
+    }
 
     // time logging
     const stop = std.time.nanoTimestamp();
