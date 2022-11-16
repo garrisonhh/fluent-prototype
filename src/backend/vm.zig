@@ -181,6 +181,11 @@ const BcProgram = struct {
                     try line.append(try renderReg(ctx, args[0]));
                     try line.append(try renderPos(ctx, n));
                 },
+                .iadd, .isub, .imul, .idiv, .imod => {
+                    for (args) |arg| {
+                        try line.append(try renderReg(ctx, arg));
+                    }
+                },
                 .debug => try line.append(try renderReg(ctx, args[0])),
                 else => std.debug.panic(
                     "cannot render op `{s}` yet\n",
@@ -462,6 +467,22 @@ const Vm = struct {
                     self.mov(FP, SP);
                     self.pop(8, IP);
                 },
+                inline .iadd, .isub, .imul, .idiv, .imod => |v| {
+                    const lhs = self.get(Register.of(args[0]));
+                    const rhs = self.get(Register.of(args[1]));
+                    const to = Register.of(args[2]);
+
+                    const value = comptime switch (v) {
+                        .iadd => lhs +% rhs,
+                        .isub => lhs -% rhs,
+                        .imul => lhs * rhs,
+                        .idiv => @divFloor(lhs, rhs),
+                        .imod => lhs % rhs,
+                        else => unreachable,
+                    };
+
+                    self.set(to, value);
+                },
                 .debug => {
                     const src = Register.of(args[0]);
                     std.debug.print("debug: {d}\n", .{self.get(src)});
@@ -503,6 +524,51 @@ const Register = packed struct {
     }
 };
 
+const RegisterMap = struct {
+    const Self = @This();
+
+    unused: u8,
+    map: []?Register,
+
+    fn init(
+        ally: Allocator,
+        num_locals: usize,
+        takes: usize
+    ) Allocator.Error!Self {
+        var self = Self{
+            // r0 is used for large return parameters (see callconv)
+            .unused = Vm.RESERVED + 1,
+            .map = try ally.alloc(?Register, num_locals),
+        };
+
+        std.mem.set(?Register, self.map, null);
+
+        // map params
+        var i: usize = 0;
+        while (i < takes) : (i += 1) {
+            self.map[i] = Register.of(@intCast(u8, i));
+        }
+
+        return self;
+    }
+
+    fn deinit(self: Self, ally: Allocator) void {
+        ally.free(self.map);
+    }
+
+    /// retrieves a new or old register for this local
+    fn find(self: *Self, local: ssa.Local) Register {
+        if (self.map[local.index]) |reg| return reg;
+
+        // alloc register
+        const next = Register.of(self.unused);
+        self.map[local.index] = next;
+        self.unused += 1;
+
+        return next;
+    }
+};
+
 /// does whatever it needs to to get a constant into a register. this should
 /// either load an immediate value or a ptr into static
 fn compileLoadConst(
@@ -541,68 +607,51 @@ fn compileLoadConst(
     }
 }
 
-const RegisterMap = struct {
-    const Self = @This();
-
-    unused: u8,
-    map: []?Register,
-
-    fn init(
-        ally: Allocator,
-        num_locals: usize,
-        takes: usize
-    ) Allocator.Error!Self {
-        var self = Self{
-            .unused = Vm.RESERVED,
-            .map = try ally.alloc(?Register, num_locals),
-        };
-
-        std.mem.set(?Register, self.map, null);
-
-        // r0 has special rules (see callconv)
-        self.unused += 1;
-
-        // map params
-        var i: usize = 0;
-        while (i < takes) : (i += 1) {
-            self.map[i] = Register.of(@intCast(u8, i));
-        }
-
-        return self;
-    }
-
-    fn deinit(self: Self, ally: Allocator) void {
-        ally.free(self.map);
-    }
-
-    /// retrieves a new or old register for this local
-    fn find(self: *Self, local: ssa.Local) Register {
-        if (self.map[local.index]) |reg| return reg;
-
-        // alloc register
-        const next = Register.of(self.unused);
-        self.map[local.index] = next;
-        self.unused += 1;
-
-        return next;
-    }
-};
-
 fn compileOp(
     b: *BcBuilder,
     func: ssa.Func,
     registers: *RegisterMap,
     op: ssa.Op,
 ) CompileError!void {
-    switch (op) {
+    switch (op.classify()) {
         .ldc => |ldc| {
             const reg = registers.find(ldc.to);
             try compileLoadConst(b, reg, func.consts[ldc.a.index]);
         },
-        .ret => |ret| {
-            const value = registers.find(ret.a);
-            try b.addInst(BcInst.of(.mov, value.n, Register.RETURN.n, 0));
-            try b.addInst(BcInst.of(.ret, 0, 0, 0));
+        .binary => |bin| {
+            const ty = b.typewelt.get(func.locals[bin.to.index]);
+
+            const opcode: BcOpcode = switch (ty.*) {
+                .@"bool" => switch (op) {
+                    else => @panic("TODO")
+                },
+                .number => |num| switch (num.layout) {
+                    .int, .uint => switch (op) {
+                        .add => .iadd,
+                        .sub => .isub,
+                        .mul => .imul,
+                        .div => .idiv,
+                        else => unreachable
+                    },
+                    .float => switch (op) {
+                        else => @panic("TODO")
+                    },
+                },
+                else => @panic("TODO")
+            };
+
+            const lhs = registers.find(bin.a);
+            const rhs = registers.find(bin.b);
+            const to = registers.find(bin.to);
+            try b.addInst(BcInst.of(opcode, lhs.n, rhs.n, to.n));
+        },
+        .unary_eff => |ue| switch (op) {
+            .ret => {
+                const value = registers.find(ue.a);
+                try b.addInst(BcInst.of(.mov, value.n, Register.RETURN.n, 0));
+                try b.addInst(BcInst.of(.ret, 0, 0, 0));
+            },
+            else => @panic("TODO")
         },
         else => std.debug.panic("TODO compile ssa `{s}`", .{@tagName(op)})
     }

@@ -85,23 +85,6 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
         var ctx = kz.Context.init(ally);
         defer ctx.deinit();
 
-        try stdout.writeAll("[Raw Bytecode]\n");
-        for (bc.program) |inst| {
-            const n = @bitCast(u32, inst);
-            try stdout.print("#{x:0>8}", .{n});
-
-            const fields = std.meta.fieldNames(@TypeOf(inst.op));
-            if (@enumToInt(inst.op) < fields.len) {
-                try stdout.print(
-                    " ({s} {d} {d} {d})",
-                    .{@tagName(inst.op), inst.a, inst.b, inst.c}
-                );
-            }
-
-            try stdout.writeByte('\n');
-        }
-        try stdout.writeByte('\n');
-
         const tex = try bc.render(&ctx);
 
         try stdout.writeAll("[Bytecode]\n");
