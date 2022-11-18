@@ -40,6 +40,13 @@ const BcOpcode = enum(u8) {
     imul,
     idiv,
     imod,
+    lor,
+    land,
+    lnot,
+    bor,
+    band,
+    bnot,
+    xor,
 
     // special
     debug, // debug %src ; prints a register for debugging
@@ -181,8 +188,14 @@ const BcProgram = struct {
                     try line.append(try renderReg(ctx, args[0]));
                     try line.append(try renderPos(ctx, n));
                 },
-                .iadd, .isub, .imul, .idiv, .imod => {
+                .iadd, .isub, .imul, .idiv, .imod, .lor, .land, .bor, .band,
+                .xor => {
                     for (args) |arg| {
+                        try line.append(try renderReg(ctx, arg));
+                    }
+                },
+                .lnot, .bnot => {
+                    for (args[0..2]) |arg| {
                         try line.append(try renderReg(ctx, arg));
                     }
                 },
@@ -404,7 +417,19 @@ const Vm = struct {
         std.mem.copy(u8, dst_bytes, src);
     }
 
+    const Now = if (builtin.mode == .Debug) f64 else void;
+
+    fn now() Now {
+        if (builtin.mode == .Debug) {
+            return @intToFloat(f64, std.time.nanoTimestamp()) * 1e-6;
+        } else {
+            return {};
+        }
+    }
+
     fn run(self: *Self, program: BcProgram) RuntimeError!void {
+        const start = now();
+
         std.mem.set(u64, self.scratch[0..Vm.RESERVED], 0);
 
         const insts = program.program;
@@ -416,7 +441,14 @@ const Vm = struct {
             const args = inst.getArgs();
 
             switch (op) {
-                .exit => return,
+                .exit => {
+                    if (builtin.mode == .Debug) {
+                        const t = now() - start;
+                        std.debug.print("vm.run took {d:.6}ms\n", .{t});
+                    }
+
+                    return;
+                },
                 .mov => {
                     const src = Register.of(args[0]);
                     const dst = Register.of(args[1]);
@@ -467,18 +499,36 @@ const Vm = struct {
                     self.mov(FP, SP);
                     self.pop(8, IP);
                 },
-                inline .iadd, .isub, .imul, .idiv, .imod => |v| {
+                inline .lnot, .bnot => |v| {
+                    const arg = self.get(Register.of(args[0]));
+                    const to = Register.of(args[1]);
+
+                    const value: u64 = comptime switch (v) {
+                        .lnot => @boolToInt(arg == 0),
+                        .bnot => ~arg,
+                        else => unreachable
+                    };
+
+                    self.set(to, value);
+                },
+                inline .iadd, .isub, .imul, .idiv, .imod, .lor, .land, .bor,
+                .band, .xor => |v| {
                     const lhs = self.get(Register.of(args[0]));
                     const rhs = self.get(Register.of(args[1]));
                     const to = Register.of(args[2]);
 
-                    const value = comptime switch (v) {
+                    const value: u64 = comptime switch (v) {
                         .iadd => lhs +% rhs,
                         .isub => lhs -% rhs,
                         .imul => lhs * rhs,
                         .idiv => @divFloor(lhs, rhs),
                         .imod => lhs % rhs,
-                        else => unreachable,
+                        .lor => @boolToInt(lhs != 0 or rhs != 0),
+                        .land => @boolToInt(lhs != 0 and rhs != 0),
+                        .bor => lhs | rhs,
+                        .band => lhs & rhs,
+                        .xor => lhs ^ rhs,
+                        else => unreachable
                     };
 
                     self.set(to, value);
@@ -618,11 +668,33 @@ fn compileOp(
             const reg = registers.find(ldc.to);
             try compileLoadConst(b, reg, func.consts[ldc.a.index]);
         },
-        .binary => |bin| {
-            const ty = b.typewelt.get(func.locals[bin.to.index]);
-
+        .unary => |un| {
+            const ty = b.typewelt.get(func.locals[un.to.index]);
             const opcode: BcOpcode = switch (ty.*) {
                 .@"bool" => switch (op) {
+                    .@"not" => .lnot,
+                    else => @panic("TODO")
+                },
+                .number => |num| switch (num.layout) {
+                    .int, .uint => switch (op) {
+                        .@"not" => .bnot,
+                        else => @panic("TODO")
+                    },
+                    .float => @panic("TODO")
+                },
+                else => @panic("TODO")
+            };
+
+            const arg = registers.find(un.a);
+            const to = registers.find(un.to);
+            try b.addInst(BcInst.of(opcode, arg.n, to.n, 0));
+        },
+        .binary => |bin| {
+            const ty = b.typewelt.get(func.locals[bin.to.index]);
+            const opcode: BcOpcode = switch (ty.*) {
+                .@"bool" => switch (op) {
+                    .@"or" => .lor,
+                    .@"and" => .land,
                     else => @panic("TODO")
                 },
                 .number => |num| switch (num.layout) {
@@ -631,7 +703,11 @@ fn compileOp(
                         .sub => .isub,
                         .mul => .imul,
                         .div => .idiv,
-                        else => unreachable
+                        .mod => .imod,
+                        .@"or" => .bor,
+                        .@"and" => .band,
+                        // .xor => .xor,
+                        else => @panic("TODO")
                     },
                     .float => switch (op) {
                         else => @panic("TODO")
