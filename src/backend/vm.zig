@@ -9,10 +9,30 @@ const TypeId = types.TypeId;
 const TypeWelt = types.TypeWelt;
 const Value = @import("value.zig");
 
+/// given up to 8 bytes, return canonical u64 representation for vm
+fn toCanonical(bytes: []const u8) u64 {
+    std.debug.assert(bytes.len <= 8);
+
+    var conv: u64 = 0;
+    const slice = @ptrCast(*[8]u8, &conv);
+
+    std.mem.copy(u8, slice[8 - bytes.len..], bytes);
+
+    return conv;
+}
+
+fn fromCanonical(buf: []u8, n: u64) void {
+    const slice = @ptrCast(*const [8]u8, &n);
+    std.mem.copy(u8, buf, slice[8 - buf.len..]);
+}
+
 /// a single operation
 const BcOpcode = enum(u8) {
+    // NOTE '$bytes' here expects 1, 2, 4, or 8
+
     exit, // no args
     mov, // mov %src %dst
+    // static, // (? unsure) get pointer to static at an offset
 
     imm2, // imm %dst $hi $lo
     imm4, // imm %dst ; load next opcode as u32
@@ -29,9 +49,8 @@ const BcOpcode = enum(u8) {
     push, // push $bytes %src
 
     // memory manipulation
-    load, // load $bytes %src %dst ; read from a pointer
-    store, // store $bytes %src %dst
-    static, // static $bytes %src %dst ; load but from static
+    load, // load $bytes %src %dst ; read pointer %src into value %dst
+    store, // store $bytes %src %dst ; write value %src into pointer %dst
 
     // basic operations
     // take form: op %a %b %dst
@@ -113,7 +132,7 @@ const BcProgram = struct {
 
     fn renderImm(ctx: *kz.Context, imm: u64) !kz.Ref {
         const sym = try ctx.print(.{}, "$", .{});
-        const num = try ctx.print(.{ .fg = .magenta }, "{X}", .{imm});
+        const num = try ctx.print(.{ .fg = .magenta }, "0x{X}", .{imm});
         return try ctx.slap(sym, num, .right, .{});
     }
 
@@ -187,6 +206,11 @@ const BcProgram = struct {
 
                     try line.append(try renderReg(ctx, args[0]));
                     try line.append(try renderPos(ctx, n));
+                },
+                .load, .store => {
+                    try line.append(try renderImm(ctx, args[0]));
+                    try line.append(try renderReg(ctx, args[1]));
+                    try line.append(try renderReg(ctx, args[2]));
                 },
                 .iadd, .isub, .imul, .idiv, .imod, .lor, .land, .bor, .band,
                 .xor => {
@@ -453,6 +477,11 @@ const Vm = struct {
                     const src = Register.of(args[0]);
                     const dst = Register.of(args[1]);
                     self.mov(src, dst);
+
+                    // TODO remove
+                    if (src.n == Vm.SP.n) {
+                        std.debug.print("read sp at {} into %{}\n", .{self.get(dst), dst.n});
+                    }
                 },
                 .imm2 => {
                     const dst = Register.of(args[0]);
@@ -487,6 +516,10 @@ const Vm = struct {
                         continue;
                     }
                 },
+                .ret => {
+                    self.mov(FP, SP);
+                    self.pop(8, IP);
+                },
                 .call => {
                     const n = insts[ip.* + 1].toInt();
                     ip.* += 1;
@@ -495,9 +528,26 @@ const Vm = struct {
                     self.set(IP, n);
                     continue;
                 },
-                .ret => {
-                    self.mov(FP, SP);
-                    self.pop(8, IP);
+                .store => {
+                    const nbytes = args[0];
+                    const src = Register.of(args[1]);
+                    const dst = Register.of(args[2]);
+                    // format register canonically
+                    var buf: [8]u8 = undefined;
+                    const data = buf[0..nbytes];
+                    fromCanonical(data, self.get(src));
+                    // write
+                    const addr = self.get(dst);
+                    std.mem.copy(u8, self.stack[addr..addr + nbytes], data);
+                },
+                .load => {
+                    const nbytes = args[0];
+                    const src = Register.of(args[1]);
+                    const dst = Register.of(args[2]);
+                    // read canonical data
+                    const addr = self.get(src);
+                    const data = self.stack[addr..addr + nbytes];
+                    self.set(dst, toCanonical(data));
                 },
                 inline .lnot, .bnot => |v| {
                     const arg = self.get(Register.of(args[0]));
@@ -558,6 +608,10 @@ const Vm = struct {
 //   returned through r0
 //   - if return value fits in a register, it is returned by value
 //   - otherwise, caller must provide memory for the callee to write to in r0
+//
+// other important notes
+// - pointers are stored as indices into the stack
+//   - TODO static pointers?
 
 pub const CompileError =
     Allocator.Error;
@@ -638,15 +692,7 @@ fn compileLoadConst(
         // convert value to uint
         // TODO I should probably do this with a union, this is already a source
         // of bugs
-        var bytes: [8]u8 align(8) = undefined;
-        std.mem.set(u8, &bytes, 0);
-
-        var i: usize = 1;
-        while (i <= value.ptr.len) : (i += 1) {
-            bytes[bytes.len - i] = value.ptr[value.ptr.len - i];
-        }
-
-        var n = @ptrCast(*const u64, &bytes).*;
+        const n = toCanonical(value.ptr);
         const zeroes = @clz(n);
 
         // store with smallest imm op possible
@@ -667,8 +713,13 @@ fn compileLoadConst(
     }
 }
 
+fn todoCompileOp(op: ssa.Op) noreturn {
+    std.debug.panic("TODO compile op {s}", .{@tagName(op)});
+}
+
 fn compileOp(
     b: *BcBuilder,
+    func_ref: ssa.FuncRef,
     func: ssa.Func,
     registers: *RegisterMap,
     op: ssa.Op,
@@ -677,6 +728,17 @@ fn compileOp(
         .ldc => |ldc| {
             const reg = registers.find(ldc.to);
             try compileLoadConst(b, reg, func.consts[ldc.a.index]);
+        },
+        .branch => |br| {
+            const cond = registers.find(br.cond);
+            try b.addInst(BcInst.of(.jump_if, cond.n, 0, 0));
+            try b.addBranch(SsaPos.of(func_ref, br.a));
+            try b.addInst(BcInst.of(.jump, 0, 0, 0));
+            try b.addBranch(SsaPos.of(func_ref, br.b));
+        },
+        .jump => |jmp| {
+            try b.addInst(BcInst.of(.jump, 0, 0, 0));
+            try b.addBranch(SsaPos.of(func_ref, jmp.dst));
         },
         .alloca => |all| {
             // 1. store sp in output
@@ -691,31 +753,43 @@ fn compileOp(
             try compileLoadConst(b, size_reg, size_val);
             try b.addInst(BcInst.of(.iadd, Vm.SP.n, size_reg.n, Vm.SP.n));
         },
-        .unary => |un| {
-            const ty = b.typewelt.get(func.locals[un.to.index]);
-            const opcode: BcOpcode = switch (ty.*) {
-                .@"bool" => switch (op) {
-                    .@"not" => .lnot,
-                    else => @panic("TODO")
-                },
-                .number => |num| switch (num.layout) {
-                    .int, .uint => switch (op) {
-                        .@"not" => .bnot,
-                        else => @panic("TODO")
+        .unary => |un| switch (op) {
+            .load => {
+                const dst_ty = b.typewelt.get(func.locals[un.a.index]);
+                const dst_size = @intCast(u8, dst_ty.sizeOf(b.typewelt.*));
+                const arg = registers.find(un.a);
+                const to = registers.find(un.to);
+                try b.addInst(BcInst.of(.load, dst_size, arg.n, to.n));
+            },
+            else => {
+                // most unary opcodes result in a unary instruction
+                const ty = b.typewelt.get(func.locals[un.to.index]);
+                const opcode: BcOpcode = switch (ty.*) {
+                    .@"bool" => switch (op) {
+                        .@"not" => .lnot,
+                        else => todoCompileOp(op)
                     },
-                    .float => @panic("TODO")
-                },
-                else => {
-                    std.debug.panic(
-                        "TODO compile unary op for type tag {s}",
-                        .{@tagName(ty.*)}
-                    );
-                }
-            };
+                    .number => |num| switch (num.layout) {
+                        .int, .uint => switch (op) {
+                            .@"not" => .bnot,
+                            else => todoCompileOp(op)
+                        },
+                        .float => switch (op) {
+                            else => todoCompileOp(op)
+                        },
+                    },
+                    else => {
+                        std.debug.panic(
+                            "TODO compile unary op for type tag {s}",
+                            .{@tagName(ty.*)}
+                        );
+                    }
+                };
 
-            const arg = registers.find(un.a);
-            const to = registers.find(un.to);
-            try b.addInst(BcInst.of(opcode, arg.n, to.n, 0));
+                const arg = registers.find(un.a);
+                const to = registers.find(un.to);
+                try b.addInst(BcInst.of(opcode, arg.n, to.n, 0));
+            }
         },
         .binary => |bin| {
             const ty = b.typewelt.get(func.locals[bin.to.index]);
@@ -723,7 +797,7 @@ fn compileOp(
                 .@"bool" => switch (op) {
                     .@"or" => .lor,
                     .@"and" => .land,
-                    else => @panic("TODO")
+                    else => todoCompileOp(op)
                 },
                 .number => |num| switch (num.layout) {
                     .int, .uint => switch (op) {
@@ -735,13 +809,13 @@ fn compileOp(
                         .@"or" => .bor,
                         .@"and" => .band,
                         // .xor => .xor,
-                        else => @panic("TODO")
+                        else => todoCompileOp(op)
                     },
                     .float => switch (op) {
-                        else => @panic("TODO")
+                        else => todoCompileOp(op)
                     },
                 },
-                else => @panic("TODO")
+                else => todoCompileOp(op)
             };
 
             const lhs = registers.find(bin.a);
@@ -754,6 +828,20 @@ fn compileOp(
                 const value = registers.find(ue.a);
                 try b.addInst(BcInst.of(.mov, value.n, Register.RETURN.n, 0));
                 try b.addInst(BcInst.of(.ret, 0, 0, 0));
+            },
+            else => @panic("TODO")
+        },
+        .binary_eff => |be| switch (op) {
+            .store => {
+                const src_ty = b.typewelt.get(func.locals[be.a.index]);
+                const bytes = switch (src_ty.sizeOf(b.typewelt.*)) {
+                    1, 2, 4, 8 => |n| @intCast(u8, n),
+                    else => @panic("TODO store other sizes")
+                };
+
+                const src = registers.find(be.a);
+                const dst = registers.find(be.b);
+                try b.addInst(BcInst.of(.store, bytes, src.n, dst.n));
             },
             else => @panic("TODO")
         },
@@ -780,7 +868,7 @@ fn compileFunc(
             try b.resolve(SsaPos.of(func_ref, label), b.here());
         }
 
-        try compileOp(b, func, &registers, op);
+        try compileOp(b, func_ref, func, &registers, op);
     }
 }
 

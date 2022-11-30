@@ -109,7 +109,7 @@ fn lowerIf(
         try func.replaceLabel(branches[i]);
 
         const out = try lowerExpr(env, prog, func, branch_expr);
-        try func.addOp(Op{ .store = .{ .a = out_ptr, .b = out } });
+        try func.addOp(Op{ .store = .{ .a = out, .b = out_ptr } });
         try func.addOp(Op{ .jmp = .{ .dst = merge_at } });
     }
 

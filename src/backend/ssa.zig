@@ -88,7 +88,7 @@ pub const Op = union(enum) {
 
     // memory
     alloca: Alloca, // allocates a number of bytes and returns pointer
-    store: BinaryEffect, // stores local b at address in ptr a
+    store: BinaryEffect, // stores local a at address in ptr b
     load: Unary, // loads data from ptr a
 
     // math
