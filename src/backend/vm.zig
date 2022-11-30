@@ -66,6 +66,8 @@ const BcOpcode = enum(u8) {
     band,
     bnot,
     xor,
+    shl,
+    shr,
 
     // special
     debug, // debug %src ; prints a register for debugging
@@ -528,6 +530,32 @@ const Vm = struct {
                     self.set(IP, n);
                     continue;
                 },
+                .pop => {
+                    const nbytes = args[0];
+                    const dst = Register.of(args[1]);
+                    self.stack[SP.n] -= nbytes;
+                    const addr = self.get(SP);
+                    const data = self.stack[addr..addr + nbytes];
+                    self.set(dst, toCanonical(data));
+                },
+                .push => {
+                    const nbytes = args[0];
+                    const src = Register.of(args[0]);
+                    var buf: [8]u8 = undefined;
+                    const data = buf[0..nbytes];
+                    fromCanonical(data, self.get(src));
+                    const addr = self.get(SP);
+                    std.mem.copy(u8, self.stack[addr..addr + nbytes], data);
+                },
+                .load => {
+                    const nbytes = args[0];
+                    const src = Register.of(args[1]);
+                    const dst = Register.of(args[2]);
+                    // read canonical data
+                    const addr = self.get(src);
+                    const data = self.stack[addr..addr + nbytes];
+                    self.set(dst, toCanonical(data));
+                },
                 .store => {
                     const nbytes = args[0];
                     const src = Register.of(args[1]);
@@ -539,15 +567,6 @@ const Vm = struct {
                     // write
                     const addr = self.get(dst);
                     std.mem.copy(u8, self.stack[addr..addr + nbytes], data);
-                },
-                .load => {
-                    const nbytes = args[0];
-                    const src = Register.of(args[1]);
-                    const dst = Register.of(args[2]);
-                    // read canonical data
-                    const addr = self.get(src);
-                    const data = self.stack[addr..addr + nbytes];
-                    self.set(dst, toCanonical(data));
                 },
                 inline .lnot, .bnot => |v| {
                     const arg = self.get(Register.of(args[0]));
@@ -562,7 +581,7 @@ const Vm = struct {
                     self.set(to, value);
                 },
                 inline .iadd, .isub, .imul, .idiv, .imod, .lor, .land, .bor,
-                .band, .xor => |v| {
+                .band, .xor, .shl, .shr => |v| {
                     const lhs = self.get(Register.of(args[0]));
                     const rhs = self.get(Register.of(args[1]));
                     const to = Register.of(args[2]);
@@ -578,6 +597,8 @@ const Vm = struct {
                         .bor => lhs | rhs,
                         .band => lhs & rhs,
                         .xor => lhs ^ rhs,
+                        .shl => lhs << @intCast(u6, rhs),
+                        .shr => lhs >> @intCast(u6, rhs),
                         else => unreachable
                     };
 
@@ -587,10 +608,10 @@ const Vm = struct {
                     const src = Register.of(args[0]);
                     std.debug.print("debug: {d}\n", .{self.get(src)});
                 },
-                else => std.debug.panic(
-                    "instruction {s} not implemented",
-                    .{@tagName(op)}
-                )
+                // else => std.debug.panic(
+                    // "instruction {s} not implemented",
+                    // .{@tagName(op)}
+                // )
             }
 
             // iterate ip
@@ -610,8 +631,10 @@ const Vm = struct {
 //   - otherwise, caller must provide memory for the callee to write to in r0
 //
 // other important notes
-// - pointers are stored as indices into the stack
-//   - TODO static pointers?
+// - value pointers are stored as indices into the stack, and function pointers
+//   are stored as instruction indices
+//   - TODO how to static pointers? maybe a `static` instruction which loads
+//     static memory
 
 pub const CompileError =
     Allocator.Error;
