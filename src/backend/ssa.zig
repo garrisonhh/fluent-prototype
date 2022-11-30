@@ -16,6 +16,7 @@ const types = @import("types.zig");
 const TypeId = types.TypeId;
 const Env = @import("env.zig");
 const Value = @import("value.zig");
+const TExpr = @import("texpr.zig");
 
 /// symbolic representation of operations. since blocks store type info,
 /// there is no need for operations to be type or size specific; this can be
@@ -45,6 +46,11 @@ pub const Op = union(enum) {
 
     pub const Jump = struct {
         dst: Label,
+    };
+
+    pub const Alloca = struct {
+        size: usize,
+        to: Local,
     };
 
     pub const Unary = struct {
@@ -81,7 +87,7 @@ pub const Op = union(enum) {
     jmp: Jump,
 
     // memory
-    alloca: Unary, // allocates a number of bytes and returns pointer
+    alloca: Alloca, // allocates a number of bytes and returns pointer
     store: BinaryEffect, // stores local b at address in ptr a
     load: Unary, // loads data from ptr a
 
@@ -104,6 +110,7 @@ pub const Op = union(enum) {
         arg: Arg,
         branch: Branch,
         jump: Jump,
+        alloca: Alloca,
 
         // generalizable logic
         unary: Unary,
@@ -112,7 +119,7 @@ pub const Op = union(enum) {
         binary_eff: BinaryEffect,
     };
 
-    /// makes switching on ops much easier
+    /// makes switching on ops + writing generalized code significantly easier
     pub fn classify(self: Self) Class {
         return switch (self) {
             .ldc => |ldc| Class{ .ldc = ldc },
@@ -120,7 +127,8 @@ pub const Op = union(enum) {
             .arg => |arg| Class{ .arg = arg },
             .br => |br| Class{ .branch = br },
             .jmp => |jmp| Class{ .jump = jmp },
-            .cast, .not, .load, .alloca => |un| Class{ .unary = un },
+            .alloca => |all| Class{ .alloca = all },
+            .cast, .not, .load => |un| Class{ .unary = un },
             .add, .sub, .mul, .div, .mod, .@"or", .@"and"
                 => |bin| Class{ .binary = bin },
             .ret => |un_eff| Class{ .unary_eff = un_eff },
@@ -248,7 +256,7 @@ pub const Func = struct {
             .ldc => |ldc| {
                 const ty = self.locals[ldc.to.index];
                 const value = self.consts[ldc.a.index];
-                const expr = try value.revive(ctx.ally, env, ty);
+                const expr = try value.resurrect(ctx.ally, env, ty);
                 defer expr.deinit(ctx.ally);
 
                 try line.appendSlice(&.{
@@ -271,6 +279,26 @@ pub const Func = struct {
                 try line.appendSlice(&.{
                     try ctx.print(.{}, "{s} ", .{tag}),
                     try renderLabel(ctx, jmp.dst),
+                });
+            },
+            .alloca => |all| {
+                // create u64 size for sake of consistency
+                const expr = TExpr.init(
+                    null,
+                    try env.typeIdentifyNumber(.uint, 64),
+                    .{
+                        .number = .{
+                            .bits = 64,
+                            .data = .{ .uint = @intCast(u64, all.size) }
+                        }
+                    }
+                );
+                defer expr.deinit(env.ally);
+
+                try line.appendSlice(&.{
+                    try self.renderLocal(ctx, env, all.to),
+                    try ctx.print(.{}, " = {s} ", .{tag}),
+                    try expr.render(ctx, env),
                 });
             },
             .unary => |un| {

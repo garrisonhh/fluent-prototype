@@ -577,6 +577,8 @@ const Register = packed struct {
 const RegisterMap = struct {
     const Self = @This();
 
+    // TODO will at some point need to handle the case where there are more than
+    // 256 locals
     unused: u8,
     map: []?Register,
 
@@ -617,6 +619,12 @@ const RegisterMap = struct {
 
         return next;
     }
+
+    /// retrieves an unused register for temporary usage. this register may be
+    /// invalidated at the next `find` call.
+    fn temporary(self: Self, index: u8) Register {
+        return Register.of(self.unused + index);
+    }
 };
 
 /// does whatever it needs to to get a constant into a register. this should
@@ -628,6 +636,8 @@ fn compileLoadConst(
 ) CompileError!void {
     if (value.ptr.len <= 8) {
         // convert value to uint
+        // TODO I should probably do this with a union, this is already a source
+        // of bugs
         var bytes: [8]u8 align(8) = undefined;
         std.mem.set(u8, &bytes, 0);
 
@@ -668,6 +678,19 @@ fn compileOp(
             const reg = registers.find(ldc.to);
             try compileLoadConst(b, reg, func.consts[ldc.a.index]);
         },
+        .alloca => |all| {
+            // 1. store sp in output
+            // 2. load size constant
+            // 3. add size to sp
+            const reg = registers.find(all.to);
+            const size_val = try Value.init(b.ally, std.mem.asBytes(&all.size));
+            defer size_val.deinit(b.ally);
+            const size_reg = registers.temporary(0);
+
+            try b.addInst(BcInst.of(.mov, Vm.SP.n, reg.n, 0));
+            try compileLoadConst(b, size_reg, size_val);
+            try b.addInst(BcInst.of(.iadd, Vm.SP.n, size_reg.n, Vm.SP.n));
+        },
         .unary => |un| {
             const ty = b.typewelt.get(func.locals[un.to.index]);
             const opcode: BcOpcode = switch (ty.*) {
@@ -682,7 +705,12 @@ fn compileOp(
                     },
                     .float => @panic("TODO")
                 },
-                else => @panic("TODO")
+                else => {
+                    std.debug.panic(
+                        "TODO compile unary op for type tag {s}",
+                        .{@tagName(ty.*)}
+                    );
+                }
             };
 
             const arg = registers.find(un.a);

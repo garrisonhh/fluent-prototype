@@ -90,14 +90,10 @@ fn lowerIf(
 
     // alloca correct amount of memory for branch output
     const mem_size = env.typeGet(expr.ty).sizeOf(env.typewelt.*);
-    const mem_size_data = std.mem.asBytes(&mem_size);
-    const u64_ty = try env.typeIdentifyNumber(.uint, 64);
-    const mem_req = try lowerLoadConst(func, u64_ty, mem_size_data);
-
     const ptr_ty = try env.typeIdentify(Type{ .ptr = expr.ty });
     const out_ptr = try func.addLocal(ptr_ty);
 
-    try func.addOp(Op{ .alloca = .{ .to = out_ptr, .a = mem_req } });
+    try func.addOp(Op{ .alloca = .{ .to = out_ptr, .size = mem_size } });
 
     // branch op with labels
     const branches = [2]ssa.Label{try func.addLabel(), try func.addLabel()};

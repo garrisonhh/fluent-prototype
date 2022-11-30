@@ -93,7 +93,7 @@ fn toNumber(
 ///
 /// this is probably the most important function in the entire codebase, as it
 /// is the thing that enables the most interesting features in fluent
-pub fn revive(
+pub fn resurrect(
     self: Self,
     ally: Allocator,
     env: Env,

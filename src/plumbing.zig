@@ -102,7 +102,7 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
     // render final value
     {
         const t = now();
-        const revived = try final.revive(ally, env.*, final_ty);
+        const revived = try final.resurrect(ally, env.*, final_ty);
         defer revived.deinit(ally);
 
         var ctx = kz.Context.init(ally);
