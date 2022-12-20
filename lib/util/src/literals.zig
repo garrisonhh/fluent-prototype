@@ -161,7 +161,7 @@ const Slicerator = struct {
     }
 };
 
-pub fn eatDigits(
+fn eatDigits(
     ally: Allocator,
     sl: *Slicerator,
     radix: u8

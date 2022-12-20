@@ -151,15 +151,19 @@ pub fn initSymbol(
     };
 }
 
+pub fn initOwnedString(loc: Loc, str: []const u8) Self {
+    return Self{
+        .data = .{ .string = Symbol.init(str) },
+        .loc = loc,
+    };
+}
+
 pub fn initString(
     ally: Allocator,
     loc: Loc,
     str: []const u8
 ) Allocator.Error!Self {
-    return Self{
-        .data = .{ .string = Symbol.init(try ally.dupe(u8, str)) },
-        .loc = loc,
-    };
+    return Self.initOwnedString(loc, try ally.dupe(u8, str));
 }
 
 pub fn deinit(self: Self, ally: Allocator) void {

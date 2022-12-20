@@ -106,9 +106,18 @@ fn translateNumber(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
 
 fn translateString(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
     const slice = expr.loc.getSlice();
+    const str = util.stringUnescape(ally, slice[1..slice.len - 1]) catch |e| {
+        if (e == error.BadEscapeSeq) {
+            _ = try context.post(
+                .err, expr.loc, "string contains bad escape sequence", .{}
+            );
 
-    // TODO do escapes
-    return try SExpr.initString(ally, expr.loc, slice[1..slice.len - 1]);
+            return error.FluentError;
+        }
+        return @errSetCast(TranslateError, e);
+    };
+
+    return SExpr.initOwnedString(expr.loc, str);
 }
 
 fn translateSymbol(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
