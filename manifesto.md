@@ -6,7 +6,7 @@
 2. parsing + type checking
 3. dynamic code evaluation with code as data
     - compiling programs that compile programs
-4. static compilation of final code output to C
+4. static compilation of final code output to qbe/llvm
 
 combining compile time execution (CTE) with DSL-focused functional programming while staying as close as practical to the hardware is the goal of *fluent*lang.
 
