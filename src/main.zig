@@ -94,7 +94,7 @@ fn fluentTests(ally: Allocator, prelude: *Env) !void {
         "1.0001",
         "0.01f32",
         "0x1.1",
-        "\"Hello, \\nWorld!\"",
+        // "\"Hello, \\nWorld!\"",
         "_this_is_a_hole",
         "true",
         "false",

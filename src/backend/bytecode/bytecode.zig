@@ -1,0 +1,224 @@
+//! bytecode program representation
+
+const std = @import("std");
+const kz = @import("kritzler");
+const Allocator = std.mem.Allocator;
+const types = @import("../types.zig");
+const TypeId = types.TypeId;
+
+/// a single operation
+pub const Opcode = enum(u8) {
+    // NOTE '$bytes' here expects 1, 2, 4, or 8
+
+    exit, // no args
+    mov, // mov %src %dst
+    // static, // (? unsure) get pointer to static at an offset
+
+    imm2, // imm %dst $hi $lo
+    imm4, // imm %dst ; load next opcode as u32
+    imm8, // imm %dst ; load next two opcodes as u64
+
+    // control flow
+    jump, // load next opcode as u32 index, and jump to that instruction
+    jump_if, // jump_if %cond ; same as jump, but only if %test != 0
+    ret, // no args. mov fp -> sp, pop fp, pop ip
+    call, // call %dst ; push ip, push fp, mov sp -> fp, mov dst -> ip
+
+    // stack manipulation
+    pop, // pop $bytes %dst
+    push, // push $bytes %src
+
+    // memory manipulation
+    load, // load $bytes %src %dst ; read pointer %src into value %dst
+    store, // store $bytes %src %dst ; write value %src into pointer %dst
+
+    // basic operations
+    // take form: op %a %b %dst
+    iadd,
+    isub,
+    imul,
+    idiv,
+    imod,
+    lor,
+    land,
+    lnot,
+    bor,
+    band,
+    bnot,
+    xor,
+    shl,
+    shr,
+
+    // special
+    debug, // debug %src ; prints a register for debugging
+};
+
+/// all operations take up to 3 operands, which typically represent VM registers
+/// see comments for each opcode for the operand usage
+pub const Inst = packed struct(u32) {
+    const Self = @This();
+
+    op: Opcode,
+    a: u8,
+    b: u8,
+    c: u8,
+
+    pub fn of(op: Opcode, a: u8, b: u8, c: u8) Self {
+        return Self{
+            .op = op,
+            .a = a,
+            .b = b,
+            .c = c,
+        };
+    }
+
+    pub fn fromInt(n: u32) Self {
+        return @bitCast(Self, n);
+    }
+
+    pub fn toInt(self: Self) u32 {
+        return @bitCast(u32, self);
+    }
+
+    pub fn getArgs(self: *const Self) *const [3]u8 {
+        return @ptrCast(*const [3]u8, &@ptrCast(*const [4]u8, self)[1]);
+    }
+};
+
+pub const Program = struct {
+    const Self = @This();
+
+    returns: TypeId,
+    static: []u8,
+    program: []align(16) Inst,
+
+    pub fn deinit(self: Self, ally: Allocator) void {
+        ally.free(self.static);
+        ally.free(self.program);
+    }
+
+    fn renderOpcode(ctx: *kz.Context, opcode: Opcode) !kz.Ref {
+        // for adding buffered spaces
+        const width = comptime width: {
+            var max: usize = 0;
+            for (std.meta.fieldNames(@TypeOf(opcode))) |field| {
+                max = @max(field.len, max);
+            }
+
+            break :width max;
+        };
+        const width_fmt = comptime std.fmt.comptimePrint("{}", .{width});
+        const tag = @tagName(opcode);
+
+        return try ctx.print(.{}, "{s:<" ++ width_fmt ++ "}", .{tag});
+    }
+
+    fn renderImm(ctx: *kz.Context, imm: u64) !kz.Ref {
+        const sym = try ctx.print(.{}, "$", .{});
+        const num = try ctx.print(.{ .fg = .magenta }, "0x{X}", .{imm});
+        return try ctx.slap(sym, num, .right, .{});
+    }
+
+    fn renderReg(ctx: *kz.Context, reg: usize) !kz.Ref {
+        const sym = try ctx.print(.{}, "%", .{});
+        const id = try ctx.print(.{ .fg = .red }, "{}", .{reg});
+        return try ctx.slap(sym, id, .right, .{});
+    }
+
+    fn renderPos(ctx: *kz.Context, pos: usize) !kz.Ref {
+        const sym = try ctx.print(.{}, "@", .{});
+        const tex = try ctx.print(.{ .fg = .cyan }, "{}", .{pos});
+        return try ctx.slap(sym, tex, .right, .{});
+    }
+
+    pub fn render(self: Self, ctx: *kz.Context) !kz.Ref {
+        var lines = std.ArrayList(kz.Ref).init(ctx.ally);
+        defer lines.deinit();
+
+        var line = try std.ArrayList(kz.Ref).initCapacity(ctx.ally, 8);
+        defer line.deinit();
+
+        // render each inst
+        const insts = self.program;
+        var i: usize = 0;
+        while (i < insts.len) : (i += 1) {
+            const inst = insts[i];
+            defer line.shrinkRetainingCapacity(0);
+
+            try line.append(try ctx.print(.{ .fg = .cyan }, "{:>4}", .{i}));
+            try line.append(try renderOpcode(ctx, inst.op));
+
+            // args
+            const args = inst.getArgs();
+            switch (inst.op) {
+                .exit, .ret => {},
+                .mov => {
+                    try line.append(try renderReg(ctx, args[0]));
+                    try line.append(try renderReg(ctx, args[1]));
+                },
+                .imm2 => {
+                    const n = (@intCast(u16, args[1]) << 8) | args[2];
+                    try line.append(try renderReg(ctx, args[0]));
+                    try line.append(try renderImm(ctx, n));
+                },
+                .imm4 => {
+                    const n = insts[i + 1].toInt();
+                    i += 1;
+
+                    try line.append(try renderReg(ctx, args[0]));
+                    try line.append(try renderImm(ctx, n));
+                },
+                .imm8 => {
+                    const hi = insts[i + 1].toInt();
+                    const lo = insts[i + 2].toInt();
+                    const n = (@intCast(u64, hi) << 32) | lo;
+                    i += 2;
+
+                    try line.append(try renderReg(ctx, args[0]));
+                    try line.append(try renderImm(ctx, n));
+                },
+                .jump, .call => {
+                    const n = insts[i + 1].toInt();
+                    i += 1;
+
+                    try line.append(try renderPos(ctx, n));
+                },
+                .jump_if => {
+                    const n = insts[i + 1].toInt();
+                    i += 1;
+
+                    try line.append(try renderReg(ctx, args[0]));
+                    try line.append(try renderPos(ctx, n));
+                },
+                .load, .store => {
+                    try line.append(try renderImm(ctx, args[0]));
+                    try line.append(try renderReg(ctx, args[1]));
+                    try line.append(try renderReg(ctx, args[2]));
+                },
+                .iadd, .isub, .imul, .idiv, .imod, .lor, .land, .bor, .band,
+                .xor => {
+                    for (args) |arg| {
+                        try line.append(try renderReg(ctx, arg));
+                    }
+                },
+                .lnot, .bnot => {
+                    for (args[0..2]) |arg| {
+                        try line.append(try renderReg(ctx, arg));
+                    }
+                },
+                .debug => try line.append(try renderReg(ctx, args[0])),
+                else => std.debug.panic(
+                    "cannot render op `{s}` yet\n",
+                    .{@tagName(inst.op)}
+                )
+            }
+
+            // stack the line
+            const tex = try ctx.stack(line.items, .right, .{ .space = 1 });
+            try lines.append(tex);
+        }
+
+        // stack the lines
+        return try ctx.stack(lines.items, .bottom, .{});
+    }
+};
