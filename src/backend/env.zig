@@ -51,19 +51,14 @@ const Binding = struct {
 ally: Allocator,
 parent: ?*const Self,
 typewelt: *TypeWelt,
-// this is owned by the base env
-typenames: *std.AutoHashMapUnmanaged(TypeId, Symbol),
 
 // keys and values are all owned by this env
 ns: Symbol.HashMapUnmanaged(Binding) = .{},
 
 pub fn initBase(ally: Allocator, typewelt: *TypeWelt) Allocator.Error!Self {
-    const typenames = std.AutoHashMapUnmanaged(TypeId, Symbol){};
-
     return Self{
         .ally = ally,
         .typewelt = typewelt,
-        .typenames = try util.placeOn(ally, typenames),
         .parent = null,
     };
 }
@@ -71,9 +66,8 @@ pub fn initBase(ally: Allocator, typewelt: *TypeWelt) Allocator.Error!Self {
 pub fn init(parent: *const Self) Self {
     return Self{
         .ally = parent.ally,
-        .typewelt = parent.typewelt,
-        .typenames = parent.typenames,
         .parent = parent,
+        .typewelt = parent.typewelt,
     };
 }
 
@@ -81,14 +75,6 @@ pub fn deinit(self: *Self) void {
     var keys = self.ns.keyIterator();
     while (keys.next()) |key| self.ally.free(key.str);
     self.ns.deinit(self.ally);
-
-    if (self.parent == null) {
-        var names = self.typenames.valueIterator();
-        while (names.next()) |name| self.ally.free(name.str);
-
-        self.typenames.deinit(self.ally);
-        self.ally.destroy(self.typenames);
-    }
 }
 
 pub fn def(self: *Self, sym: Symbol, ty: TypeId, value: Bound) DefError!void {
@@ -96,12 +82,16 @@ pub fn def(self: *Self, sym: Symbol, ty: TypeId, value: Bound) DefError!void {
     const res = try self.ns.getOrPut(self.ally, sym);
     if (res.found_existing) return error.SymbolRedef;
 
-    res.key_ptr.* = try sym.clone(self.ally);
+    const owned = try sym.clone(self.ally);
+    res.key_ptr.* = owned;
     res.value_ptr.* = Binding{ .ty = ty, .value = value };
 
     // special type behavior: store any generics or typenames
     if (value == .ty) {
-        try self.typenames.put(self.ally, value.ty, try sym.clone(self.ally));
+        self.typewelt.setName(value.ty, owned) catch |e| {
+            if (e == error.RenamedType) return error.SymbolRedef;
+            return @errSetCast(DefError, e);
+        };
     }
 }
 
@@ -130,7 +120,7 @@ pub fn getType(self: Self, sym: Symbol) ?TypeId {
 }
 
 pub fn getTypename(self: Self, ty: TypeId) ?Symbol {
-    return if (self.typenames.get(ty)) |sym| sym else null;
+    return self.typewelt.getName(ty);
 }
 
 pub fn getBound(self: Self, sym: Symbol) ?*const Bound {

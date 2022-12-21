@@ -23,6 +23,7 @@ pub const TypeId = packed struct {
         std.ArrayList(u8).Writer.Error
      || std.fmt.AllocPrintError;
 
+    // TODO use typewelt exclusively
     pub fn write(
         self: Self,
         ally: Allocator,
@@ -76,6 +77,7 @@ pub const TypeWelt = struct {
             return a.eql(b.*);
         }
     };
+
     const TypeMap = std.HashMapUnmanaged(
         *const Type,
         TypeId,
@@ -85,6 +87,8 @@ pub const TypeWelt = struct {
 
     ally: Allocator,
     types: std.ArrayListUnmanaged(*Type) = .{}, // TypeId -> Type
+    // symbols are unowned, aka probably owned by env
+    names: std.ArrayListUnmanaged(?Symbol) = .{},
     map: TypeMap = .{}, // Type -> TypeId
 
     pub fn init(ally: Allocator) Self {
@@ -99,11 +103,37 @@ pub const TypeWelt = struct {
             self.ally.destroy(ptr);
         }
         self.types.deinit(self.ally);
+        self.names.deinit(self.ally);
         self.map.deinit(self.ally);
     }
 
     pub fn get(self: Self, id: TypeId) *const Type {
         return self.types.items[id.index];
+    }
+
+    pub const RenameError = error { RenamedType };
+
+    pub fn setName(
+        self: *Self,
+        id: TypeId,
+        name: Symbol
+    ) (Allocator.Error || RenameError)!void {
+        // expand names array
+        if (self.names.items.len <= id.index) {
+            const diff = 1 + id.index - self.names.items.len;
+            try self.names.appendNTimes(self.ally, null, diff);
+        }
+
+        if (self.names.items[id.index] != null) {
+            return error.RenamedType;
+        } else {
+            self.names.items[id.index] = name;
+        }
+    }
+
+    pub fn getName(self: Self, id: TypeId) ?Symbol {
+        if (id.index >= self.names.items.len) return null;
+        return self.names.items[id.index];
     }
 
     /// retrieves an established ID or creates a new one.
@@ -157,6 +187,7 @@ pub const Type = union(enum) {
     };
 
     /// generics only exist in the context of the current function
+    /// TODO this should contain the generic's `Name`
     pub const GenericId = struct { index: usize };
 
     // unique
@@ -304,7 +335,7 @@ pub const Type = union(enum) {
         typewelt: *TypeWelt,
         target: Self
     ) Allocator.Error!bool {
-        // manage set matching
+        // special logic
         switch (target) {
             .any, .hole => return true,
             .set => {
