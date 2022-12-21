@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const kz = @import("kritzler");
+const builtin = @import("builtin");
 const util = @import("util");
 const context = @import("../context.zig");
 
@@ -41,36 +42,19 @@ pub const Number = struct {
         };
     }
 
-    fn dupeBytes(ally: Allocator, value: anytype) Allocator.Error![]const u8 {
-        return try ally.dupe(u8, std.mem.asBytes(&value));
-    }
-
     /// returns this value as bytes on an allocator
     pub fn asBytes(self: @This(), ally: Allocator) Allocator.Error![]const u8 {
-        const bits = self.bits orelse 64;
-        return switch (bits) {
-            64 => switch (self.data) {
-                .int => |n| dupeBytes(ally, n),
-                .uint => |n| dupeBytes(ally, n),
-                .float => |n| dupeBytes(ally, n),
-            },
-            32 => switch (self.data) {
-                .int => |n| dupeBytes(ally, @intCast(i32, n)),
-                .uint => |n| dupeBytes(ally, @intCast(u32, n)),
-                .float => |n| dupeBytes(ally, @floatCast(f32, n)),
-            },
-            16 => switch (self.data) {
-                .int => |n| dupeBytes(ally, @intCast(i16, n)),
-                .uint => |n| dupeBytes(ally, @intCast(u16, n)),
-                .float => unreachable,
-            },
-            8 => switch (self.data) {
-                .int => |n| dupeBytes(ally, @intCast(i8, n)),
-                .uint => |n| dupeBytes(ally, @intCast(u8, n)),
-                .float => unreachable,
-            },
-            else => unreachable
+        const data = switch (self.data) {
+            .int => |n| std.mem.asBytes(&n),
+            .uint => |n| std.mem.asBytes(&n),
+            .float => |n| std.mem.asBytes(&n),
         };
+
+        const bits = self.bits orelse 64;
+        std.debug.assert(bits % 8 == 0 and bits / 8 <= 8);
+        std.debug.assert(builtin.target.cpu.arch.endian() == .Little);
+
+        return ally.dupe(u8, data[0..bits / 8]);
     }
 
     pub fn eql(self: @This(), other: @This()) bool {

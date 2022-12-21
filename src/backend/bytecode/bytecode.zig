@@ -5,6 +5,7 @@ const kz = @import("kritzler");
 const Allocator = std.mem.Allocator;
 const types = @import("../types.zig");
 const TypeId = types.TypeId;
+const canon = @import("canon.zig");
 
 /// a single operation
 pub const Opcode = enum(u8) {
@@ -157,21 +158,21 @@ pub const Program = struct {
                     try line.append(try renderReg(ctx, args[1]));
                 },
                 .imm2 => {
-                    const n = (@intCast(u16, args[1]) << 8) | args[2];
+                    const n = canon.toCanonical(args[1..3]);
                     try line.append(try renderReg(ctx, args[0]));
                     try line.append(try renderImm(ctx, n));
                 },
                 .imm4 => {
-                    const n = insts[i + 1].toInt();
+                    const bytes = @ptrCast(*const [4]u8, &insts[i + 1]);
+                    const n = canon.toCanonical(bytes);
                     i += 1;
 
                     try line.append(try renderReg(ctx, args[0]));
                     try line.append(try renderImm(ctx, n));
                 },
                 .imm8 => {
-                    const hi = insts[i + 1].toInt();
-                    const lo = insts[i + 2].toInt();
-                    const n = (@intCast(u64, hi) << 32) | lo;
+                    const bytes = @ptrCast(*const [8]u8, insts[i + 1..i + 3]);
+                    const n = canon.toCanonical(bytes);
                     i += 2;
 
                     try line.append(try renderReg(ctx, args[0]));

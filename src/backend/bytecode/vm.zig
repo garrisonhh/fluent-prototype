@@ -57,6 +57,17 @@ fn mov(self: *Self, src: Register, dst: Register) void {
     self.scratch[dst.n] = self.scratch[src.n];
 }
 
+fn mov_imm(self: *Self, src: []const u8, dst: Register) void {
+    std.debug.assert(src.len <= 8);
+    comptime if (builtin.cpu.arch.endian() != .Little) {
+        @compileError("this code is optimized by space for little-endian arch");
+    };
+
+    const reg = @ptrCast(*[8]u8, &self.scratch[dst.n]);
+    self.set(dst, 0);
+    std.mem.copy(u8, reg, src);
+}
+
 fn push(self: *Self, bytes: usize, src: Register) void {
     const dst = self.stack[self.scratch[SP.n]..];
     const src_bytes = @ptrCast([*]u8, &self.scratch[src.n])[0..bytes];
@@ -113,22 +124,18 @@ fn execute(self: *Self, program: Program) RuntimeError!void {
             },
             .imm2 => {
                 const dst = Register.of(args[0]);
-                const hi = args[1];
-                const lo = args[2];
-                self.set(dst, (@intCast(u16, hi) << 8) | lo);
+                self.mov_imm(args[1..3], dst);
             },
             .imm4 => {
                 const dst = Register.of(args[0]);
-                const n = insts[ip.* + 1].toInt();
                 ip.* += 1;
-                self.set(dst, n);
+                self.mov_imm(@ptrCast(*const [4]u8, &insts[ip.*]), dst);
             },
             .imm8 => {
                 const dst = Register.of(args[0]);
-                const hi = insts[ip.* + 1].toInt();
-                const lo = insts[ip.* + 2].toInt();
+                const slice = insts[ip.*..ip.* + 2];
                 ip.* += 2;
-                self.set(dst, (@intCast(u64, hi) << 32) | lo);
+                self.mov_imm(@ptrCast(*const [8]u8, slice), dst);
             },
             .jump => {
                 const to = insts[ip.* + 1].toInt();

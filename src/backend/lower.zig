@@ -38,9 +38,9 @@ fn lowerBool(func: *ssa.FuncBuilder, expr: TExpr) LowerError!Local {
 }
 
 fn lowerNumber(func: *ssa.FuncBuilder, expr: TExpr) LowerError!Local {
-    // get raw bytes TODO do I really need an allocation here ..?
-    const data = try expr.data.number.asBytes(func.ally);
-    defer func.ally.free(data);
+    var buf: [8]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    const data = try expr.data.number.asBytes(fba.allocator());
 
     return lowerLoadConst(func, expr.ty, data);
 }

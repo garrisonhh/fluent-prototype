@@ -242,20 +242,30 @@ fn compileLoadConst(
         // TODO I should probably do this with a union, this is already a source
         // of bugs
         const n = canon.toCanonical(value.ptr);
-        const zeroes = @clz(n);
+        const bytes = @ptrCast(*const [8]u8, &n);
+
+        // minimize stored bytes
+        var to_store: usize = 8;
+        while (to_store > 0 and bytes[to_store - 1] == 0) {
+            to_store -= 1;
+        }
+
+        comptime if (builtin.cpu.arch.endian() != .Little) {
+            @compileError("storage code is deoptimized for bytecode space in "
+                       ++ "a non-little-endian architecture");
+        };
 
         // store with smallest imm op possible
-        if (zeroes >= 0x30) {
-            const hi = @intCast(u8, n >> 8);
-            const lo = @truncate(u8, n);
-            try b.addInst(Inst.of(.imm2, reg.n, hi, lo));
-        } else if (zeroes >= 0x20) {
+        if (to_store <= 2) {
+            try b.addInst(Inst.of(.imm2, reg.n, bytes[0], bytes[1]));
+        } else if (to_store <= 4) {
             try b.addInst(Inst.of(.imm4, reg.n, 0, 0));
-            try b.addInst(Inst.fromInt(@intCast(u32, n)));
+            try b.addInst(Inst.fromInt(@ptrCast(*const u32, bytes).*));
         } else {
+            const data = @ptrCast(*const [2]u32, bytes);
             try b.addInst(Inst.of(.imm8, reg.n, 0, 0));
-            try b.addInst(Inst.fromInt(@intCast(u32, n >> 32)));
-            try b.addInst(Inst.fromInt(@truncate(u32, n)));
+            try b.addInst(Inst.fromInt(data[0]));
+            try b.addInst(Inst.fromInt(data[1]));
         }
     } else {
         @panic("TODO compile ldc -> static");
