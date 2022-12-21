@@ -24,6 +24,51 @@ lispy semantics with whitespace awareness. the important property of syntax for
 Fluent is that it preserves a strong relationship with the AST, so that code
 using Fluent's homoiconic features retains low cognitive overhead
 
+### function effect handlers and context state mutation
+
+effect handlers are commonly described as a generalization of exceptions, but
+I think a nicer way to describe them is as a type-checkable mechanism to escape
+function purity.
+
+in more imperative and procedural languages, mutating state is not something
+that the compiler is able to check. a common source of bugs in many languages
+is code where the programmer must remember, without the compiler's help, to
+do some sort of branch or stateful mutation after calling some procedure. think
+`begin()` and `end()` types of functions, `init()` and `deinit()`, errors,
+panics, null checks.
+
+*fluent*'s solution is explicit effect handlers and context management. *fluent*
+functions must explicitly declare any side effects or required effect handlers
+(e.g. contexts), which allows *fluent* to perform effect type analysis and also
+build language features around this.
+
+here's an example of a zig function decl and the equivalent (goal) *fluent*:
+
+```zig
+fn dupe(ally: Allocator, bytes: []const u8) Allocator.Error![]u8 {
+  // ...
+}
+```
+
+Allocator in this case is a context which provides allocation capabilities,
+and OnAllocFailure is a callback used when allocation fails.
+
+```
+def dupe (Fn [] [(Slice u8)] [(Ptr Allocator), OnAllocFailure])
+  // ...
+```
+
+you could then do something along the lines of:
+
+```
+with [(ref allocator), my-error-callback]
+  dupe bytes
+```
+
+these effects and contexts can be implicitly passed between functions, to
+prevent the kinds of noise you see in Zig code. `with` blocks allow redefining
+effects and handlers.
+
 ### distinct and flow types
 
 when I'm writing code of any significant size (like the fluent compiler) I'm
@@ -31,7 +76,7 @@ always thinking about the flow of data from start to finish. there are two
 issues I see crop up that I think could be fixed with type system features:
 
 ```
-(def Shader Type (Distinct U32))
+def Shader Type (Distinct u32)
 ```
 
 - 'stringly typed programming'. this refers to a specific problem in languages
