@@ -389,22 +389,19 @@ pub const Func = struct {
 
         try header_texs.appendSlice(&.{
             try ctx.print(.{ .fg = .red }, "{s}", .{self.label.str}),
-            try ctx.print(.{}, " :: (", .{}),
+            try ctx.print(.{}, " :: ", .{}),
         });
 
         var param = Local.of(0);
         while (param.index < self.takes) : (param.index += 1) {
-            if (param.index > 0) {
-                try header_texs.append(try ctx.print(.{}, ", ", .{}));
-            }
             try header_texs.append(try self.renderLocal(ctx, env, param));
+            try header_texs.append(try ctx.print(.{}, " -> ", .{}));
         }
 
         const returns = try self.returns.writeAlloc(ctx.ally, env.typewelt.*);
         defer ctx.ally.free(returns);
 
         try header_texs.appendSlice(&.{
-            try ctx.print(.{}, ") -> ", .{}),
             try ctx.print(.{ .fg = .green }, "{s}", .{returns}),
         });
 
