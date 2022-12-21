@@ -188,7 +188,8 @@ pub fn dump(self: Self, ally: Allocator, writer: anytype) !void {
     // render variables
     var list = ctx.stub();
     for (vars.items) |ev| {
-        const ty_text = try self.typeGet(ev.ty).writeAlloc(ally, self);
+        const ty = self.typeGet(ev.ty);
+        const ty_text = try ty.writeAlloc(ally, self.typewelt.*);
         defer ally.free(ty_text);
 
         const red = kz.Style{ .fg = .red };
@@ -209,7 +210,7 @@ pub fn dump(self: Self, ally: Allocator, writer: anytype) !void {
                 },
                 .ty => |id| ty: {
                     const got = self.typeGet(id);
-                    const text = try got.writeAlloc(ally, self);
+                    const text = try got.writeAlloc(ally, self.typewelt.*);
                     defer ally.free(text);
                     break :ty try ctx.print(.{}, "{s}", .{text});
                 },

@@ -104,7 +104,7 @@ pub fn resurrect(
         .@"bool" => .{ .@"bool" = self.as(u8) > 0 },
         .number => |num| self.toNumber(num.bits orelse 64, num.layout),
         else => {
-            const text = tid.writeAlloc(ally, env) catch unreachable;
+            const text = tid.writeAlloc(ally, env.typewelt.*) catch unreachable;
             defer ally.free(text);
 
             std.debug.panic("TODO revive type {s}", .{text});

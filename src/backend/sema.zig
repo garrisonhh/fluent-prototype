@@ -24,7 +24,7 @@ pub const SemaError =
  || Env.DefError;
 
 fn holeError(env: Env, loc: ?Loc, ty: TypeId) SemaError {
-    const ty_text = try ty.writeAlloc(env.ally, env);
+    const ty_text = try ty.writeAlloc(env.ally, env.typewelt.*);
     defer env.ally.free(ty_text);
 
     _ = try context.post(.note, loc, "this hole expects {s}", .{ty_text});
@@ -32,9 +32,9 @@ fn holeError(env: Env, loc: ?Loc, ty: TypeId) SemaError {
 }
 
 fn expectError(env: Env, loc: ?Loc, expected: TypeId, found: TypeId) SemaError {
-    const exp_text = try expected.writeAlloc(env.ally, env);
+    const exp_text = try expected.writeAlloc(env.ally, env.typewelt.*);
     defer env.ally.free(exp_text);
-    const found_text = try found.writeAlloc(env.ally, env);
+    const found_text = try found.writeAlloc(env.ally, env.typewelt.*);
     defer env.ally.free(found_text);
 
     const msg = try context.post(.err, loc, "expected type {s}", .{exp_text});
@@ -197,7 +197,7 @@ fn analyzeCall(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr{
     // get called expr type, ensure it is a function
     const fn_ty = env.typeGet(texprs[0].ty);
     if (fn_ty.* != .func) {
-        const ty_text = try fn_ty.writeAlloc(ally, env.*);
+        const ty_text = try fn_ty.writeAlloc(ally, env.typewelt.*);
         defer ally.free(ty_text);
 
         const text = "expected function, found {s}";
@@ -350,7 +350,7 @@ fn verifyDynamic(env: Env, texpr: TExpr) SemaError!void {
     const class = env.typeGet(texpr.ty).classifyRuntime(env.typewelt.*);
 
     if (class == .analysis) {
-        const ty_text = try texpr.ty.writeAlloc(env.ally, env);
+        const ty_text = try texpr.ty.writeAlloc(env.ally, env.typewelt.*);
         defer env.ally.free(ty_text);
 
         const text = "inferred type `{s}`, which cannot be executed";

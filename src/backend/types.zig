@@ -4,7 +4,6 @@
 const std = @import("std");
 const util = @import("util");
 const builtin = @import("builtin");
-const Env = @import("env.zig");
 
 const Allocator = std.mem.Allocator;
 const Wyhash = std.hash.Wyhash;
@@ -27,25 +26,25 @@ pub const TypeId = packed struct {
     pub fn write(
         self: Self,
         ally: Allocator,
-        env: Env,
+        tw: TypeWelt,
         writer: anytype
     ) WriteError!void {
-        if (env.getTypename(self)) |name| {
+        if (tw.getName(self)) |name| {
             try writer.print("{}", .{name});
         } else {
-            try env.typeGet(self).write(ally, env, writer);
+            try tw.get(self).write(ally, tw, writer);
         }
     }
 
     pub fn writeAlloc(
         self: Self,
         ally: Allocator,
-        env: Env,
+        tw: TypeWelt,
     ) WriteError![]u8 {
         var list = std.ArrayList(u8).init(ally);
         defer list.deinit();
 
-        try self.write(ally, env, list.writer());
+        try self.write(ally, tw, list.writer());
 
         return list.toOwnedSlice();
     }
@@ -491,13 +490,13 @@ pub const Type = union(enum) {
     fn writeList(
         list: []TypeId,
         ally: Allocator,
-        env: Env,
+        tw: TypeWelt,
         writer: anytype
     ) WriteError!void {
         try writer.writeByte('[');
         for (list) |ty, i| {
             if (i > 0) try writer.writeAll(", ");
-            try ty.write(ally, env, writer);
+            try ty.write(ally, tw, writer);
         }
         try writer.writeByte(']');
     }
@@ -506,7 +505,7 @@ pub const Type = union(enum) {
     pub fn write(
         self: Self,
         ally: Allocator,
-        env: Env,
+        tw: TypeWelt,
         writer: anytype
     ) WriteError!void {
         switch (self) {
@@ -525,7 +524,7 @@ pub const Type = union(enum) {
                 var keys = set.keyIterator();
                 var i: usize = 0;
                 while (keys.next()) |key| : (i += 1) {
-                    subtypes[i] = try key.writeAlloc(ally, env);
+                    subtypes[i] = try key.writeAlloc(ally, tw);
                 }
 
                 // sort subtypes
@@ -554,31 +553,31 @@ pub const Type = union(enum) {
             },
             .ptr => |subty| {
                 try writer.writeAll("(Ptr ");
-                try subty.write(ally, env, writer);
+                try subty.write(ally, tw, writer);
                 try writer.writeByte(')');
             },
             .list => |subty| {
                 try writer.writeAll("(List ");
-                try subty.write(ally, env, writer);
+                try subty.write(ally, tw, writer);
                 try writer.writeByte(')');
             },
             .tuple => |tup| {
                 try writer.writeAll("(Tuple");
                 for (tup) |ty| {
                     try writer.writeByte(' ');
-                    try ty.write(ally, env, writer);
+                    try ty.write(ally, tw, writer);
                 }
                 try writer.writeByte(')');
             },
             .func => |func| {
                 try writer.writeAll("(Fn ");
-                try writeList(func.generics, ally, env, writer);
+                try writeList(func.generics, ally, tw, writer);
                 try writer.writeByte(' ');
-                try writeList(func.takes, ally, env, writer);
+                try writeList(func.takes, ally, tw, writer);
                 try writer.writeByte(' ');
-                try writeList(func.contexts, ally, env, writer);
+                try writeList(func.contexts, ally, tw, writer);
                 try writer.writeByte(' ');
-                try func.returns.write(ally, env, writer);
+                try func.returns.write(ally, tw, writer);
                 try writer.writeByte(')');
             },
             .generic => |gid| {
@@ -592,11 +591,15 @@ pub const Type = union(enum) {
         }
     }
 
-    pub fn writeAlloc(self: Self, ally: Allocator, env: Env) WriteError![]u8 {
+    pub fn writeAlloc(
+        self: Self,
+        ally: Allocator,
+        tw: TypeWelt
+    ) WriteError![]u8 {
         var list = std.ArrayList(u8).init(ally);
         defer list.deinit();
 
-        try self.write(ally, env, list.writer());
+        try self.write(ally, tw, list.writer());
 
         return list.toOwnedSlice();
     }

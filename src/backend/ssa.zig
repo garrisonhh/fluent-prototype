@@ -230,13 +230,14 @@ pub const Func = struct {
         env: Env,
         local: Local
     ) !kz.Ref {
-        const ty_text = try self.locals[local.index].writeAlloc(ctx.ally, env);
+        const ty = self.locals[local.index];
+        const ty_text = try ty.writeAlloc(ctx.ally, env.typewelt.*);
         defer ctx.ally.free(ty_text);
 
-        const ty = try ctx.print(.{ .fg = .green }, "{s}", .{ty_text});
+        const ty_tex = try ctx.print(.{ .fg = .green }, "{s}", .{ty_text});
         const var_tex = try ctx.print(.{}, "%{}", .{local.index});
 
-        return try ctx.slap(ty, var_tex, .right, .{ .space = 1 });
+        return try ctx.slap(ty_tex, var_tex, .right, .{ .space = 1 });
     }
 
     fn renderOp(
@@ -399,7 +400,7 @@ pub const Func = struct {
             try header_texs.append(try self.renderLocal(ctx, env, param));
         }
 
-        const returns = try self.returns.writeAlloc(ctx.ally, env);
+        const returns = try self.returns.writeAlloc(ctx.ally, env.typewelt.*);
         defer ctx.ally.free(returns);
 
         try header_texs.appendSlice(&.{

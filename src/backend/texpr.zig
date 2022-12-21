@@ -174,10 +174,11 @@ pub fn render(
     const red = kz.Style{ .fg = .red };
 
     // type for header
-    const ty_text = try env.typeGet(self.ty).writeAlloc(ctx.ally, env);
+    const ty = env.typeGet(self.ty);
+    const ty_text = try ty.writeAlloc(ctx.ally, env.typewelt.*);
     defer ctx.ally.free(ty_text);
 
-    const ty = try ctx.print(faint, "{s}", .{ty_text});
+    const ty_tex = try ctx.print(faint, "{s}", .{ty_text});
 
     // other inline header stuff
     const data = switch (self.data) {
@@ -190,7 +191,7 @@ pub fn render(
     };
 
     // header
-    const header = try ctx.slap(ty, data, .right, .{ .space = 1 });
+    const header = try ctx.slap(ty_tex, data, .right, .{ .space = 1 });
 
     // any children
     var children = ctx.stub();
