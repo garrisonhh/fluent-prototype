@@ -69,6 +69,10 @@ these effects and contexts can be implicitly passed between functions, to
 prevent the kinds of noise you see in Zig code. `with` blocks allow redefining
 effects and handlers.
 
+the generalizability of this system means that things like member functions
+and closures can also be encoded. under the hood, overhead for this can just
+compile down to passing pointers around to any contexts or handlers.
+
 ### distinct and flow types
 
 when I'm writing code of any significant size (like the fluent compiler) I'm
