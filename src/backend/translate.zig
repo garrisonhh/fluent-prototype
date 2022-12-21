@@ -121,7 +121,7 @@ fn translateString(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
 }
 
 fn translateSymbol(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
-    const symbol = Symbol.init(try ally.dupe(u8, expr.loc.getSlice()));
+    const symbol = Symbol.init(expr.loc.getSlice());
 
     // detect reserved keywords
     if (symbol.eql(comptime Symbol.init("true"))) {
@@ -132,7 +132,7 @@ fn translateSymbol(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
 
     // regular symbol
     return SExpr{
-        .data = .{ .symbol = symbol },
+        .data = .{ .symbol = try symbol.clone(ally) },
         .loc = expr.loc,
     };
 }
