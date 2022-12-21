@@ -56,9 +56,6 @@ typenames: *std.AutoHashMapUnmanaged(TypeId, Symbol),
 
 // keys and values are all owned by this env
 ns: Symbol.HashMapUnmanaged(Binding) = .{},
-// also local to this env
-first_generic: Type.GenericId,
-generics: std.ArrayListUnmanaged(TypeId) = .{},
 
 pub fn initBase(ally: Allocator, typewelt: *TypeWelt) Allocator.Error!Self {
     const typenames = std.AutoHashMapUnmanaged(TypeId, Symbol){};
@@ -68,7 +65,6 @@ pub fn initBase(ally: Allocator, typewelt: *TypeWelt) Allocator.Error!Self {
         .typewelt = typewelt,
         .typenames = try util.placeOn(ally, typenames),
         .parent = null,
-        .first_generic = GenericId{ .index = 0 },
     };
 }
 
@@ -78,7 +74,6 @@ pub fn init(parent: *const Self) Self {
         .typewelt = parent.typewelt,
         .typenames = parent.typenames,
         .parent = parent,
-        .first_generic = parent.nextGenericId(),
     };
 }
 
@@ -106,15 +101,6 @@ pub fn def(self: *Self, sym: Symbol, ty: TypeId, value: Bound) DefError!void {
 
     // special type behavior: store any generics or typenames
     if (value == .ty) {
-        const got = self.typewelt.get(value.ty);
-
-        if (got.* == .generic) {
-            const index = got.generic.index;
-            if (index >= self.generics.items.len) {
-                return error.MisplacedGenericId;
-            }
-        }
-
         try self.typenames.put(self.ally, value.ty, try sym.clone(self.ally));
     }
 }
@@ -152,26 +138,6 @@ pub fn getBound(self: Self, sym: Symbol) ?*const Bound {
 }
 
 // type-specific functionality =================================================
-
-fn getGeneric(self: Self, gid: GenericId) TypeId {
-    if (gid.index < self.first_generic.index) {
-        return self.parent.?.getGeneric(gid);
-    }
-
-    return self.generics.items[gid.index - self.first_generic.index];
-}
-
-fn nextGenericId(self: Self) GenericId {
-    const next_index = self.first_generic.index + self.generics.items.len;
-    return GenericId{ .index = next_index };
-}
-
-pub fn defGeneric(self: *Self, ty: TypeId) Allocator.Error!Type {
-    const gid = self.nextGenericId();
-    try self.generics.append(self.ally, ty);
-
-    return Type{ .generic = gid };
-}
 
 pub fn typeIdentify(self: Self, ty: Type) Allocator.Error!TypeId {
     return try self.typewelt.identify(ty);
