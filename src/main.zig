@@ -60,7 +60,7 @@ fn replRead(ally: Allocator) !context.FileHandle {
 }
 
 fn repl(ally: Allocator, prelude: *Env) !void {
-    while (true) {
+    loop: while (true) {
         const input = try replRead(ally);
 
         // check for empty input (exit program)
@@ -74,110 +74,25 @@ fn repl(ally: Allocator, prelude: *Env) !void {
 
         if (is_empty) break;
 
-        // eval and print
-        plumbing.execute(ally, prelude, input) catch |e| {
+        // eval and print any messages
+        const value = plumbing.execute(ally, prelude, input) catch |e| {
             if (e == error.FluentError) {
                 try context.flushMessages();
+                continue :loop;
             } else {
                 return e;
             }
         };
-    }
-}
+        defer value.deinit(ally);
 
-fn fluentTests(ally: Allocator, prelude: *Env) !void {
-    const tests = [_][]const u8{
-        // different kinds of literals
-        "0xDEAD_BEEFi64",
-        "0b1010",
-        "0o777",
-        "1.0001",
-        "0.01f32",
-        "0x1.1",
-        // "\"Hello, \\nWorld!\"",
-        "_this_is_a_hole",
-        "true",
-        "false",
-        // "[1, -2, 3]",
-        // "[[1], [2, 3], [4, 5, 6], _what_could_this_be]",
-        // "as i64 256",
+        // render
+        var ctx = kz.Context.init(ally);
+        defer ctx.deinit();
 
-        // math
-        \\/ (+ 45 69)
-        \\  2
-        ,
-        // \\as i64
-        // \\   + 1i32 1
-        // ,
+        const tex = try value.render(&ctx, prelude.*);
 
-        // conditions
-        \\and
-        \\  or true false
-        \\  not false
-        ,
-        \\or false
-        \\  not true
-        ,
-
-        \\// control flow
-        \\if (or true false)
-        \\   + 34 35
-        \\   * 34 27
-        ,
-
-        // \\// function type
-        // \\def int-to-int Type
-        // \\    Fn [Int] Int
-        // ,
-
-        // \\// interreliant defs
-        // \\def c Int (+ a b)
-        // \\def a Int (* 34 56)
-        // \\def b Int (+ a 1)
-        // \\c
-        // ,
-
-        // \\// out-of-order defs
-        // \\def a T (* 10 10)
-        // \\def b X (+ a 1)
-        // \\def X Type T
-        // \\def T Type Int
-        // \\b
-        // ,
-
-        // \\// simple function
-        // \\def my-add (Fn [Int, Int] Int)
-        // \\    fn [a, b] (+ a b)
-        // \\
-        // \\my-add 45 56
-        // ,
-    };
-
-    for (tests) |@"test"| {
-        // print test input
-        try stdout.writeAll("[Test]\n");
-
-        var lines = std.mem.tokenize(u8, @"test", "\n");
-        while (lines.next()) |line| try stdout.print("> {s}\n", .{line});
-
-        try stdout.writeAll("\n");
-
-        // run test
-        const handle = try context.addExternalSource("test", @"test");
-
-        plumbing.execute(ally, prelude, handle) catch |e| {
-            if (e == error.FluentError) {
-                try context.flushMessages();
-                try stdout.writeAll("test failed.\n\n");
-
-                continue;
-            }
-
-            return e;
-        };
-
-        try context.flushMessages();
-        try stdout.writeAll("test succeeded.\n\n");
+        try ctx.write(tex, stdout);
+        try stdout.writeByte('\n');
     }
 }
 
@@ -188,7 +103,6 @@ const Command = union(enum) {
 
     help: void,
     repl: void,
-    tests: void,
     run: []const u8,
 
     const Meta = struct {
@@ -198,7 +112,6 @@ const Command = union(enum) {
     const MetaTable = util.EnumTable(Enum, Meta, .{
         .{.help, Meta{ .desc = "display this prompt" }},
         .{.repl, Meta{ .desc = "start interactive mode" }},
-        .{.tests, Meta{ .desc = "run internal tests" }},
         .{.run, Meta{
             .desc = "run a program dynamically",
             .params = &[_][]const u8{"file"}
@@ -244,12 +157,18 @@ fn executeFile(ally: Allocator, prelude: *Env, path: []const u8) !void {
     };
 
     // time execution
-    plumbing.execute(ally, prelude, handle) catch |e| {
+    const value = plumbing.execute(ally, prelude, handle) catch |e| {
         try stdout.print("execution failed: {}\n", .{e});
         return;
     };
 
-    try stdout.print("execution succeeded.\n", .{});
+    // render
+    var ctx = kz.Context.init(ally);
+    defer ctx.deinit();
+
+    const tex = try value.render(&ctx, prelude.*);
+
+    try ctx.write(tex, stdout);
 }
 
 const CommandError = error {
@@ -287,7 +206,6 @@ fn parseArgs(ally: Allocator) !Command {
     return switch (tag) {
         .help => Command{ .help = {} },
         .repl => Command{ .repl = {} },
-        .tests => Command{ .tests = {} },
         .run => Command{ .run = try ally.dupe(u8, args[2]) },
     };
 }
@@ -329,7 +247,6 @@ pub fn main() !void {
     switch (cmd) {
         .help => try printHelp(),
         .repl => try repl(ally, &prelude),
-        .tests => try fluentTests(ally, &prelude),
         .run => |path| {
             try executeFile(ally, &prelude, path);
             ally.free(path);

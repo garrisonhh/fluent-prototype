@@ -110,11 +110,6 @@ fn execute(self: *Self, program: Program) RuntimeError!void {
                 const src = Register.of(args[0]);
                 const dst = Register.of(args[1]);
                 self.mov(src, dst);
-
-                // TODO remove
-                if (src.n == SP.n) {
-                    std.debug.print("read sp at {} into %{}\n", .{self.get(dst), dst.n});
-                }
             },
             .imm2 => {
                 const dst = Register.of(args[0]);

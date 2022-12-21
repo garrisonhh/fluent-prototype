@@ -2,18 +2,19 @@
 //! this is code connecting the frontend to the backend for use in main
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const kz = @import("kritzler");
 const frontend = @import("frontend.zig");
 const backend = @import("backend.zig");
-const context = @import("context.zig");
-
-const Allocator = std.mem.Allocator;
 const Env = backend.Env;
+const TExpr = backend.TExpr;
+const context = @import("context.zig");
+const FileHandle = context.FileHandle;
 
 const stdout = std.io.getStdOut().writer();
 
-pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
+pub fn execute(ally: Allocator, env: *Env, handle: FileHandle) !TExpr {
     const now = std.time.nanoTimestamp;
     const start = now();
     var render_time: i128 = 0;
@@ -21,7 +22,7 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
     // parse
     const ast = frontend.parse(ally, handle) catch {
         try context.flushMessages();
-        return;
+        return error.FluentError;
     };
     defer ast.deinit(ally);
 
@@ -95,20 +96,20 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
     }
 
     // run compiled bytecode
-    const final_ty = bc.returns;
-    const final = try backend.run(ally, env.typewelt, bc);
-    defer final.deinit(ally);
+    const return_ty = bc.returns;
+    const value = try backend.run(ally, env.typewelt, bc);
+    defer value.deinit(ally);
+
+    const final = try value.resurrect(ally, env.*, return_ty);
 
     // render final value
     {
         const t = now();
-        const revived = try final.resurrect(ally, env.*, final_ty);
-        defer revived.deinit(ally);
 
         var ctx = kz.Context.init(ally);
         defer ctx.deinit();
 
-        const tex = try revived.render(&ctx, local);
+        const tex = try final.render(&ctx, local);
 
         try stdout.writeAll("[Value]\n");
         try ctx.write(tex, stdout);
@@ -126,4 +127,6 @@ pub fn execute(ally: Allocator, env: *Env, handle: context.FileHandle) !void {
         const render_secs = @intToFloat(f64, render_time) * 1e-9;
         try stdout.print("render time {d:.6}s.\n", .{render_secs});
     }
+
+    return final;
 }

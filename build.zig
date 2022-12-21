@@ -19,4 +19,16 @@ pub fn build(b: *std.build.Builder) void {
     exe.addPackagePath("util", "lib/util/util.zig");
 
     exe.install();
+
+    // tests
+    const tests = b.addTest("src/tests.zig");
+    tests.setTarget(target);
+    tests.setBuildMode(mode);
+    tests.setOutputDir(".");
+
+    tests.addPackagePath("kritzler", "lib/kritzler/kritzler.zig");
+    tests.addPackagePath("util", "lib/util/util.zig");
+
+    const test_step = b.step("test", "run fluent tests");
+    test_step.dependOn(&tests.step);
 }

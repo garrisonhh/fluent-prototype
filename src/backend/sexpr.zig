@@ -73,6 +73,25 @@ pub const Number = struct {
         };
     }
 
+    pub fn eql(self: @This(), other: @This()) bool {
+        // compare type
+        const Layout = util.Number.Layout;
+        if (self.bits != other.bits
+         or @as(Layout, self.data) != @as(Layout, other.data)) {
+            return false;
+        }
+
+        // compare bytes
+        var mem: [16]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&mem);
+        const ally = fba.allocator();
+
+        const bytes1 = self.asBytes(ally) catch unreachable;
+        const bytes2 = other.asBytes(ally) catch unreachable;
+
+        return std.mem.eql(u8, bytes1, bytes2);
+    }
+
     pub fn format(
         self: @This(),
         comptime fmt: []const u8,

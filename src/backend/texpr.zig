@@ -1,4 +1,5 @@
-//! contains all of the information of SExpr, but with extra analysis applied.
+//! contains all of the information of SExpr, but with extra type information.
+//! this is the glorious holy altar to which we must sacrifice all data.
 //!
 //! instances own all data.
 
@@ -84,6 +85,38 @@ pub const Data = union(enum) {
             },
         };
     }
+
+    fn eqlChildren(children: []const Self, other_children: []const Self) bool {
+        if (children.len != other_children.len) {
+            return false;
+        }
+
+        var i: usize = 0;
+        while (i < children.len) : (i += 1) {
+            if (!children[i].eql(other_children[i])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    fn eql(data: Data, other: Data) bool {
+        if (@as(Tag, data) != @as(Tag, other)) {
+            return false;
+        }
+
+        return switch (data) {
+            .@"bool" => |b| b == other.@"bool",
+            .number => |n| n.eql(other.number),
+            .string => |sym| sym.eql(other.string),
+            .symbol => |sym| sym.eql(other.symbol),
+            .call => |call| eqlChildren(call, other.call),
+            .do => |do| eqlChildren(do, other.do),
+            .list => |list| eqlChildren(list, other.list),
+            .cast => |to| to.eql(other.cast.*),
+        };
+    }
 };
 
 data: Data,
@@ -108,6 +141,14 @@ pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         .loc = self.loc,
         .ty = self.ty,
     };
+}
+
+pub fn eql(self: Self, other: Self) bool {
+    if (!self.ty.eql(other.ty)) {
+        return false;
+    }
+
+    return self.data.eql(other.data);
 }
 
 /// gets children of any TExpr if they exist.
