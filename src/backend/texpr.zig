@@ -4,24 +4,25 @@
 //! instances own all data.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const util = @import("util");
+const Symbol = util.Symbol;
 const kz = @import("kritzler");
 const context = @import("../context.zig");
+const Loc = context.Loc;
 const types = @import("types.zig");
+const TypeId = types.TypeId;
 const Env = @import("env.zig");
 const SExpr = @import("sexpr.zig");
-
-const Allocator = std.mem.Allocator;
-const Symbol = util.Symbol;
-const Loc = context.Loc;
-const TypeId = types.TypeId;
+const canon = @import("canon.zig");
 
 const Self = @This();
 
-pub const Number = SExpr.Number;
+pub const Number = canon.Number;
 
 pub const Tag = std.meta.Tag(Data);
 pub const Data = union(enum) {
+    namespace,
     @"bool": bool,
     number: Number,
     string: Symbol,
@@ -35,7 +36,7 @@ pub const Data = union(enum) {
 
     pub fn deinit(self: Data, ally: Allocator) void {
         switch (self) {
-            .@"bool", .number => {},
+            .namespace, .@"bool", .number => {},
             .string, .symbol => |sym| ally.free(sym.str),
             .call, .do, .list => |exprs| {
                 for (exprs) |expr| expr.deinit(ally);
@@ -74,7 +75,7 @@ pub const Data = union(enum) {
 
     pub fn clone(data: Data, ally: Allocator) Allocator.Error!Data {
         return switch (data) {
-            .@"bool", .number => data,
+            .namespace, .@"bool", .number => data,
             .string => |sym| Data{ .string = try sym.clone(ally) },
             .symbol => |sym| Data{ .symbol = try sym.clone(ally) },
             .call => |exprs| Data{ .call = try cloneChildren(exprs, ally) },
@@ -107,6 +108,7 @@ pub const Data = union(enum) {
         }
 
         return switch (data) {
+            .namespace => true,
             .@"bool" => |b| b == other.@"bool",
             .number => |n| n.eql(other.number),
             .string => |sym| sym.eql(other.string),

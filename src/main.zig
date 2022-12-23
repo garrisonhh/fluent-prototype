@@ -1,14 +1,13 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
+const stdout = std.io.getStdOut().writer();
+const stderr = std.io.getStdErr().writer();
 const builtin = @import("builtin");
 const kz = @import("kritzler");
 const util = @import("util");
 const context = @import("context.zig");
 const plumbing = @import("plumbing.zig");
 const backend = @import("backend.zig");
-
-const stdout = std.io.getStdOut().writer();
-const stderr = std.io.getStdErr().writer();
-const Allocator = std.mem.Allocator;
 const Env = backend.Env;
 
 const c = @cImport({
@@ -221,10 +220,7 @@ pub fn main() !void {
     try context.init(ally);
     defer context.deinit();
 
-    var typewelt = backend.TypeWelt.init(ally);
-    defer typewelt.deinit();
-
-    var prelude = try backend.initPrelude(ally, &typewelt);
+    var prelude = try backend.generatePrelude(ally);
     defer prelude.deinit();
 
     // the rest of the fucking owl
@@ -239,7 +235,8 @@ pub fn main() !void {
     if (builtin.mode == .Debug) {
         // display prelude as a sanity check
         try stdout.writeAll("[Prelude]\n");
-        try prelude.dump(ally, stdout);
+        // try prelude.dump(ally, stdout);
+        try stdout.writeAll("TODO dump prelude");
         try stdout.writeByte('\n');
     }
 

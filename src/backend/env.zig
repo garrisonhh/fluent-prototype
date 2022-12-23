@@ -1,225 +1,106 @@
-//! env is the fluent namespace abstraction.
+//! env manages the state of fluent's dynamic backend runtime.
 //!
-//! envs own and manage everything inside their namespace.
+//! fluent's backend runtime consists of two components:
+//! - the TypeWelt
+//!   - this is the context for managing fluent types. there are two canonical
+//!     representations a fluent type can take, the Type and the TypeId.
+//!     - Type is a tagged union as you would expect, a structured type repr
+//!     - TypeId is a handle which acts like a `*const Type` when paired with
+//!       the TypeWelt
+//!   - TypeWelt is the entire set of Types that have and will ever exist in a
+//!     fluent program
+//!     - it also stores some metadata, like typenames
+//! - the NameMap
+//!   - this is an associative map including all of the names that have and will
+//!     ever exist in a fluent program
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const util = @import("util");
+const Symbol = util.Symbol;
+const Name = util.Name;
+const NameMap = util.NameMap;
 const kz = @import("kritzler");
 const types = @import("types.zig");
-
-const Allocator = std.mem.Allocator;
-const Symbol = util.Symbol;
 const TypeWelt = types.TypeWelt;
 const TypeId = types.TypeId;
 const Type = types.Type;
-const GenericId = Type.GenericId;
+const TExpr = @import("texpr.zig");
 
 const Self = @This();
 
-pub const DefError =
-    Allocator.Error
- || error {
-    SymbolRedef,
-    MisplacedGenericId,
-};
-
-pub const BuiltinOp = enum {
-    add,
-    sub,
-    mul,
-    div,
-    @"and",
-    @"or",
-    not,
-};
-
-pub const BuiltinFlow = enum {
-    @"if",
-};
-
-pub const Bound = union(enum) {
-    builtin_op: BuiltinOp,
-    builtin_flow: BuiltinFlow,
-    ty: TypeId,
-};
+pub const root = Name.root;
 
 const Binding = struct {
     ty: TypeId,
-    value: Bound
+    value: TExpr,
 };
 
+const Bindings = NameMap(Binding);
+
 ally: Allocator,
-parent: ?*const Self,
-typewelt: *TypeWelt,
+tw: TypeWelt = .{},
+// env owns everything in every binding
+nmap: Bindings = .{},
 
-// keys and values are all owned by this env
-ns: Symbol.HashMapUnmanaged(Binding) = .{},
-
-pub fn initBase(ally: Allocator, typewelt: *TypeWelt) Allocator.Error!Self {
+pub fn init(ally: Allocator) Allocator.Error!Self {
     return Self{
         .ally = ally,
-        .typewelt = typewelt,
-        .parent = null,
-    };
-}
-
-pub fn init(parent: *const Self) Self {
-    return Self{
-        .ally = parent.ally,
-        .parent = parent,
-        .typewelt = parent.typewelt,
     };
 }
 
 pub fn deinit(self: *Self) void {
-    var keys = self.ns.keyIterator();
-    while (keys.next()) |key| self.ally.free(key.str);
-    self.ns.deinit(self.ally);
+    self.tw.deinit(self.ally);
+    self.nmap.deinit(self.ally);
 }
 
-pub fn def(self: *Self, sym: Symbol, ty: TypeId, value: Bound) DefError!void {
-    // place symbol
-    const res = try self.ns.getOrPut(self.ally, sym);
-    if (res.found_existing) return error.SymbolRedef;
-
-    const owned = try sym.clone(self.ally);
-    res.key_ptr.* = owned;
-    res.value_ptr.* = Binding{ .ty = ty, .value = value };
-
-    // special type behavior: store any generics or typenames
-    if (value == .ty) {
-        self.typewelt.setName(value.ty, owned) catch |e| {
-            if (e == error.RenamedType) return error.SymbolRedef;
-            return @errSetCast(DefError, e);
-        };
-    }
+pub fn identify(self: *Self, ty: Type) Allocator.Error!TypeId {
+    return self.tw.identify(self.ally, ty);
 }
 
-pub fn contains(self: Self, sym: Symbol) bool {
-    if (self.ns.contains(sym)) {
-        return true;
-    } else if (self.parent) |parent| {
-        return parent.contains(sym);
-    } else {
-        return false;
-    }
+// accessors ===================================================================
+
+pub fn getValue(self: *Self, name: Name) TExpr {
+    return self.nmap.get(name).value;
 }
 
-fn get(self: Self, sym: Symbol) ?*Binding {
-    if (self.ns.getPtr(sym)) |binding| {
-        return binding;
-    } else if (self.parent) |parent| {
-        return parent.get(sym);
-    } else {
-        return null;
-    }
+pub fn getType(self: *Self, name: Name) TypeId {
+    return self.nmap.get(name).ty;
 }
 
-pub fn getType(self: Self, sym: Symbol) ?TypeId {
-    return if (self.get(sym)) |binding| binding.ty else null;
-}
+// definitions =================================================================
 
-pub fn getTypename(self: Self, ty: TypeId) ?Symbol {
-    return self.typewelt.getName(ty);
-}
+pub const DefError = Allocator.Error || Bindings.PutError;
 
-pub fn getBound(self: Self, sym: Symbol) ?*const Bound {
-    return if (self.get(sym)) |binding| &binding.value else null;
-}
-
-// type-specific functionality =================================================
-
-pub fn typeIdentify(self: Self, ty: Type) Allocator.Error!TypeId {
-    return try self.typewelt.identify(ty);
-}
-
-pub fn typeIdentifyNumber(
-    self: Self,
-    layout: util.Number.Layout,
-    bits: ?u8
-) Allocator.Error!TypeId {
-    const ty = Type{ .number = .{ .layout = layout, .bits = bits } };
-    return try self.typeIdentify(ty);
-}
-
-pub fn typeGet(self: Self, ty: TypeId) *const Type {
-    return self.typewelt.get(ty);
-}
-
-pub fn typeDef(self: *Self, sym: Symbol, ty: Type) DefError!TypeId {
-    const id = try self.typeIdentify(ty);
-    try self.def(sym, try self.typeIdentify(Type{ .ty = {} }), .{ .ty = id });
-
-    return id;
-}
-
-// display =====================================================================
-
-pub fn dump(self: Self, ally: Allocator, writer: anytype) !void {
-    var ctx = kz.Context.init(ally);
-    defer ctx.deinit();
-
-    // collect variables and sort alphabetically
-    const EnvVar = struct {
-        name: []const u8,
-        ty: TypeId,
-        bound: *const Bound,
-
-        pub fn lessThan(context: void, a: @This(), b: @This()) bool {
-            _ = context;
-            return std.ascii.lessThanIgnoreCase(a.name, b.name);
-        }
+pub fn def(
+    self: *Self,
+    scope: Name,
+    sym: Symbol,
+    ty: TypeId,
+    value: TExpr
+) DefError!Name {
+    const binding = Binding{
+        .ty = ty,
+        .value = try value.clone(self.ally),
     };
 
-    var vars = std.ArrayList(EnvVar).init(ally);
-    defer vars.deinit();
+    return self.nmap.put(self.ally, scope, sym, binding);
+}
 
-    var iter = self.ns.iterator();
-    while (iter.next()) |entry| {
-        try vars.append(EnvVar{
-            .name = entry.key_ptr.str,
-            .ty = entry.value_ptr.ty,
-            .bound = &entry.value_ptr.value
-        });
-    }
+pub fn defNamespace(self: *Self, scope: Name, sym: Symbol) DefError!Name {
+    const nsty = try self.identify(Type{ .namespace = {} });
+    return self.def(scope, sym, nsty, TExpr{ .ty = .namespace });
+}
 
-    std.sort.sort(EnvVar, vars.items, {}, EnvVar.lessThan);
+pub fn defType(
+    self: *Self,
+    scope: Name,
+    sym: Symbol,
+    value: TypeId
+) DefError!Name {
+    const tyty = try self.identify(Type{ .ty = {} });
+    const name = self.def(scope, sym, tyty, TExpr{ .ty = value });
+    try self.tw.setName(self.ally, value, name);
 
-    // render variables
-    var list = ctx.stub();
-    for (vars.items) |ev| {
-        const ty = self.typeGet(ev.ty);
-        const ty_text = try ty.writeAlloc(ally, self.typewelt.*);
-        defer ally.free(ty_text);
-
-        const red = kz.Style{ .fg = .red };
-        const row = [_]kz.Ref{
-            try ctx.print(.{}, "{s}: ", .{ev.name}),
-            try ctx.print(.{ .fg = .green }, "{s}", .{ty_text}),
-            try ctx.print(.{}, " = ", .{}),
-            switch (ev.bound.*) {
-                .builtin_op => |op| op: {
-                    const tag = @tagName(op);
-                    const text = "<operator> {s}";
-                    break :op try ctx.print(red, text, .{tag});
-                },
-                .builtin_flow => |flow| flow: {
-                    const tag = @tagName(flow);
-                    const text = "<flow> {s}";
-                    break :flow try ctx.print(red, text, .{tag});
-                },
-                .ty => |id| ty: {
-                    const got = self.typeGet(id);
-                    const text = try got.writeAlloc(ally, self.typewelt.*);
-                    defer ally.free(text);
-                    break :ty try ctx.print(.{}, "{s}", .{text});
-                },
-            }
-        };
-
-        const row_tex = try ctx.stack(&row, .right, .{});
-        list = try ctx.slap(list, row_tex, .bottom, .{});
-    }
-
-    try ctx.write(list, writer);
+    return name;
 }

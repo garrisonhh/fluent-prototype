@@ -5,7 +5,7 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const bytecode = @import("bytecode.zig");
 const Program = bytecode.Program;
-const canon = @import("canon.zig");
+const canon = @import("../canon.zig");
 const TypeWelt = @import("../types.zig").TypeWelt;
 const Value = @import("../value.zig");
 

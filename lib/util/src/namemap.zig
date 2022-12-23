@@ -13,6 +13,14 @@ const Symbol = @import("symbol.zig");
 pub const Name = struct {
     const Self = @This();
 
+    pub const root = root: {
+        const syms: []Symbol = &.{};
+        break :root Self{
+            .syms = syms,
+            .hash = hashSyms(syms),
+        };
+    };
+
     syms: []Symbol,
     hash: u64,
 
@@ -41,11 +49,6 @@ pub const Name = struct {
             .syms = syms,
             .hash = hashSyms(syms),
         };
-    }
-
-    fn initRoot() Self {
-        var fba = std.heap.FixedBufferAllocator.init(&.{});
-        return Self.init(fba.allocator(), &.{}) catch unreachable;
     }
 
     fn deinit(self: Self, ally: Allocator) void {
@@ -106,19 +109,12 @@ pub fn NameMap(comptime V: type) type {
     return struct {
         const Self = @This();
 
-        root: Name,
         /// set of owned symbols
         syms: Symbol.HashMapUnmanaged(void) = .{},
         /// set of owned names
         names: Name.HashMapUnmanaged(void) = .{},
         /// maps names to values
         map: Name.HashMapUnmanaged(V) = .{},
-
-        pub fn init() Self {
-            return Self{
-                .root = Name.initRoot(),
-            };
-        }
 
         pub fn deinit(self: *Self, ally: Allocator) void {
             // deinit syms
@@ -153,39 +149,36 @@ pub fn NameMap(comptime V: type) type {
             return res.key_ptr.*;
         }
 
+        pub const PutError = error { NameRedef };
+
+        /// puts a value into the table and returns its unique name
+        ///
         /// given an owned name and an unowned symbol, create a new name which
         /// represents this symbol inside the name as a namespace
-        pub fn into(
+        pub fn put(
             self: *Self,
             ally: Allocator,
             ns: Name,
-            sym: Symbol
+            sym: Symbol,
+            value: V
         ) Allocator.Error!Name {
             const owned = try self.acquireSym(ally, sym);
             const name = try Name.initAppend(ally, ns, owned);
 
             const res = try self.names.getOrPut(ally, name);
             if (res.found_existing) {
-                name.deinit(ally);
+                return error.NameRedef;
             } else {
                 res.key_ptr.* = name;
+                res.value_ptr.* = value;
             }
 
             return res.key_ptr.*;
         }
 
-        pub fn put(
-            self: *Self,
-            ally: Allocator,
-            name: Name,
-            value: V
-        ) Allocator.Error!void {
-            try self.map.put(ally, name, value);
-        }
-
-        /// since you cannot acquire a name without going through a namemap,
-        /// this function should never fail.
         pub fn get(self: *Self, name: Name) V {
+            // since `put` is the only way to acquire a name, `get` should never
+            // be able to fail
             return self.map.get(name).?;
         }
     };
@@ -203,10 +196,10 @@ test "namemap" {
     var kvs = std.ArrayList(KV).init(ally);
     defer kvs.deinit();
 
-    var nmap = NameMap(V).init();
+    var nmap = NameMap(V){};
     defer nmap.deinit(ally);
 
-    try kvs.append(.{ .k = nmap.root, .v = 0 });
+    try kvs.append(.{ .k = Name.root, .v = 0 });
 
     var i: usize = 0;
     while (i < 20) : (i += 1) {

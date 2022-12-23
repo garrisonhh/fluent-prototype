@@ -12,7 +12,7 @@ const Inst = bytecode.Inst;
 const Program = bytecode.Program;
 const Vm = @import("bytecode/vm.zig");
 const Register = Vm.Register;
-const canon = @import("bytecode/canon.zig");
+const canon = @import("canon.zig");
 
 const InstRef = packed struct {
     const Self = @This();

@@ -2,12 +2,11 @@
 //! of in-memory objects being used.
 
 const std = @import("std");
-const util = @import("util");
-const builtin = @import("builtin");
-
 const Allocator = std.mem.Allocator;
 const Wyhash = std.hash.Wyhash;
+const util = @import("util");
 const Symbol = util.Symbol;
+const builtin = @import("builtin");
 
 pub const TypeId = packed struct {
     const Self = @This();
@@ -84,26 +83,19 @@ pub const TypeWelt = struct {
         std.hash_map.default_max_load_percentage
     );
 
-    ally: Allocator,
     types: std.ArrayListUnmanaged(*Type) = .{}, // TypeId -> Type
     // symbols are unowned, aka probably owned by env
     names: std.ArrayListUnmanaged(?Symbol) = .{},
     map: TypeMap = .{}, // Type -> TypeId
 
-    pub fn init(ally: Allocator) Self {
-        return Self{
-            .ally = ally,
-        };
-    }
-
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *Self, ally: Allocator) void {
         for (self.types.items) |ptr| {
-            ptr.deinit(self.ally);
+            ptr.deinit(ally);
             self.ally.destroy(ptr);
         }
-        self.types.deinit(self.ally);
-        self.names.deinit(self.ally);
-        self.map.deinit(self.ally);
+        self.types.deinit(ally);
+        self.names.deinit(ally);
+        self.map.deinit(ally);
     }
 
     pub fn get(self: Self, id: TypeId) *const Type {
@@ -114,13 +106,14 @@ pub const TypeWelt = struct {
 
     pub fn setName(
         self: *Self,
+        ally: Allocator,
         id: TypeId,
         name: Symbol
     ) (Allocator.Error || RenameError)!void {
         // expand names array
         if (self.names.items.len <= id.index) {
             const diff = 1 + id.index - self.names.items.len;
-            try self.names.appendNTimes(self.ally, null, diff);
+            try self.names.appendNTimes(ally, null, diff);
         }
 
         if (self.names.items[id.index] != null) {
@@ -136,20 +129,24 @@ pub const TypeWelt = struct {
     }
 
     /// retrieves an established ID or creates a new one.
-    pub fn identify(self: *Self, ty: Type) Allocator.Error!TypeId {
-        const res = try self.map.getOrPut(self.ally, &ty);
+    pub fn identify(
+        self: *Self,
+        ally: Allocator,
+        ty: Type
+    ) Allocator.Error!TypeId {
+        const res = try self.map.getOrPut(ally, &ty);
         if (!res.found_existing) {
             // find id
             const id = TypeId{ .index = self.types.items.len };
 
             // allocate for type and clone
-            const cloned = try util.placeOn(self.ally, try ty.clone(self.ally));
+            const cloned = try util.placeOn(ally, try ty.clone(ally));
 
             // store in internal data structures
             res.key_ptr.* = cloned;
             res.value_ptr.* = id;
 
-            try self.types.append(self.ally, cloned);
+            try self.types.append(ally, cloned);
         }
 
         return res.value_ptr.*;
@@ -160,7 +157,6 @@ pub const Type = union(enum) {
     const Self = @This();
 
     pub const Tag = std.meta.Tag(Self);
-
     pub const Set = std.AutoHashMapUnmanaged(TypeId, void);
 
     pub const Number = struct {
@@ -186,12 +182,16 @@ pub const Type = union(enum) {
     };
 
     /// generics only exist in the context of the current function
-    /// TODO this should contain the generic's `Name`
+    /// TODO maybe remove this and tackle generics a different way, like with
+    /// storing source code as TExprs and then remapping generic names to
+    /// TypeIds through scoping, and then generate TExprs and SSA for each
+    /// generic usage of a function
     pub const GenericId = struct { index: usize };
 
     // unique
     unit,
     hole,
+    namespace,
     generic: GenericId,
 
     // dynamic time
@@ -228,8 +228,8 @@ pub const Type = union(enum) {
 
     pub fn deinit(self: *Self, ally: Allocator) void {
         switch (self.*) {
-            .unit, .hole, .symbol, .any, .ty, .number, .list, .generic,
-            .@"bool", .@"ptr"
+            .unit, .hole, .namespace, .symbol, .any, .ty, .number, .list,
+            .generic, .@"bool", .@"ptr"
                 => {},
             .set => |*set| set.deinit(ally),
             .atom => |sym| ally.free(sym.str),
@@ -247,7 +247,7 @@ pub const Type = union(enum) {
         wyhash.update(asBytes(&std.meta.activeTag(self)));
 
         switch (self) {
-            .unit, .symbol, .hole, .any, .ty, .@"bool" => {},
+            .unit, .symbol, .hole, .any, .ty, .@"bool", .namespace => {},
             .generic => |gid| wyhash.update(asBytes(&gid)),
             .set => {
                 // NOTE if there is a serious issue here, figure out if there is
@@ -288,7 +288,7 @@ pub const Type = union(enum) {
         if (@as(Tag, self) != @as(Tag, ty)) return false;
 
         return switch (self) {
-            .unit, .symbol, .hole, .any, .ty, .@"bool" => true,
+            .unit, .symbol, .hole, .any, .ty, .@"bool", .namespace => true,
             .generic => |gid| gid.index == ty.generic.index,
             .set => |set| set: {
                 if (set.count() != ty.set.count()) {
@@ -317,8 +317,8 @@ pub const Type = union(enum) {
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch (self) {
-            .unit, .symbol, .hole, .any, .number, .ty, .list, .generic,
-            .@"bool", .ptr
+            .unit, .symbol, .hole, .namespace .any, .number, .ty, .list,
+            .generic, .@"bool", .ptr
                 => self,
             .set => |set| Self{ .set = try set.clone(ally) },
             .atom => |sym| Self{ .atom = try sym.clone(ally) },
@@ -357,7 +357,7 @@ pub const Type = union(enum) {
         // concrete matching
         return switch (target) {
             .any, .set, .hole, .generic => unreachable,
-            .unit, .@"bool", .symbol, .ty => true,
+            .unit, .@"bool", .symbol, .ty, .namespace => true,
             .atom => |sym| sym.eql(target.atom),
             .tuple => self.eql(target),
             .number => |num| num: {
@@ -450,7 +450,7 @@ pub const Type = union(enum) {
     /// at what point in the compilation cycle is this type valid?
     pub fn classifyRuntime(self: Self, typewelt: TypeWelt) RuntimeClass {
         return switch (self) {
-            .any, .set, .hole, .generic => .analysis,
+            .any, .set, .hole, .generic, .namespace => .analysis,
             .ty, .symbol => .dynamic,
             .unit, .atom, .@"bool" => .static,
             .number => |num| if (num.bits != null) .static else .dynamic,
@@ -469,13 +469,12 @@ pub const Type = union(enum) {
         };
     }
 
-    /// this function assumes that types have been checked to be part of the
-    /// dynamic runtime at least
-    pub fn sizeOf(self: Self, typewelt: TypeWelt) usize {
-        _ = typewelt;
+    /// provides a size for dynamic and static types
+    pub fn sizeOf(self: Self, tw: TypeWelt) usize {
+        std.debug.assert(self.classifyRuntime(tw) != .analysis);
 
         return switch (self) {
-            .any, .set, .hole, .generic => unreachable,
+            .any, .set, .hole, .generic, .namespace => unreachable,
             .number => |num| (num.bits orelse 64) / 8,
             .@"bool" => 1,
             .ptr => 8,

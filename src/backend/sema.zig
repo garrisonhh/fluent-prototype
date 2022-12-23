@@ -4,7 +4,6 @@ const util = @import("util");
 const kz = @import("kritzler");
 const context = @import("../context.zig");
 const types = @import("types.zig");
-const fluent = @import("fluent.zig");
 const Env = @import("env.zig");
 const SExpr = @import("sexpr.zig");
 const TExpr = @import("texpr.zig");
@@ -176,12 +175,14 @@ fn analyzeCall(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr{
 
     if (head.data == .symbol) {
         // builtins require special type analysis
-        if (fluent.Builtin.get(head.data.symbol)) |tag| {
-            return switch (tag) {
-                .do => try analyzeDo(env, expr, outward),
-                .as => try analyzeAs(env, expr, outward),
-                .list => try analyzeList(env, expr, outward),
-            };
+        const sym = head.data.symbol;
+
+        if (sym == comptime Symbol.init("do")) {
+            return try analyzeDo(env, expr, outward);
+        } else if (sym == comptime Symbol.init("as")) {
+            return try analyzeAs(env, expr, outward);
+        } else if (sym == comptime Symbol.init("list")) {
+            return try analyzeList(env, expr, outward);
         }
     }
 

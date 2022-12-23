@@ -3,6 +3,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+pub const Number = @import("canon/number.zig");
+pub usingnamespace @import("canon/prelude.zig");
+
 /// given up to 8 bytes, return canonical u64 representation for vm
 pub fn toCanonical(bytes: []const u8) u64 {
     std.debug.assert(bytes.len <= 8);

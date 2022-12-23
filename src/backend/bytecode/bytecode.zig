@@ -5,7 +5,7 @@ const kz = @import("kritzler");
 const Allocator = std.mem.Allocator;
 const types = @import("../types.zig");
 const TypeId = types.TypeId;
-const canon = @import("canon.zig");
+const canon = @import("../canon.zig");
 
 /// a single operation
 pub const Opcode = enum(u8) {
