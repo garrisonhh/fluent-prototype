@@ -37,7 +37,7 @@ pub const Name = struct {
         return wyhash.final();
     }
 
-    fn initOwned(syms: []const Symbol) NameError!Self {
+    fn initOwned(syms: []Symbol) NameError!Self {
         if (syms.len > MAX_LENGTH) {
             return error.NameTooLong;
         }
@@ -192,12 +192,12 @@ pub fn NameMap(comptime V: type) type {
 
         pub fn getWithin(self: *Self, ns: Name, sym: Symbol) ?V {
             var buf: [Name.MAX_LENGTH]Symbol = undefined;
-            std.mem.copy(Symbol);
+            std.mem.copy(Symbol, &buf, ns.syms);
             buf[ns.syms.len] = sym;
 
             var syms = buf[0..ns.syms.len + 1];
             while (syms.len > 0) {
-                const name = Name.initOwned(syms);
+                const name = Name.initOwned(syms) catch unreachable;
 
                 if (self.map.get(name)) |value| {
                     return value;

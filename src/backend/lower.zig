@@ -128,45 +128,12 @@ fn lowerCall(
     func: *ssa.FuncBuilder,
     expr: TExpr
 ) LowerError!Local {
-    const ally = func.ally;
-    const exprs = expr.data.call;
-    std.debug.assert(exprs.len > 0);
+    _ = env;
+    _ = prog;
+    _ = func;
+    _ = expr;
 
-    const head = exprs[0];
-    const tail = exprs[1..];
-
-    // builtin functions and operators have their own logic
-    // TODO is this the right way to do this?
-    if (head.data == .symbol) detect_op: {
-        const bound = env.getBound(head.data.symbol) orelse break :detect_op;
-
-        switch (bound.*) {
-            .builtin_op => {
-                // lower args
-                const args = try ally.alloc(Local, tail.len);
-                defer ally.free(args);
-
-                for (tail) |param_expr, i| {
-                    args[i] = try lowerExpr(env, prog, func, param_expr);
-                }
-
-                // output local
-                const out = try func.addLocal(expr.ty);
-
-                try lowerBuiltinOp(func, out, bound.builtin_op, args);
-
-                return out;
-            },
-            .builtin_flow => |flow| return switch (flow) {
-                .@"if" => try lowerIf(env, prog, func, expr),
-            },
-            else => @panic("TODO lower a call to any symbol")
-        }
-    }
-
-    // regular functions
-
-    @panic("TODO functions for real");
+    @panic("TODO function calls");
 }
 
 fn lowerDo(

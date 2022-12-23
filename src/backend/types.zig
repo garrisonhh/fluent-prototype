@@ -330,7 +330,8 @@ pub const Type = union(enum) {
     /// remain well-defined, zB u32 coercing to u64
     pub fn coercesTo(
         self: Self,
-        typewelt: *TypeWelt,
+        ally: Allocator,
+        tw: *TypeWelt,
         target: Self
     ) Allocator.Error!bool {
         // special logic
@@ -347,7 +348,7 @@ pub const Type = union(enum) {
                     return true;
                 } else {
                     // types coerce to sets containing types
-                    return target.set.contains(try typewelt.identify(self));
+                    return target.set.contains(try tw.identify(ally, self));
                 }
             },
             else => if (@as(Tag, self) != @as(Tag, target)) return false
@@ -385,29 +386,30 @@ pub const Type = union(enum) {
     /// given two types, create a type that fits the values of each
     pub fn unify(
         self: Self,
-        typewelt: *TypeWelt,
+        ally: Allocator,
+        tw: *TypeWelt,
         other: Self
     ) Allocator.Error!TypeId {
         std.debug.assert(self != .generic and other != .generic);
 
         if (self.eql(other)) {
-            return try typewelt.identify(self);
+            return try tw.identify(ally, self);
         } else if (self == .any or other == .any) {
-            return try typewelt.identify(Type{ .any = {} });
-        } else if (try self.coercesTo(typewelt, other)) {
-            return try typewelt.identify(other);
-        } else if (try other.coercesTo(typewelt, self)) {
-            return try typewelt.identify(self);
+            return try tw.identify(ally, Type{ .any = {} });
+        } else if (try self.coercesTo(ally, tw, other)) {
+            return try tw.identify(ally, other);
+        } else if (try other.coercesTo(ally, tw, self)) {
+            return try tw.identify(ally, self);
         }
 
         // need a new set to fit both
-        var unified = try Self.initSet(typewelt.ally, &.{
-            try typewelt.identify(self),
-            try typewelt.identify(other)
+        var unified = try Self.initSet(ally, &.{
+            try tw.identify(ally, self),
+            try tw.identify(ally, other)
         });
-        defer unified.deinit(typewelt.ally);
+        defer unified.deinit(ally);
 
-        return try typewelt.identify(unified);
+        return try tw.identify(ally, unified);
     }
 
     /// classifications for the runtime of a type; aka stages of the execution

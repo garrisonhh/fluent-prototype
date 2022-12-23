@@ -60,7 +60,7 @@ pub fn identify(self: *Self, ty: Type) Allocator.Error!TypeId {
 
 /// searches up through the namespace for a symbol
 pub fn seek(self: *Self, scope: Name, sym: Symbol) ?TExpr {
-    return if (self.nmap.getWithin(scope, sym)) |b| b.value orelse null;
+    return if (self.nmap.getWithin(scope, sym)) |b| b.value else null;
 }
 
 /// searches for an exact name

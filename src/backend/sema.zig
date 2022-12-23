@@ -25,7 +25,7 @@ pub const SemaError =
  || Env.DefError;
 
 fn holeError(env: Env, loc: ?Loc, ty: TypeId) SemaError {
-    const ty_text = try ty.writeAlloc(env.ally, env.tw.*);
+    const ty_text = try ty.writeAlloc(env.ally, env.tw);
     defer env.ally.free(ty_text);
 
     _ = try context.post(.note, loc, "this hole expects {s}", .{ty_text});
@@ -33,9 +33,9 @@ fn holeError(env: Env, loc: ?Loc, ty: TypeId) SemaError {
 }
 
 fn expectError(env: Env, loc: ?Loc, expected: TypeId, found: TypeId) SemaError {
-    const exp_text = try expected.writeAlloc(env.ally, env.typewelt.*);
+    const exp_text = try expected.writeAlloc(env.ally, env.tw);
     defer env.ally.free(exp_text);
-    const found_text = try found.writeAlloc(env.ally, env.typewelt.*);
+    const found_text = try found.writeAlloc(env.ally, env.tw);
     defer env.ally.free(found_text);
 
     const msg = try context.post(.err, loc, "expected type {s}", .{exp_text});
@@ -135,8 +135,9 @@ fn analyzeAs(
     const body_expr = exprs[2];
 
     // TODO this is a temporary hack before I can compile types by execution
+    // TODO replace this with a call to `eval`
     const anno_ty = if (type_expr.data == .symbol) sym: {
-        break :sym env.getBound(type_expr.data.symbol).?.ty;
+        break :sym env.seek(scope, type_expr.data.symbol).?.ty;
     } else @panic("TODO generalized type annotations");
 
     // generate inner expr and unify
@@ -266,7 +267,7 @@ fn analyzeCall(
                 // widen known type
                 const known_ty = env.tw.get(known.*);
                 const expr_ty = env.tw.get(texpr.ty);
-                known.* = try expr_ty.unify(&env.tw, known_ty.*);
+                known.* = try expr_ty.unify(env.ally, &env.tw, known_ty.*);
             } else {
                 // use parameter type
                 generics[index] = texpr.ty;
@@ -318,14 +319,14 @@ fn unifyTExpr(env: *Env, texpr: TExpr, outward: TypeId) SemaError!TExpr {
     const outer = env.tw.get(outward);
     const is_unified = switch (outer.*) {
         .any => true,
-        .set => try inner.coercesTo(&env.tw, outer.*),
+        .set => try inner.coercesTo(env.ally, &env.tw, outer.*),
         else => texpr.ty.eql(outward)
     };
 
     if (is_unified) return texpr;
 
     // check for coercion
-    if (try inner.coercesTo(&env.tw, outer.*)) {
+    if (try inner.coercesTo(env.ally, &env.tw, outer.*)) {
         // cast is possible
         const cloned = try texpr.clone(env.ally);
         return TExpr{

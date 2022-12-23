@@ -1,7 +1,7 @@
 const std = @import("std");
-const exec = @import("plumbing.zig").execute;
 const backend = @import("backend.zig");
 const context = @import("context.zig");
+const exec = @import("plumbing.zig").exec;
 
 fn expectEqual(expected: []const u8, actual: []const u8) !void {
     const ally = std.testing.allocator;
@@ -9,17 +9,14 @@ fn expectEqual(expected: []const u8, actual: []const u8) !void {
     try context.init(ally);
     defer context.deinit();
 
-    var tw = backend.TypeWelt.init(ally);
-    defer tw.deinit();
-
-    var env = try backend.initPrelude(ally, &tw);
+    var env = try backend.generatePrelude(ally);
     defer env.deinit();
 
     const exp_file = try context.addExternalSource("expected", expected);
     const act_file = try context.addExternalSource("actual", actual);
 
-    const exp_val = try exec(ally, &env, exp_file);
-    const act_val = try exec(ally, &env, act_file);
+    const exp_val = try exec(&env, exp_file);
+    const act_val = try exec(&env, act_file);
 
     try std.testing.expect(exp_val.eql(act_val));
 }
