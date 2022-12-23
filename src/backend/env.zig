@@ -29,19 +29,17 @@ const TExpr = @import("texpr.zig");
 
 const Self = @This();
 
-pub const root = Name.root;
+pub const ROOT = Name.ROOT;
 
 const Binding = struct {
-    ty: TypeId,
     value: TExpr,
 };
 
-const Bindings = NameMap(Binding);
 
 ally: Allocator,
 tw: TypeWelt = .{},
 // env owns everything in every binding
-nmap: Bindings = .{},
+nmap: NameMap(Binding) = .{},
 
 pub fn init(ally: Allocator) Allocator.Error!Self {
     return Self{
@@ -60,27 +58,22 @@ pub fn identify(self: *Self, ty: Type) Allocator.Error!TypeId {
 
 // accessors ===================================================================
 
-pub fn getValue(self: *Self, name: Name) TExpr {
-    return self.nmap.get(name).value;
+/// searches up through the namespace for a symbol
+pub fn seek(self: *Self, scope: Name, sym: Symbol) ?TExpr {
+    return if (self.nmap.getWithin(scope, sym)) |b| b.value orelse null;
 }
 
-pub fn getType(self: *Self, name: Name) TypeId {
-    return self.nmap.get(name).ty;
+/// searches for an exact name
+pub fn get(self: *Self, name: Name) TExpr {
+    return self.nmap.get(name).value;
 }
 
 // definitions =================================================================
 
-pub const DefError = Allocator.Error || Bindings.PutError;
+pub const DefError = util.NameError || TypeWelt.RenameError;
 
-pub fn def(
-    self: *Self,
-    scope: Name,
-    sym: Symbol,
-    ty: TypeId,
-    value: TExpr
-) DefError!Name {
+pub fn def(self: *Self, scope: Name, sym: Symbol, value: TExpr) DefError!Name {
     const binding = Binding{
-        .ty = ty,
         .value = try value.clone(self.ally),
     };
 
@@ -89,7 +82,8 @@ pub fn def(
 
 pub fn defNamespace(self: *Self, scope: Name, sym: Symbol) DefError!Name {
     const nsty = try self.identify(Type{ .namespace = {} });
-    return self.def(scope, sym, nsty, TExpr{ .ty = .namespace });
+    const expr = TExpr.init(null, nsty, .{ .namespace = {} });
+    return self.def(scope, sym, expr);
 }
 
 pub fn defType(
@@ -99,7 +93,8 @@ pub fn defType(
     value: TypeId
 ) DefError!Name {
     const tyty = try self.identify(Type{ .ty = {} });
-    const name = self.def(scope, sym, tyty, TExpr{ .ty = value });
+    const expr = TExpr.init(null, tyty, .{ .ty = value });
+    const name = try self.def(scope, sym, expr);
     try self.tw.setName(self.ally, value, name);
 
     return name;

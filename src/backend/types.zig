@@ -5,7 +5,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Wyhash = std.hash.Wyhash;
 const util = @import("util");
-const Symbol = util.Symbol;
+const Name = util.Name;
 const builtin = @import("builtin");
 
 pub const TypeId = packed struct {
@@ -85,13 +85,13 @@ pub const TypeWelt = struct {
 
     types: std.ArrayListUnmanaged(*Type) = .{}, // TypeId -> Type
     // symbols are unowned, aka probably owned by env
-    names: std.ArrayListUnmanaged(?Symbol) = .{},
+    names: std.ArrayListUnmanaged(?Name) = .{},
     map: TypeMap = .{}, // Type -> TypeId
 
     pub fn deinit(self: *Self, ally: Allocator) void {
         for (self.types.items) |ptr| {
             ptr.deinit(ally);
-            self.ally.destroy(ptr);
+            ally.destroy(ptr);
         }
         self.types.deinit(ally);
         self.names.deinit(ally);
@@ -108,7 +108,7 @@ pub const TypeWelt = struct {
         self: *Self,
         ally: Allocator,
         id: TypeId,
-        name: Symbol
+        name: Name
     ) (Allocator.Error || RenameError)!void {
         // expand names array
         if (self.names.items.len <= id.index) {
@@ -123,7 +123,7 @@ pub const TypeWelt = struct {
         }
     }
 
-    pub fn getName(self: Self, id: TypeId) ?Symbol {
+    pub fn getName(self: Self, id: TypeId) ?Name {
         if (id.index >= self.names.items.len) return null;
         return self.names.items[id.index];
     }
@@ -205,7 +205,7 @@ pub const Type = union(enum) {
     // concrete (exist at static runtime)
     @"bool",
     number: Number,
-    atom: Symbol,
+    atom: Name, // this is not owned by the type
 
     // structured
     ptr: TypeId, // stores child type
@@ -229,10 +229,9 @@ pub const Type = union(enum) {
     pub fn deinit(self: *Self, ally: Allocator) void {
         switch (self.*) {
             .unit, .hole, .namespace, .symbol, .any, .ty, .number, .list,
-            .generic, .@"bool", .@"ptr"
+            .generic, .@"bool", .@"ptr", .atom
                 => {},
             .set => |*set| set.deinit(ally),
-            .atom => |sym| ally.free(sym.str),
             .tuple => |tup| ally.free(tup),
             .func => |func| {
                 ally.free(func.generics);
@@ -317,11 +316,11 @@ pub const Type = union(enum) {
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch (self) {
-            .unit, .symbol, .hole, .namespace .any, .number, .ty, .list,
+            .unit, .symbol, .hole, .namespace, .any, .number, .ty, .list,
             .generic, .@"bool", .ptr
                 => self,
             .set => |set| Self{ .set = try set.clone(ally) },
-            .atom => |sym| Self{ .atom = try sym.clone(ally) },
+            .atom => |name| Self{ .atom = name },
             .tuple => |tup| Self{ .tuple = try ally.dupe(TypeId, tup) },
             .func => |func| Self{ .func = try func.clone(ally) },
         };
@@ -508,10 +507,10 @@ pub const Type = union(enum) {
         writer: anytype
     ) WriteError!void {
         switch (self) {
-            .unit, .@"bool" => try writer.writeAll(@tagName(self)),
+            .unit, .@"bool", .namespace => try writer.writeAll(@tagName(self)),
             .ty => try writer.writeAll("Type"),
             .hole, .symbol, .any => try util.writeCaps(@tagName(self), writer),
-            .atom => |sym| try writer.print("#{s}", .{sym.str}),
+            .atom => |sym| try writer.print("#{}", .{sym}),
             .set => |set| {
                 // render subtypes
                 const subtypes = try ally.alloc([]const u8, set.count());

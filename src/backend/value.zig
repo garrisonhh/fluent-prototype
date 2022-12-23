@@ -93,19 +93,16 @@ fn toNumber(
 ///
 /// this is probably the most important function in the entire codebase, as it
 /// is the thing that enables the most interesting features in fluent
-pub fn resurrect(
-    self: Self,
-    ally: Allocator,
-    env: Env,
-    tid: TypeId
-) Allocator.Error!TExpr {
-    const ty = env.typeGet(tid);
+pub fn resurrect(self: Self, env: Env, tid: TypeId) Allocator.Error!TExpr {
+    const ty = env.tw.get(tid);
     const data: TExpr.Data = switch (ty.*) {
         .@"bool" => .{ .@"bool" = self.as(u8) > 0 },
         .number => |num| self.toNumber(num.bits orelse 64, num.layout),
         else => {
-            const text = tid.writeAlloc(ally, env.typewelt.*) catch unreachable;
-            defer ally.free(text);
+            const text = tid.writeAlloc(env.ally, env.tw) catch {
+                @panic("write error");
+            };
+            defer env.ally.free(text);
 
             std.debug.panic("TODO revive type {s}", .{text});
         }

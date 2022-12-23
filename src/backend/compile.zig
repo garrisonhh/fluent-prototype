@@ -433,10 +433,10 @@ fn compileFunc(
 
 pub fn compile(
     ally: Allocator,
-    typewelt: *const TypeWelt,
+    typewelt: TypeWelt,
     ssa_prog: ssa.Program
 ) CompileError!Program {
-    var b = Builder.init(ally, typewelt);
+    var b = Builder.init(ally, &typewelt);
 
     const entry = ssa_prog.funcs[ssa_prog.entry.index];
 

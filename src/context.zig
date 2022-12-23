@@ -31,6 +31,10 @@ pub const FileHandle = struct {
 
     index: Index,
 
+    pub fn getName(self: Self) []const u8 {
+        return this.files.items[self.index].name;
+    }
+
     pub fn getSource(self: Self) []const u8 {
         return this.files.items[self.index].text;
     }

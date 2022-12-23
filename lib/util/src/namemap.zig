@@ -5,6 +5,8 @@ const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const Symbol = @import("symbol.zig");
 
+pub const NameError = Allocator.Error || error { NameTooLong, NameRedef };
+
 /// names represent keys into a namemap. operations with names are generally
 /// done through their namemap.
 ///
@@ -13,7 +15,9 @@ const Symbol = @import("symbol.zig");
 pub const Name = struct {
     const Self = @This();
 
-    pub const root = root: {
+    pub const MAX_LENGTH = 128;
+
+    pub const ROOT = root: {
         const syms: []Symbol = &.{};
         break :root Self{
             .syms = syms,
@@ -33,22 +37,27 @@ pub const Name = struct {
         return wyhash.final();
     }
 
-    fn init(ally: Allocator, syms: []const Symbol) Allocator.Error!Self {
-        return Self{
-            .syms = try ally.dupe(Symbol, syms),
-            .hash = hashSyms(syms),
-        };
-    }
-
-    fn initAppend(ally: Allocator, ns: Name, sym: Symbol) Allocator.Error!Self {
-        const syms = try ally.alloc(Symbol, ns.syms.len + 1);
-        std.mem.copy(Symbol, syms, ns.syms);
-        syms[syms.len - 1] = sym;
+    fn initOwned(syms: []const Symbol) NameError!Self {
+        if (syms.len > MAX_LENGTH) {
+            return error.NameTooLong;
+        }
 
         return Self{
             .syms = syms,
             .hash = hashSyms(syms),
         };
+    }
+
+    fn init(ally: Allocator, syms: []const Symbol) NameError!Self {
+        return try Self.initOwned(try ally.dupe(Symbol, syms));
+    }
+
+    fn initAppend(ally: Allocator, ns: Name, sym: Symbol) NameError!Self {
+        const syms = try ally.alloc(Symbol, ns.syms.len + 1);
+        std.mem.copy(Symbol, syms, ns.syms);
+        syms[syms.len - 1] = sym;
+
+        return try Self.initOwned(syms);
     }
 
     fn deinit(self: Self, ally: Allocator) void {
@@ -141,15 +150,13 @@ pub fn NameMap(comptime V: type) type {
             self: *Self,
             ally: Allocator,
             sym: Symbol
-        ) Allocator.Error!Symbol {
+        ) NameError!Symbol {
             const res = try self.syms.getOrPut(ally, sym);
             if (!res.found_existing) {
                 res.key_ptr.* = try sym.clone(ally);
             }
             return res.key_ptr.*;
         }
-
-        pub const PutError = error { NameRedef };
 
         /// puts a value into the table and returns its unique name
         ///
@@ -161,7 +168,7 @@ pub fn NameMap(comptime V: type) type {
             ns: Name,
             sym: Symbol,
             value: V
-        ) Allocator.Error!Name {
+        ) NameError!Name {
             const owned = try self.acquireSym(ally, sym);
             const name = try Name.initAppend(ally, ns, owned);
 
@@ -170,8 +177,9 @@ pub fn NameMap(comptime V: type) type {
                 return error.NameRedef;
             } else {
                 res.key_ptr.* = name;
-                res.value_ptr.* = value;
             }
+
+            try self.map.put(ally, name, value);
 
             return res.key_ptr.*;
         }
@@ -181,10 +189,33 @@ pub fn NameMap(comptime V: type) type {
             // be able to fail
             return self.map.get(name).?;
         }
+
+        pub fn getWithin(self: *Self, ns: Name, sym: Symbol) ?V {
+            var buf: [Name.MAX_LENGTH]Symbol = undefined;
+            std.mem.copy(Symbol);
+            buf[ns.syms.len] = sym;
+
+            var syms = buf[0..ns.syms.len + 1];
+            while (syms.len > 0) {
+                const name = Name.initOwned(syms);
+
+                if (self.map.get(name)) |value| {
+                    return value;
+                }
+
+                // iter
+                const new_len = syms.len - 1;
+                syms = syms[0..new_len];
+                syms[new_len - 1] = sym;
+            }
+
+            // none found
+            return null;
+        }
     };
 }
 
-test "namemap" {
+test "random namemap" {
     const ally = std.testing.allocator;
 
     var rng = std.rand.DefaultPrng.init(1);

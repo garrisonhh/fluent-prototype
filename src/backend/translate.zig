@@ -2,15 +2,16 @@
 //! well-formed SExprs in the backend.
 
 const std = @import("std");
-const util = @import("util");
-const frontend = @import("../frontend.zig");
-const context = @import("../context.zig");
-const SExpr = @import("sexpr.zig");
-
 const Allocator = std.mem.Allocator;
-const RawExpr = frontend.RawExpr;
-const Loc = context.Loc;
+const util = @import("util");
 const Symbol = util.Symbol;
+const frontend = @import("../frontend.zig");
+const RawExpr = frontend.RawExpr;
+const context = @import("../context.zig");
+const Loc = context.Loc;
+const SExpr = @import("sexpr.zig");
+const canon = @import("canon.zig");
+const Number = canon.Number;
 
 pub const TranslateError =
     Allocator.Error
@@ -97,7 +98,7 @@ fn translateNumber(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
         }
     }
 
-    const sexpr_num = SExpr.Number.from(num) catch {
+    const sexpr_num = Number.from(num) catch {
         return numberError(expr.loc);
     };
 

@@ -12,7 +12,7 @@ const context = @import("../context.zig");
 const Loc = context.Loc;
 const types = @import("types.zig");
 const TypeId = types.TypeId;
-const Env = @import("env.zig");
+const TypeWelt = types.TypeWelt;
 const SExpr = @import("sexpr.zig");
 const canon = @import("canon.zig");
 
@@ -23,6 +23,7 @@ pub const Number = canon.Number;
 pub const Tag = std.meta.Tag(Data);
 pub const Data = union(enum) {
     namespace,
+    ty: TypeId,
     @"bool": bool,
     number: Number,
     string: Symbol,
@@ -36,7 +37,7 @@ pub const Data = union(enum) {
 
     pub fn deinit(self: Data, ally: Allocator) void {
         switch (self) {
-            .namespace, .@"bool", .number => {},
+            .namespace, .@"bool", .number, .ty => {},
             .string, .symbol => |sym| ally.free(sym.str),
             .call, .do, .list => |exprs| {
                 for (exprs) |expr| expr.deinit(ally);
@@ -75,7 +76,7 @@ pub const Data = union(enum) {
 
     pub fn clone(data: Data, ally: Allocator) Allocator.Error!Data {
         return switch (data) {
-            .namespace, .@"bool", .number => data,
+            .namespace, .ty, .@"bool", .number => data,
             .string => |sym| Data{ .string = try sym.clone(ally) },
             .symbol => |sym| Data{ .symbol = try sym.clone(ally) },
             .call => |exprs| Data{ .call = try cloneChildren(exprs, ally) },
@@ -108,7 +109,7 @@ pub const Data = union(enum) {
         }
 
         return switch (data) {
-            .namespace => true,
+            .namespace, .ty => true,
             .@"bool" => |b| b == other.@"bool",
             .number => |n| n.eql(other.number),
             .string => |sym| sym.eql(other.string),
@@ -167,7 +168,7 @@ pub fn getChildren(self: Self) []Self {
 pub fn render(
     self: Self,
     ctx: *kz.Context,
-    env: Env
+    tw: TypeWelt
 ) Allocator.Error!kz.Ref {
     const INDENT = 2;
     const faint = kz.Style{ .special = .faint };
@@ -176,19 +177,23 @@ pub fn render(
     const red = kz.Style{ .fg = .red };
 
     // type for header
-    const ty = env.typeGet(self.ty);
-    const ty_text = try ty.writeAlloc(ctx.ally, env.typewelt.*);
+    const ty_text = try tw.get(self.ty).writeAlloc(ctx.ally, tw);
     defer ctx.ally.free(ty_text);
 
     const ty_tex = try ctx.print(faint, "{s}", .{ty_text});
 
     // other inline header stuff
     const data = switch (self.data) {
+        .ty => |ty| ty: {
+            const str = try tw.get(ty).writeAlloc(ctx.ally, tw);
+            defer ctx.ally.free(str);
+            break :ty try ctx.print(green, "{s}", .{str});
+        },
         .@"bool" => |val| try ctx.print(magenta, "{}", .{val}),
         .number => |num| try ctx.print(magenta, "{}", .{num}),
         .string => |sym| try ctx.print(green, "\"{}\"", .{sym}),
         .symbol => |sym| try ctx.print(red, "{}", .{sym}),
-        .do, .cast, .call, .list
+        .do, .cast, .call, .list, .namespace,
             => try ctx.print(.{}, "{s}", .{@tagName(self.data)}),
     };
 
@@ -198,7 +203,7 @@ pub fn render(
     // any children
     var children = ctx.stub();
     for (self.getChildren()) |child| {
-        const tex = try child.render(ctx, env);
+        const tex = try child.render(ctx, tw);
         children = try ctx.slap(children, tex, .bottom, .{});
     }
 

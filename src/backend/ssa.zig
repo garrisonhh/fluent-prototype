@@ -231,7 +231,7 @@ pub const Func = struct {
         local: Local
     ) !kz.Ref {
         const ty = self.locals[local.index];
-        const ty_text = try ty.writeAlloc(ctx.ally, env.typewelt.*);
+        const ty_text = try ty.writeAlloc(ctx.ally, env.tw);
         defer ctx.ally.free(ty_text);
 
         const ty_tex = try ctx.print(.{ .fg = .green }, "{s}", .{ty_text});
@@ -243,7 +243,7 @@ pub const Func = struct {
     fn renderOp(
         self: Self,
         ctx: *kz.Context,
-        env: Env,
+        env: *Env,
         op: Op
     ) !kz.Ref {
         var line = std.ArrayList(kz.Ref).init(ctx.ally);
@@ -257,19 +257,19 @@ pub const Func = struct {
             .ldc => |ldc| {
                 const ty = self.locals[ldc.to.index];
                 const value = self.consts[ldc.a.index];
-                const expr = try value.resurrect(ctx.ally, env, ty);
+                const expr = try value.resurrect(env.*, ty);
                 defer expr.deinit(ctx.ally);
 
                 try line.appendSlice(&.{
-                    try self.renderLocal(ctx, env, ldc.to),
+                    try self.renderLocal(ctx, env.*, ldc.to),
                     try ctx.print(.{}, " = ", .{}),
-                    try expr.render(ctx, env),
+                    try expr.render(ctx, env.tw),
                 });
             },
             .branch => |br| {
                 try line.appendSlice(&.{
                     try ctx.print(.{}, "{s} ", .{tag}),
-                    try self.renderLocal(ctx, env, br.cond),
+                    try self.renderLocal(ctx, env.*, br.cond),
                     try ctx.clone(comma),
                     try renderLabel(ctx, br.a),
                     try ctx.clone(comma),
@@ -284,52 +284,51 @@ pub const Func = struct {
             },
             .alloca => |all| {
                 // create u64 size for sake of consistency
-                const expr = TExpr.init(
-                    null,
-                    try env.typeIdentifyNumber(.uint, 64),
-                    .{
-                        .number = .{
-                            .bits = 64,
-                            .data = .{ .uint = @intCast(u64, all.size) }
-                        }
+                const @"u64" = try env.identify(types.Type{
+                    .number = .{ .layout = .uint, .bits = 64 },
+                });
+                const expr = TExpr.init(null, @"u64", .{
+                    .number = .{
+                        .bits = 64,
+                        .data = .{ .uint = @intCast(u64, all.size) }
                     }
-                );
+                });
                 defer expr.deinit(env.ally);
 
                 try line.appendSlice(&.{
-                    try self.renderLocal(ctx, env, all.to),
+                    try self.renderLocal(ctx, env.*, all.to),
                     try ctx.print(.{}, " = {s} ", .{tag}),
-                    try expr.render(ctx, env),
+                    try expr.render(ctx, env.tw),
                 });
             },
             .unary => |un| {
                 try line.appendSlice(&.{
-                    try self.renderLocal(ctx, env, un.to),
+                    try self.renderLocal(ctx, env.*, un.to),
                     try ctx.print(.{}, " = {s} ", .{tag}),
-                    try self.renderLocal(ctx, env, un.a),
+                    try self.renderLocal(ctx, env.*, un.a),
                 });
             },
             .binary => |bin| {
                 try line.appendSlice(&.{
-                    try self.renderLocal(ctx, env, bin.to),
+                    try self.renderLocal(ctx, env.*, bin.to),
                     try ctx.print(.{}, " = {s} ", .{tag}),
-                    try self.renderLocal(ctx, env, bin.a),
+                    try self.renderLocal(ctx, env.*, bin.a),
                     try ctx.clone(comma),
-                    try self.renderLocal(ctx, env, bin.b),
+                    try self.renderLocal(ctx, env.*, bin.b),
                 });
             },
             .unary_eff => |un| {
                 try line.appendSlice(&.{
                     try ctx.print(.{}, "{s} ", .{tag}),
-                    try self.renderLocal(ctx, env, un.a),
+                    try self.renderLocal(ctx, env.*, un.a),
                 });
             },
             .binary_eff => |bin| {
                 try line.appendSlice(&.{
                     try ctx.print(.{}, "{s} ", .{tag}),
-                    try self.renderLocal(ctx, env, bin.a),
+                    try self.renderLocal(ctx, env.*, bin.a),
                     try ctx.clone(comma),
-                    try self.renderLocal(ctx, env, bin.b),
+                    try self.renderLocal(ctx, env.*, bin.b),
                 });
             },
             else => std.debug.panic(
@@ -346,7 +345,7 @@ pub const Func = struct {
         return try ctx.print(.{ .fg = .cyan }, "@{}", .{label.index});
     }
 
-    fn renderBody(self: Self, ctx: *kz.Context, env: Env) !kz.Ref {
+    fn renderBody(self: Self, ctx: *kz.Context, env: *Env) !kz.Ref {
         const INDENT = 4;
 
         var body = ctx.stub();
@@ -382,7 +381,7 @@ pub const Func = struct {
         return body;
     }
 
-    pub fn render(self: Self, ctx: *kz.Context, env: Env) !kz.Ref {
+    pub fn render(self: Self, ctx: *kz.Context, env: *Env) !kz.Ref {
         // function header
         var header_texs = std.ArrayList(kz.Ref).init(ctx.ally);
         defer header_texs.deinit();
@@ -394,11 +393,11 @@ pub const Func = struct {
 
         var param = Local.of(0);
         while (param.index < self.takes) : (param.index += 1) {
-            try header_texs.append(try self.renderLocal(ctx, env, param));
+            try header_texs.append(try self.renderLocal(ctx, env.*, param));
             try header_texs.append(try ctx.print(.{}, " -> ", .{}));
         }
 
-        const returns = try self.returns.writeAlloc(ctx.ally, env.typewelt.*);
+        const returns = try self.returns.writeAlloc(ctx.ally, env.tw);
         defer ctx.ally.free(returns);
 
         try header_texs.appendSlice(&.{
@@ -423,7 +422,7 @@ pub const Program = struct {
         ally.free(self.funcs);
     }
 
-    pub fn render(self: Self, ctx: *kz.Context, env: Env) !kz.Ref {
+    pub fn render(self: Self, ctx: *kz.Context, env: *Env) !kz.Ref {
         var tex = ctx.stub();
         for (self.funcs) |func| {
             tex = try ctx.slap(tex, try func.render(ctx, env), .bottom, .{});

@@ -1,20 +1,22 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const util = @import("util");
+const Symbol = util.Symbol;
+const Name = util.Name;
 const kz = @import("kritzler");
 const context = @import("../context.zig");
-const types = @import("types.zig");
-const Env = @import("env.zig");
-const SExpr = @import("sexpr.zig");
-const TExpr = @import("texpr.zig");
-
-const Allocator = std.mem.Allocator;
+const FluentError = context.FluentError;
 const Loc = context.Loc;
+const types = @import("types.zig");
 const TypeId = types.TypeId;
 const Type = types.Type;
 const Pattern = types.Pattern;
-const FluentError = context.FluentError;
-const Symbol = util.Symbol;
+const Env = @import("env.zig");
+const SExpr = @import("sexpr.zig");
+const TExpr = @import("texpr.zig");
+const canon = @import("canon.zig");
+const Number = canon.Number;
 
 pub const SemaError =
     Allocator.Error
@@ -23,7 +25,7 @@ pub const SemaError =
  || Env.DefError;
 
 fn holeError(env: Env, loc: ?Loc, ty: TypeId) SemaError {
-    const ty_text = try ty.writeAlloc(env.ally, env.typewelt.*);
+    const ty_text = try ty.writeAlloc(env.ally, env.tw.*);
     defer env.ally.free(ty_text);
 
     _ = try context.post(.note, loc, "this hole expects {s}", .{ty_text});
@@ -41,37 +43,36 @@ fn expectError(env: Env, loc: ?Loc, expected: TypeId, found: TypeId) SemaError {
     return error.FluentError;
 }
 
-fn typeOfNumber(env: *Env, num: SExpr.Number) SemaError!TypeId {
-    if (num.bits) |bits| {
-        // known width number
-        return try env.typeIdentify(Type{
-            .number = .{
-                .bits = bits,
-                .layout = num.data,
-            }
-        });
-    }
-
-    // compiler number
-    return try env.typeIdentifyNumber(num.data, null);
+fn typeOfNumber(env: *Env, num: Number) SemaError!TypeId {
+    return try env.identify(Type{
+        .number = .{
+            .bits = num.bits,
+            .layout = num.data,
+        }
+    });
 }
 
-fn typeOfSymbol(env: *Env, expr: SExpr) SemaError!TypeId {
+fn typeOfSymbol(env: *Env, scope: Name, expr: SExpr) SemaError!TypeId {
     const symbol = expr.data.symbol;
 
     // holes
     if (symbol.str[0] == '_') {
-        return try env.typeIdentify(Type{ .hole = {} });
+        return try env.identify(Type{ .hole = {} });
     }
 
     // normal symbol
-    return env.getType(symbol) orelse {
+    return if (env.seek(scope, symbol)) |value| value.ty else {
         _ = try context.post(.err, expr.loc, "unknown symbol `{}`", .{symbol});
         return error.FluentError;
     };
 }
 
-fn analyzeDo(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr {
+fn analyzeDo(
+    env: *Env,
+    scope: Name,
+    expr: SExpr,
+    outward: TypeId
+) SemaError!TExpr {
     const ally = env.ally;
 
     // verify form
@@ -87,20 +88,22 @@ fn analyzeDo(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr {
     errdefer ally.free(texprs);
 
     // analyze statements
-    const unit = try env.typeIdentify(Type{ .unit = {} });
+    const unit = try env.identify(Type{ .unit = {} });
 
     const stmts = exprs[1..exprs.len - 1];
     for (stmts) |stmt, i| {
         errdefer for (texprs[0..i]) |texpr| texpr.deinit(ally);
-        texprs[i] = try analyzeExpr(env, stmt, unit);
+        texprs[i] = try analyzeExpr(env, scope, stmt, unit);
     }
 
-    errdefer for (texprs[0..stmts.len]) |texpr| texpr.deinit(ally);
+    errdefer for (texprs[0..stmts.len]) |texpr| {
+        texpr.deinit(ally);
+    };
 
     // analyze return expr
     const final = exprs[exprs.len - 1];
     const ret_expr = &texprs[texprs.len - 1];
-    ret_expr.* = try analyzeExpr(env, final, outward);
+    ret_expr.* = try analyzeExpr(env, scope, final, outward);
 
     // create TExpr
     const texpr = TExpr{
@@ -118,7 +121,12 @@ fn badAsError(loc: Loc) SemaError {
     return error.FluentError;
 }
 
-fn analyzeAs(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr {
+fn analyzeAs(
+    env: *Env,
+    scope: Name,
+    expr: SExpr,
+    outward: TypeId
+) SemaError!TExpr {
     const exprs = expr.data.call;
 
     if (exprs.len != 3) return badAsError(expr.loc);
@@ -132,11 +140,16 @@ fn analyzeAs(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr {
     } else @panic("TODO generalized type annotations");
 
     // generate inner expr and unify
-    const texpr = try analyzeExpr(env, body_expr, anno_ty);
+    const texpr = try analyzeExpr(env, scope, body_expr, anno_ty);
     return try unifyTExpr(env, texpr, outward);
 }
 
-fn analyzeList(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr {
+fn analyzeList(
+    env: *Env,
+    scope: Name,
+    expr: SExpr,
+    outward: TypeId
+) SemaError!TExpr {
     const ally = env.ally;
 
     const elements = expr.data.call[1..];
@@ -144,14 +157,16 @@ fn analyzeList(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr {
     errdefer ally.free(texprs);
 
     // determine type expectations
-    const any = try env.typeIdentify(Type{ .any = {} });
-    const expected = env.typeGet(outward);
+    const any = try env.identify(Type{ .any = {} });
+    const expected = env.tw.get(outward);
     const elem_outward = if (expected.* == .list) expected.list else any;
 
     // analyze each element
     for (elements) |elem, i| {
-        errdefer for (texprs[0..i]) |texpr| texpr.deinit(ally);
-        texprs[i] = try analyzeExpr(env, elem, elem_outward);
+        errdefer for (texprs[0..i]) |texpr| {
+            texpr.deinit(ally);
+        };
+        texprs[i] = try analyzeExpr(env, scope, elem, elem_outward);
     }
 
     // TODO list elements must be retyped again either here or as a verification
@@ -160,14 +175,19 @@ fn analyzeList(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr {
     // create TExpr
     const final_subty = if (texprs.len > 0) texprs[0].ty else elem_outward;
     const texpr = TExpr{
-        .ty = try env.typeIdentify(Type{ .list = final_subty }),
+        .ty = try env.identify(Type{ .list = final_subty }),
         .loc = expr.loc,
         .data = .{ .list = texprs },
     };
     return unifyTExpr(env, texpr, outward);
 }
 
-fn analyzeCall(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr{
+fn analyzeCall(
+    env: *Env,
+    scope: Name,
+    expr: SExpr,
+    outward: TypeId
+) SemaError!TExpr{
     const ally = env.ally;
     const exprs = expr.data.call;
     const head = exprs[0];
@@ -177,12 +197,12 @@ fn analyzeCall(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr{
         // builtins require special type analysis
         const sym = head.data.symbol;
 
-        if (sym == comptime Symbol.init("do")) {
-            return try analyzeDo(env, expr, outward);
-        } else if (sym == comptime Symbol.init("as")) {
-            return try analyzeAs(env, expr, outward);
-        } else if (sym == comptime Symbol.init("list")) {
-            return try analyzeList(env, expr, outward);
+        if (sym.eql(comptime Symbol.init("do"))) {
+            return try analyzeDo(env, scope, expr, outward);
+        } else if (sym.eql(comptime Symbol.init("as"))) {
+            return try analyzeAs(env, scope, expr, outward);
+        } else if (sym.eql(comptime Symbol.init("list"))) {
+            return try analyzeList(env, scope, expr, outward);
         }
     }
 
@@ -190,15 +210,15 @@ fn analyzeCall(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr{
     errdefer ally.free(texprs);
 
     // analyze head
-    const any = try env.typeIdentify(Type{ .any = {} });
+    const any = try env.identify(Type{ .any = {} });
 
-    texprs[0] = try analyzeExpr(env, head, any);
+    texprs[0] = try analyzeExpr(env, scope, head, any);
     errdefer texprs[0].deinit(ally);
 
     // get called expr type, ensure it is a function
-    const fn_ty = env.typeGet(texprs[0].ty);
+    const fn_ty = env.tw.get(texprs[0].ty);
     if (fn_ty.* != .func) {
-        const ty_text = try fn_ty.writeAlloc(ally, env.typewelt.*);
+        const ty_text = try fn_ty.writeAlloc(ally, env.tw);
         defer ally.free(ty_text);
 
         const text = "expected function, found {s}";
@@ -206,7 +226,7 @@ fn analyzeCall(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr{
         return error.FluentError;
     }
 
-    const returns = env.typeGet(fn_ty.func.returns);
+    const returns = env.tw.get(fn_ty.func.returns);
 
     // analyze tail with fn param expectations
     const takes = fn_ty.func.takes;
@@ -218,15 +238,17 @@ fn analyzeCall(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr{
 
     // infer params
     for (takes) |tid, i| {
-        errdefer for (texprs[1..i + 1]) |texpr| texpr.deinit(ally);
+        errdefer for (texprs[1..i + 1]) |texpr| {
+            texpr.deinit(ally);
+        };
 
         // params may be generic
-        const param_ty = env.typeGet(tid);
+        const param_ty = env.tw.get(tid);
         const param_outward = if (param_ty.* == .generic) generic: {
             break :generic fn_ty.func.generics[param_ty.generic.index];
         } else tid;
 
-        texprs[i + 1] = try analyzeExpr(env, tail[i], param_outward);
+        texprs[i + 1] = try analyzeExpr(env, scope, tail[i], param_outward);
     }
 
     // find widest type that will fit every parameter generic
@@ -236,15 +258,15 @@ fn analyzeCall(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr{
     std.mem.set(?TypeId, generics, null);
 
     for (texprs[1..]) |texpr, i| {
-        const param_ty = env.typeGet(takes[i]);
+        const param_ty = env.tw.get(takes[i]);
         if (param_ty.* == .generic) {
             const index = param_ty.generic.index;
 
             if (generics[index]) |*known| {
                 // widen known type
-                const known_ty = env.typeGet(known.*);
-                const expr_ty = env.typeGet(texpr.ty);
-                known.* = try expr_ty.unify(env.typewelt, known_ty.*);
+                const known_ty = env.tw.get(known.*);
+                const expr_ty = env.tw.get(texpr.ty);
+                known.* = try expr_ty.unify(&env.tw, known_ty.*);
             } else {
                 // use parameter type
                 generics[index] = texpr.ty;
@@ -254,7 +276,7 @@ fn analyzeCall(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr{
 
     // unify all generic parameters with their now fully known type
     for (texprs[1..]) |*texpr, i| {
-        const param_ty = env.typeGet(takes[i]);
+        const param_ty = env.tw.get(takes[i]);
         if (param_ty.* == .generic) {
             const known = generics[param_ty.generic.index].?;
             texpr.* = try unifyTExpr(env, texpr.*, known);
@@ -285,7 +307,7 @@ fn analyzeCall(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr{
 /// c) identify that an expectation was violated and produce an appropriate
 ///    error
 fn unifyTExpr(env: *Env, texpr: TExpr, outward: TypeId) SemaError!TExpr {
-    const inner = env.typeGet(texpr.ty);
+    const inner = env.tw.get(texpr.ty);
 
     // identify holes
     if (inner.* == .hole) {
@@ -293,17 +315,17 @@ fn unifyTExpr(env: *Env, texpr: TExpr, outward: TypeId) SemaError!TExpr {
     }
 
     // check for already unified texprs
-    const outer = env.typeGet(outward);
+    const outer = env.tw.get(outward);
     const is_unified = switch (outer.*) {
         .any => true,
-        .set => try inner.coercesTo(env.typewelt, outer.*),
+        .set => try inner.coercesTo(&env.tw, outer.*),
         else => texpr.ty.eql(outward)
     };
 
     if (is_unified) return texpr;
 
     // check for coercion
-    if (try inner.coercesTo(env.typewelt, outer.*)) {
+    if (try inner.coercesTo(&env.tw, outer.*)) {
         // cast is possible
         const cloned = try texpr.clone(env.ally);
         return TExpr{
@@ -317,21 +339,26 @@ fn unifyTExpr(env: *Env, texpr: TExpr, outward: TypeId) SemaError!TExpr {
     return expectError(env.*, texpr.loc, outward, texpr.ty);
 }
 
-fn analyzeExpr(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr {
+fn analyzeExpr(
+    env: *Env,
+    scope: Name,
+    expr: SExpr,
+    outward: TypeId
+) SemaError!TExpr {
     // calls (and builtins)
     if (expr.data == .call) {
-        return try analyzeCall(env, expr, outward);
+        return try analyzeCall(env, scope, expr, outward);
     }
 
     // literals
     const texpr = TExpr{
         .ty = switch (expr.data) {
-            .@"bool" => try env.typeIdentify(Type{ .@"bool" = {} }),
+            .@"bool" => try env.identify(Type{ .@"bool" = {} }),
             .number => |num| try typeOfNumber(env, num),
-            .symbol => try typeOfSymbol(env, expr),
+            .symbol => try typeOfSymbol(env, scope, expr),
             // string literals are (List u8)
-            .string => try env.typeIdentify(Type{
-                .list = try env.typeIdentify(Type{
+            .string => try env.identify(Type{
+                .list = try env.identify(Type{
                     .number = .{ .layout = .uint, .bits = 8 }
                 })
             }),
@@ -348,10 +375,10 @@ fn analyzeExpr(env: *Env, expr: SExpr, outward: TypeId) SemaError!TExpr {
 /// are produced (e.g. Any and common type sets like Int). this
 fn verifyDynamic(env: Env, texpr: TExpr) SemaError!void {
     // check that the class isn't analysis
-    const class = env.typeGet(texpr.ty).classifyRuntime(env.typewelt.*);
+    const class = env.tw.get(texpr.ty).classifyRuntime(env.tw);
 
     if (class == .analysis) {
-        const ty_text = try texpr.ty.writeAlloc(env.ally, env.typewelt.*);
+        const ty_text = try texpr.ty.writeAlloc(env.ally, env.tw);
         defer env.ally.free(ty_text);
 
         const text = "inferred type `{s}`, which cannot be executed";
@@ -364,9 +391,13 @@ fn verifyDynamic(env: Env, texpr: TExpr) SemaError!void {
     for (texpr.getChildren()) |child| try verifyDynamic(env, child);
 }
 
-pub fn analyze(env: *Env, expr: SExpr, expects: TypeId) SemaError!TExpr {
-    const texpr = try analyzeExpr(env, expr, expects);
-
+pub fn analyze(
+    env: *Env,
+    scope: Name,
+    expr: SExpr,
+    expects: TypeId
+) SemaError!TExpr {
+    const texpr = try analyzeExpr(env, scope, expr, expects);
     try verifyDynamic(env.*, texpr);
 
     return texpr;

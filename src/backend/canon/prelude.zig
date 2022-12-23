@@ -16,7 +16,7 @@ fn defType(
     ty: Type
 ) Env.DefError!TypeId {
     const id = try env.identify(ty);
-    _ = try env.defType(Env.root, comptime Symbol.init(str), id);
+    _ = try env.defType(Env.ROOT, comptime Symbol.init(str), id);
 
     return id;
 }

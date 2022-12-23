@@ -58,7 +58,7 @@ fn replRead(ally: Allocator) !context.FileHandle {
     return context.addExternalSource("repl", buf.items);
 }
 
-fn repl(ally: Allocator, prelude: *Env) !void {
+fn repl(ally: Allocator, env: *Env) !void {
     loop: while (true) {
         const input = try replRead(ally);
 
@@ -74,7 +74,7 @@ fn repl(ally: Allocator, prelude: *Env) !void {
         if (is_empty) break;
 
         // eval and print any messages
-        const value = plumbing.execute(ally, prelude, input) catch |e| {
+        const value = plumbing.exec(env, input) catch |e| {
             if (e == error.FluentError) {
                 try context.flushMessages();
                 continue :loop;
@@ -88,7 +88,7 @@ fn repl(ally: Allocator, prelude: *Env) !void {
         var ctx = kz.Context.init(ally);
         defer ctx.deinit();
 
-        const tex = try value.render(&ctx, prelude.*);
+        const tex = try value.render(&ctx, env.tw);
 
         try ctx.write(tex, stdout);
         try stdout.writeByte('\n');
@@ -146,7 +146,7 @@ fn printHelp() @TypeOf(stdout).Error!void {
     }
 }
 
-fn executeFile(ally: Allocator, prelude: *Env, path: []const u8) !void {
+fn executeFile(ally: Allocator, env: *Env, path: []const u8) !void {
     // required backing stuff
     const handle = context.loadSource(path) catch |e| {
         if (e == error.FileNotFound) {
@@ -156,7 +156,7 @@ fn executeFile(ally: Allocator, prelude: *Env, path: []const u8) !void {
     };
 
     // time execution
-    const value = plumbing.execute(ally, prelude, handle) catch |e| {
+    const value = plumbing.exec(env, handle) catch |e| {
         try stdout.print("execution failed: {}\n", .{e});
         return;
     };
@@ -165,7 +165,7 @@ fn executeFile(ally: Allocator, prelude: *Env, path: []const u8) !void {
     var ctx = kz.Context.init(ally);
     defer ctx.deinit();
 
-    const tex = try value.render(&ctx, prelude.*);
+    const tex = try value.render(&ctx, env.tw);
 
     try ctx.write(tex, stdout);
 }
