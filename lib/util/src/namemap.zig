@@ -60,6 +60,11 @@ pub const Name = struct {
         return try Self.initOwned(syms);
     }
 
+    fn drop(ns: Name) Name {
+        std.debug.assert(ns.syms.len > 0);
+        return Self.initOwned(ns.syms[0..ns.syms.len - 1]) catch unreachable;
+    }
+
     fn deinit(self: Self, ally: Allocator) void {
         ally.free(self.syms);
     }
@@ -92,13 +97,11 @@ pub const Name = struct {
     }
 
     const HashMapContext = struct {
-        pub fn hash(ctx: @This(), key: Self) u64 {
-            _ = ctx;
+        pub fn hash(_: @This(), key: Self) u64 {
             return key.hash;
         }
 
-        pub fn eql(ctx: @This(), a: Self, b: Self) bool {
-            _ = ctx;
+        pub fn eql(_: @This(), a: Self, b: Self) bool {
             return a.eql(b);
         }
     };
@@ -184,6 +187,48 @@ pub fn NameMap(comptime V: type) type {
             return res.key_ptr.*;
         }
 
+        fn getSymbol(self: *Self, ns: Name, sym: Symbol) ?V {
+            const Key = struct {
+                ns: Name,
+                sym: Symbol,
+            };
+
+            const Adapter = struct {
+                // this should mirror the Name hash function
+                pub fn hash(_: @This(), key: Key) u64 {
+                    var wyhash = std.hash.Wyhash.init(0);
+                    for (key.ns.syms) |s| {
+                        wyhash.update(std.mem.asBytes(&s.hash));
+                    }
+
+                    wyhash.update(std.mem.asBytes(&key.sym.hash));
+
+                    return wyhash.final();
+                }
+
+                pub fn eql(_: @This(), key: Key, name: Name) bool {
+                    if (key.ns.syms.len + 1 != name.syms.len) {
+                        return false;
+                    }
+
+                    for (key.ns.syms) |s, i| {
+                        if (!name.syms[i].eql(s)) {
+                            return false;
+                        }
+                    }
+
+                    return key.sym.eql(name.syms[name.syms.len - 1]);
+                }
+            };
+
+            const key = Key{
+                .ns = ns,
+                .sym = sym,
+            };
+
+            return self.map.getAdapted(key, Adapter{});
+        }
+
         /// find the mapping for a specific name
         pub fn get(self: *Self, name: Name) V {
             // since `put` is the only way to acquire a name, `get` should never
@@ -191,27 +236,16 @@ pub fn NameMap(comptime V: type) type {
             return self.map.get(name).?;
         }
 
-        // search up through the path of namespaces for a symbol which
-        // matches this one
+        /// search up through the path of namespaces for a symbol which
+        /// matches this one
         pub fn seek(self: *Self, ns: Name, sym: Symbol) ?V {
-            var buf: [Name.MAX_LENGTH]Symbol = undefined;
-            std.mem.copy(Symbol, &buf, ns.syms);
-            buf[ns.syms.len] = sym;
-
-            var syms = buf[0..ns.syms.len + 1];
-            while (syms.len > 0) : ({
-                // make a name that is the namespace down with the symbol
-                // appended
-                syms = syms[0..syms.len - 1];
-                syms[syms.len - 1] = sym;
-            }) {
-                const name = Name.initOwned(syms) catch unreachable;
-                if (self.map.get(name)) |value| {
+            var scope = ns;
+            while (scope.syms.len > 0) : (scope = scope.drop()) {
+                if (self.getSymbol(ns, sym)) |value| {
                     return value;
                 }
             }
 
-            // none found
             return null;
         }
     };
