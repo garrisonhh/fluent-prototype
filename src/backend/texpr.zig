@@ -201,7 +201,7 @@ pub fn render(
     const header = try ctx.slap(ty_tex, data, .right, .{ .space = 1 });
 
     // any children
-    var children = ctx.stub();
+    var children = try ctx.stub();
     for (self.getChildren()) |child| {
         const tex = try child.render(ctx, tw);
         children = try ctx.slap(children, tex, .bottom, .{});

@@ -83,17 +83,31 @@ pub const Name = struct {
 
     pub fn format(
         self: Self,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
         writer: anytype
     ) @TypeOf(writer).Error!void {
-        _ = fmt;
-        _ = options;
-
         for (self.syms) |sym, i| {
             if (i > 0) try writer.writeAll("::");
             try writer.writeAll(sym.str);
         }
+    }
+
+    /// alphabetical sorting function
+    fn alphaLessThan(_: void, a: Self, b: Self) bool {
+        const n = @min(a.syms.len, b.syms.len);
+
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            const sym_a = a.syms[i];
+            const sym_b = b.syms[i];
+
+            if (std.ascii.lessThanIgnoreCase(sym_a.str, sym_b.str)) {
+                return true;
+            }
+        }
+
+        return a.syms.len < b.syms.len;
     }
 
     const HashMapContext = struct {
@@ -247,6 +261,38 @@ pub fn NameMap(comptime V: type) type {
             }
 
             return null;
+        }
+
+        pub const Entry = struct {
+            key: *const Name,
+            value: *const V,
+
+            fn lessThan(_: void, a: @This(), b: @This()) bool {
+                return Name.alphaLessThan({}, a.key.*, b.key.*);
+            }
+        };
+
+        /// returns entries allocated on ally with names sorted alphabetically.
+        /// useful for displaying stuff
+        pub fn getSortedEntries(
+            self: *Self,
+            ally: Allocator
+        ) Allocator.Error![]Entry {
+            // get entries
+            var entries = std.ArrayList(Entry).init(ally);
+            var iter = self.map.iterator();
+            while (iter.next()) |entry| {
+                try entries.append(Entry{
+                    .key = entry.key_ptr,
+                    .value = entry.value_ptr,
+                });
+            }
+
+            // sort
+            const arr = entries.toOwnedSlice();
+            std.sort.sort(Entry, arr, {}, Entry.lessThan);
+
+            return arr;
         }
     };
 }

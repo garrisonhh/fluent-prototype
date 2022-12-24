@@ -91,3 +91,48 @@ pub fn defType(
 
     return name;
 }
+
+// debugging ===================================================================
+
+fn renderName(ctx: *kz.Context, name: Name) !kz.Ref {
+    var list = std.ArrayList(kz.Ref).init(ctx.ally);
+    defer list.deinit();
+
+    const into = try ctx.print(.{}, "::", .{});
+    defer ctx.drop(into);
+
+    for (name.syms) |sym, i| {
+        if (i > 0) try list.append(try ctx.clone(into));
+
+        const sym_ref = try ctx.print(.{ .fg = .red }, "{}", .{sym});
+        try list.append(sym_ref);
+    }
+
+    return try ctx.stack(list.items, .right, .{});
+}
+
+pub fn dump(self: *Self, ally: Allocator, writer: anytype) !void {
+    var ctx = kz.Context.init(ally);
+    defer ctx.deinit();
+
+    // render entries in order
+    var decls = std.ArrayList(kz.Ref).init(ally);
+    defer decls.deinit();
+
+    const eq = try ctx.print(.{}, " = ", .{});
+    defer ctx.drop(eq);
+
+    const entries = try self.nmap.getSortedEntries(ally);
+    for (entries) |entry| {
+        const name = try renderName(&ctx, entry.key.*);
+        const pred = try ctx.slap(name, try ctx.clone(eq), .right, .{});
+        const value = try entry.value.render(&ctx, self.tw);
+        const decl = try ctx.slap(pred, value, .right, .{});
+
+        try decls.append(decl);
+    }
+
+    // stack and dump it
+    const full_env = try ctx.stack(decls.items, .bottom, .{});
+    try ctx.write(full_env, writer);
+}

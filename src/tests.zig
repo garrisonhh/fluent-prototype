@@ -1,13 +1,24 @@
 const std = @import("std");
+const stdout = std.io.getStdOut().writer();
 const backend = @import("backend.zig");
 const context = @import("context.zig");
-const exec = @import("plumbing.zig").exec;
+const plumbing = @import("plumbing.zig");
+
+fn exec(env: *backend.Env, handle: context.FileHandle) !backend.TExpr {
+    return plumbing.exec(env, handle) catch |e| {
+        _ = try context.flushMessages();
+        return e;
+    };
+}
 
 fn expectEqual(expected: []const u8, actual: []const u8) !void {
     const ally = std.testing.allocator;
 
     try context.init(ally);
     defer context.deinit();
+
+    // zig tests don't add a newline which messes up my output
+    try stdout.writeByte('\n');
 
     var env = try backend.generatePrelude(ally);
     defer env.deinit();

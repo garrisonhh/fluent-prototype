@@ -348,7 +348,7 @@ pub const Func = struct {
     fn renderBody(self: Self, ctx: *kz.Context, env: *Env) !kz.Ref {
         const INDENT = 4;
 
-        var body = ctx.stub();
+        var body = try ctx.stub();
 
         // entry point
         const entry = try ctx.slap(
@@ -423,7 +423,7 @@ pub const Program = struct {
     }
 
     pub fn render(self: Self, ctx: *kz.Context, env: *Env) !kz.Ref {
-        var tex = ctx.stub();
+        var tex = try ctx.stub();
         for (self.funcs) |func| {
             tex = try ctx.slap(tex, try func.render(ctx, env), .bottom, .{});
         }

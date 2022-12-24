@@ -245,8 +245,7 @@ pub fn main() !void {
     if (builtin.mode == .Debug) {
         // display prelude as a sanity check
         try stdout.writeAll("[Prelude]\n");
-        // try prelude.dump(ally, stdout);
-        try stdout.writeAll("TODO dump prelude");
+        try prelude.dump(ally, stdout);
         try stdout.writeByte('\n');
     }
 

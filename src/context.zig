@@ -318,7 +318,7 @@ pub const Message = struct {
         // TODO
 
         // append annotations
-        var notes = ctx.stub();
+        var notes = try ctx.stub();
         for (self.children.items) |child| {
             notes = try ctx.slap(notes, try child.render(ctx), .bottom, .{});
         }
