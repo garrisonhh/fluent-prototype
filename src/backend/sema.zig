@@ -227,8 +227,6 @@ fn analyzeCall(
         return error.FluentError;
     }
 
-    const returns = env.tw.get(fn_ty.func.returns);
-
     // analyze tail with fn param expectations
     const takes = fn_ty.func.takes;
     if (takes.len != tail.len) {
@@ -243,56 +241,12 @@ fn analyzeCall(
             texpr.deinit(ally);
         };
 
-        // params may be generic
-        const param_ty = env.tw.get(tid);
-        const param_outward = if (param_ty.* == .generic) generic: {
-            break :generic fn_ty.func.generics[param_ty.generic.index];
-        } else tid;
-
-        texprs[i + 1] = try analyzeExpr(env, scope, tail[i], param_outward);
+        texprs[i + 1] = try analyzeExpr(env, scope, tail[i], tid);
     }
-
-    // find widest type that will fit every parameter generic
-    const generics = try ally.alloc(?TypeId, fn_ty.func.generics.len);
-    defer ally.free(generics);
-
-    std.mem.set(?TypeId, generics, null);
-
-    for (texprs[1..]) |texpr, i| {
-        const param_ty = env.tw.get(takes[i]);
-        if (param_ty.* == .generic) {
-            const index = param_ty.generic.index;
-
-            if (generics[index]) |*known| {
-                // widen known type
-                const known_ty = env.tw.get(known.*);
-                const expr_ty = env.tw.get(texpr.ty);
-                known.* = try expr_ty.unify(env.ally, &env.tw, known_ty.*);
-            } else {
-                // use parameter type
-                generics[index] = texpr.ty;
-            }
-        }
-    }
-
-    // unify all generic parameters with their now fully known type
-    for (texprs[1..]) |*texpr, i| {
-        const param_ty = env.tw.get(takes[i]);
-        if (param_ty.* == .generic) {
-            const known = generics[param_ty.generic.index].?;
-            texpr.* = try unifyTExpr(env, texpr.*, known);
-        }
-    }
-
-    // find return type (may need a generic lookup)
-    const final_tid = if (returns.* == .generic) generic: {
-        const index = returns.generic.index;
-        break :generic generics[index] orelse fn_ty.func.generics[index];
-    } else fn_ty.func.returns;
 
     // create TExpr
     const texpr = TExpr{
-        .ty = final_tid,
+        .ty = fn_ty.func.returns,
         .loc = expr.loc,
         .data = TExpr.Data{ .call = texprs },
     };

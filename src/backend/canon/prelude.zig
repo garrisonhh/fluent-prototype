@@ -9,6 +9,28 @@ const Type = types.Type;
 const TypeId = types.TypeId;
 const TypeWelt = types.TypeWelt;
 const Env = @import("../env.zig");
+const TExpr = @import("../texpr.zig");
+
+fn filterDefError(e: Env.DefError, comptime str: []const u8) Allocator.Error {
+    return switch (e) {
+        error.NameRedef, error.RenamedType, error.NameTooLong => {
+            const fmt = "uh oh, got {} in prelude definition while trying "
+                     ++ "to define {s}.";
+            std.debug.panic(fmt, .{e, str});
+        },
+        error.OutOfMemory => return @errSetCast(Allocator.Error, e)
+    };
+}
+
+fn def(
+    env: *Env,
+    comptime str: []const u8,
+    value: TExpr,
+) Allocator.Error!void {
+    _ = env.def(Env.ROOT, comptime Symbol.init(str), value) catch |e| {
+        return filterDefError(e, str);
+    };
+}
 
 fn defType(
     env: *Env,
@@ -17,14 +39,7 @@ fn defType(
 ) Allocator.Error!TypeId {
     const id = try env.identify(ty);
     _ = env.defType(Env.ROOT, comptime Symbol.init(str), id) catch |e| {
-        switch (e) {
-            error.NameRedef, error.RenamedType, error.NameTooLong => {
-                const fmt = "uh oh, got {} in prelude definition while trying "
-                         ++ "to define {s}.";
-                std.debug.panic(fmt, .{e, str});
-            },
-            error.OutOfMemory => return @errSetCast(Allocator.Error, e)
-        }
+        return filterDefError(e, str);
     };
 
     return id;
@@ -74,7 +89,6 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     _ = any;
     _ = @"type";
     _ = unit;
-    _ = @"bool";
 
     // define number types
     const compiler_int = try defNumeric(&env, "compiler-int", .int, null);
@@ -102,10 +116,6 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     const uint = try defType(&env, "UInt", uint_ty);
     const float = try defType(&env, "Float", float_ty);
 
-    _ = int;
-    _ = uint;
-    _ = float;
-
     const number_ids = try tmp.alloc(
         TypeId,
         int_ids.len + uint_ids.len + float_ids.len
@@ -121,9 +131,13 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     const number_ty = try Type.initSet(tmp, number_ids);
     const number = try defType(&env, "Number", number_ty);
 
+    _ = int;
+    _ = uint;
+    _ = float;
     _ = number;
 
-    // TODO add builtin functions back in here
+    try def(&env, "true", TExpr.init(null, @"bool", .{ .@"bool" = true }));
+    try def(&env, "false", TExpr.init(null, @"bool", .{ .@"bool" = false }));
 
     return env;
 }

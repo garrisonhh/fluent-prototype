@@ -31,6 +31,15 @@ pub const Data = union(enum) {
     call: []Self,
 
     // special syntax
+    // TODO unify these into one tagged union type which contains all builtins.
+    // this will keep Env super clean, and will make homoiconicity incredibly
+    // natural
+    // TODO I should have a `lambda` builtin and then a `template` builtin which
+    // stores a function that hasn't been monomorphized. lambdas can then store
+    // compiled SSA and/or bytecode, and templates can store generic parameters
+    // and a SExpr which is only analyzed when used. when a template is
+    // monomorphized, it can then be stored back in the env as a fully
+    // functional lambda.
     do: []Self,
     list: []Self,
     cast: *Self,

@@ -17,9 +17,6 @@ fn expectEqual(expected: []const u8, actual: []const u8) !void {
     try context.init(ally);
     defer context.deinit();
 
-    // zig tests don't add a newline which messes up my output
-    try stdout.writeByte('\n');
-
     var env = try backend.generatePrelude(ally);
     defer env.deinit();
 
@@ -62,6 +59,11 @@ test "0x1.1" {
     var buf: [16]u8 = undefined;
     const n = try std.fmt.bufPrint(&buf, "{d}", .{0x1.1});
     try expectEqual("0x1.1", n);
+}
+
+test "bool consts" {
+    try expectEqual("true", "true");
+    try expectEqual("false", "false");
 }
 
 test "and" {

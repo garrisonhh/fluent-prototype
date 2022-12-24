@@ -166,14 +166,12 @@ pub const Type = union(enum) {
     };
 
     pub const Func = struct {
-        generics: []TypeId,
         takes: []TypeId,
         contexts: []TypeId, // implicit parameters for effect management
         returns: TypeId,
 
         pub fn clone(self: Func, ally: Allocator) Allocator.Error!Func {
             return Func{
-                .generics = try ally.dupe(TypeId, self.generics),
                 .takes = try ally.dupe(TypeId, self.takes),
                 .contexts = try ally.dupe(TypeId, self.contexts),
                 .returns = self.returns,
@@ -181,18 +179,10 @@ pub const Type = union(enum) {
         }
     };
 
-    /// generics only exist in the context of the current function
-    /// TODO maybe remove this and tackle generics a different way, like with
-    /// storing source code as TExprs and then remapping generic names to
-    /// TypeIds through scoping, and then generate TExprs and SSA for each
-    /// generic usage of a function
-    pub const GenericId = struct { index: usize };
-
     // unique
     unit,
     hole,
     namespace,
-    generic: GenericId,
 
     // dynamic time
     symbol,
@@ -229,12 +219,11 @@ pub const Type = union(enum) {
     pub fn deinit(self: *Self, ally: Allocator) void {
         switch (self.*) {
             .unit, .hole, .namespace, .symbol, .any, .ty, .number, .list,
-            .generic, .@"bool", .@"ptr", .atom
+            .@"bool", .@"ptr", .atom
                 => {},
             .set => |*set| set.deinit(ally),
             .tuple => |tup| ally.free(tup),
             .func => |func| {
-                ally.free(func.generics);
                 ally.free(func.takes);
                 ally.free(func.contexts);
             },
@@ -247,7 +236,6 @@ pub const Type = union(enum) {
 
         switch (self) {
             .unit, .symbol, .hole, .any, .ty, .@"bool", .namespace => {},
-            .generic => |gid| wyhash.update(asBytes(&gid)),
             .set => {
                 // NOTE if there is a serious issue here, figure out if there is
                 // a way to hash this in constant space. for now I'm just
@@ -262,7 +250,6 @@ pub const Type = union(enum) {
             .list, .ptr => |subty| wyhash.update(asBytes(&subty)),
             .tuple => |tup| wyhash.update(asBytes(&tup)),
             .func => |func| {
-                wyhash.update(asBytes(&func.generics));
                 wyhash.update(asBytes(&func.takes));
                 wyhash.update(asBytes(&func.contexts));
                 wyhash.update(asBytes(&func.returns));
@@ -288,7 +275,6 @@ pub const Type = union(enum) {
 
         return switch (self) {
             .unit, .symbol, .hole, .any, .ty, .@"bool", .namespace => true,
-            .generic => |gid| gid.index == ty.generic.index,
             .set => |set| set: {
                 if (set.count() != ty.set.count()) {
                     break :set false;
@@ -307,8 +293,7 @@ pub const Type = union(enum) {
             .list, .ptr => |subty| subty.eql(ty.list),
             .tuple => |tup| idsEql(tup, ty.tuple),
             .func => |func|
-                idsEql(func.generics, ty.func.generics)
-                and idsEql(func.takes, ty.func.takes)
+                idsEql(func.takes, ty.func.takes)
                 and idsEql(func.contexts, ty.func.contexts)
                 and func.returns.eql(ty.func.returns),
         };
@@ -317,7 +302,7 @@ pub const Type = union(enum) {
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch (self) {
             .unit, .symbol, .hole, .namespace, .any, .number, .ty, .list,
-            .generic, .@"bool", .ptr
+            .@"bool", .ptr
                 => self,
             .set => |set| Self{ .set = try set.clone(ally) },
             .atom => |name| Self{ .atom = name },
@@ -356,7 +341,7 @@ pub const Type = union(enum) {
 
         // concrete matching
         return switch (target) {
-            .any, .set, .hole, .generic => unreachable,
+            .any, .set, .hole, => unreachable,
             .unit, .@"bool", .symbol, .ty, .namespace => true,
             .atom => |sym| sym.eql(target.atom),
             .tuple => self.eql(target),
@@ -390,8 +375,6 @@ pub const Type = union(enum) {
         tw: *TypeWelt,
         other: Self
     ) Allocator.Error!TypeId {
-        std.debug.assert(self != .generic and other != .generic);
-
         if (self.eql(other)) {
             return try tw.identify(ally, self);
         } else if (self == .any or other == .any) {
@@ -451,8 +434,8 @@ pub const Type = union(enum) {
     /// at what point in the compilation cycle is this type valid?
     pub fn classifyRuntime(self: Self, typewelt: TypeWelt) RuntimeClass {
         return switch (self) {
-            .any, .set, .hole, .generic, .namespace => .analysis,
-            .ty, .symbol => .dynamic,
+            .any, .set, .hole => .analysis,
+            .ty, .symbol, .namespace => .dynamic,
             .unit, .atom, .@"bool" => .static,
             .number => |num| if (num.bits != null) .static else .dynamic,
             .list, .ptr
@@ -475,7 +458,7 @@ pub const Type = union(enum) {
         std.debug.assert(self.classifyRuntime(tw) != .analysis);
 
         return switch (self) {
-            .any, .set, .hole, .generic, .namespace => unreachable,
+            .any, .set, .hole, .namespace => unreachable,
             .number => |num| (num.bits orelse 64) / 8,
             .@"bool" => 1,
             .ptr => 8,
@@ -571,22 +554,12 @@ pub const Type = union(enum) {
             },
             .func => |func| {
                 try writer.writeAll("(Fn ");
-                try writeList(func.generics, ally, tw, writer);
-                try writer.writeByte(' ');
                 try writeList(func.takes, ally, tw, writer);
                 try writer.writeByte(' ');
                 try writeList(func.contexts, ally, tw, writer);
                 try writer.writeByte(' ');
                 try func.returns.write(ally, tw, writer);
                 try writer.writeByte(')');
-            },
-            .generic => |gid| {
-                const n = gid.index;
-                if (n >= 26) {
-                    try writer.print("generic-{}", .{n});
-                } else {
-                    try writer.writeByte('A' + @intCast(u8, n));
-                }
             },
         }
     }
