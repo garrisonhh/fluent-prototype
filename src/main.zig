@@ -55,7 +55,16 @@ fn replRead(ally: Allocator) !context.FileHandle {
         if (level == 0) break;
     }
 
-    return context.addExternalSource("repl", buf.items);
+    // every read needs to have a unique namespace
+    const C = struct { var reads: usize = 0; };
+
+    var tmp: [32]u8 = undefined;
+    const filename = std.fmt.bufPrint(&tmp, "repl-{d}", .{C.reads}) catch {
+        unreachable;
+    };
+    C.reads += 1;
+
+    return context.addExternalSource(filename, buf.items);
 }
 
 fn repl(ally: Allocator, env: *Env) !void {
@@ -211,11 +220,12 @@ fn parseArgs(ally: Allocator) !Command {
 
 pub fn main() !void {
     // boilerplate stuff
-    var gpa = std.heap.GeneralPurposeAllocator(.{
-        .stack_trace_frames = 1000,
-    }){};
-    defer _ = gpa.deinit();
-    const ally = gpa.allocator();
+    // var gpa = std.heap.GeneralPurposeAllocator(.{
+    //     .stack_trace_frames = 1000,
+    // }){};
+    // defer _ = gpa.deinit();
+    // const ally = gpa.allocator();
+    const ally = std.heap.page_allocator;
 
     try context.init(ally);
     defer context.deinit();

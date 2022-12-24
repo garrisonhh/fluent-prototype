@@ -14,9 +14,18 @@ fn defType(
     env: *Env,
     comptime str: []const u8,
     ty: Type
-) Env.DefError!TypeId {
+) Allocator.Error!TypeId {
     const id = try env.identify(ty);
-    _ = try env.defType(Env.ROOT, comptime Symbol.init(str), id);
+    _ = env.defType(Env.ROOT, comptime Symbol.init(str), id) catch |e| {
+        switch (e) {
+            error.NameRedef, error.RenamedType, error.NameTooLong => {
+                const fmt = "uh oh, got {} in prelude definition while trying "
+                         ++ "to define {s}.";
+                std.debug.panic(fmt, .{e, str});
+            },
+            error.OutOfMemory => return @errSetCast(Allocator.Error, e)
+        }
+    };
 
     return id;
 }
@@ -26,8 +35,8 @@ fn defNumeric(
     comptime str: []const u8,
     layout: util.Number.Layout,
     bits: ?u8
-) Env.DefError!TypeId {
-    return defType(env, str, Type{
+) Allocator.Error!TypeId {
+    return try defType(env, str, Type{
         .number = .{ .layout = layout, .bits = bits }
     });
 }
@@ -49,7 +58,7 @@ fn funcType(
     };
 }
 
-pub fn generatePrelude(ally: Allocator) Env.DefError!Env {
+pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     var arena = std.heap.ArenaAllocator.init(ally);
     defer arena.deinit();
     const tmp = arena.allocator();
@@ -69,7 +78,7 @@ pub fn generatePrelude(ally: Allocator) Env.DefError!Env {
 
     // define number types
     const compiler_int = try defNumeric(&env, "compiler-int", .int, null);
-    const compiler_float = try defNumeric(&env, "compiler-int", .float, null);
+    const compiler_float = try defNumeric(&env, "compiler-float", .float, null);
 
     const @"i8" = try defNumeric(&env, "i8", .int, 8);
     const @"i16" = try defNumeric(&env, "i16", .int, 16);

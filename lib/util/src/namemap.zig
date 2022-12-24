@@ -184,29 +184,31 @@ pub fn NameMap(comptime V: type) type {
             return res.key_ptr.*;
         }
 
+        /// find the mapping for a specific name
         pub fn get(self: *Self, name: Name) V {
             // since `put` is the only way to acquire a name, `get` should never
             // be able to fail
             return self.map.get(name).?;
         }
 
-        pub fn getWithin(self: *Self, ns: Name, sym: Symbol) ?V {
+        // search up through the path of namespaces for a symbol which
+        // matches this one
+        pub fn seek(self: *Self, ns: Name, sym: Symbol) ?V {
             var buf: [Name.MAX_LENGTH]Symbol = undefined;
             std.mem.copy(Symbol, &buf, ns.syms);
             buf[ns.syms.len] = sym;
 
             var syms = buf[0..ns.syms.len + 1];
-            while (syms.len > 0) {
+            while (syms.len > 0) : ({
+                // make a name that is the namespace down with the symbol
+                // appended
+                syms = syms[0..syms.len - 1];
+                syms[syms.len - 1] = sym;
+            }) {
                 const name = Name.initOwned(syms) catch unreachable;
-
                 if (self.map.get(name)) |value| {
                     return value;
                 }
-
-                // iter
-                const new_len = syms.len - 1;
-                syms = syms[0..new_len];
-                syms[new_len - 1] = sym;
             }
 
             // none found

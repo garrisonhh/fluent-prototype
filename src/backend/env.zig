@@ -31,15 +31,10 @@ const Self = @This();
 
 pub const ROOT = Name.ROOT;
 
-const Binding = struct {
-    value: TExpr,
-};
-
-
 ally: Allocator,
 tw: TypeWelt = .{},
 // env owns everything in every binding
-nmap: NameMap(Binding) = .{},
+nmap: NameMap(TExpr) = .{},
 
 pub fn init(ally: Allocator) Allocator.Error!Self {
     return Self{
@@ -60,7 +55,7 @@ pub fn identify(self: *Self, ty: Type) Allocator.Error!TypeId {
 
 /// searches up through the namespace for a symbol
 pub fn seek(self: *Self, scope: Name, sym: Symbol) ?TExpr {
-    return if (self.nmap.getWithin(scope, sym)) |b| b.value else null;
+    return self.nmap.seek(scope, sym);
 }
 
 /// searches for an exact name
@@ -73,11 +68,8 @@ pub fn get(self: *Self, name: Name) TExpr {
 pub const DefError = util.NameError || TypeWelt.RenameError;
 
 pub fn def(self: *Self, scope: Name, sym: Symbol, value: TExpr) DefError!Name {
-    const binding = Binding{
-        .value = try value.clone(self.ally),
-    };
-
-    return self.nmap.put(self.ally, scope, sym, binding);
+    const owned = try value.clone(self.ally);
+    return self.nmap.put(self.ally, scope, sym, owned);
 }
 
 pub fn defNamespace(self: *Self, scope: Name, sym: Symbol) DefError!Name {
