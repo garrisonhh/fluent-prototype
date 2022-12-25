@@ -68,59 +68,38 @@ test "prelude types" {
     try expectCompiles("Number");
 }
 
+test "number literals" {
+    var buf: [256]u8 = undefined;
+    var n: []u8 = undefined;
 
-test "0xdeadbeef" {
-    var buf: [16]u8 = undefined;
-    const n = try std.fmt.bufPrint(&buf, "{d}", .{0xDEAD_BEEF});
+    n = try std.fmt.bufPrint(&buf, "{d}", .{0xDEAD_BEEF});
     try expectEqual("0xDEAD_BEEF", n);
-}
-
-test "0b1010" {
     try expectEqual("0b1010", "10");
-}
-
-test "0o777" {
     try expectEqual("0o777", "511");
-}
-
-test "0.0001" {
-    var buf: [16]u8 = undefined;
-    const n = try std.fmt.bufPrint(&buf, "{d}", .{0.0001});
+    n = try std.fmt.bufPrint(&buf, "{d}", .{0.0001});
     try expectEqual("0.0001", n);
-}
-
-test "0.01" {
-    var buf: [16]u8 = undefined;
-    const n = try std.fmt.bufPrint(&buf, "{d}", .{0.01});
+    n = try std.fmt.bufPrint(&buf, "{d}", .{0.01});
     try expectEqual("0.01", n);
-}
-
-test "0x1.1" {
-    var buf: [16]u8 = undefined;
-    const n = try std.fmt.bufPrint(&buf, "{d}", .{0x1.1});
+    n = try std.fmt.bufPrint(&buf, "{d}", .{0x1.1});
     try expectEqual("0x1.1", n);
 }
 
-test "bool consts" {
+test "bool literals" {
     try expectCompiles("true");
     try expectCompiles("false");
 }
 
-test "and" {
+test "bool operators" {
     try expectEqual("and true true", "true");
     try expectEqual("and false true", "false");
     try expectEqual("and true false", "false");
     try expectEqual("and false false", "false");
-}
 
-test "or" {
     try expectEqual("or true true", "true");
     try expectEqual("or false true", "true");
     try expectEqual("or true false", "true");
     try expectEqual("or false false", "false");
-}
 
-test "not" {
     try expectEqual("not true", "false");
     try expectEqual("not false", "true");
 }
