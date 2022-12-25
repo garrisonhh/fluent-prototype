@@ -40,48 +40,73 @@ pub fn eval(env: *Env, scope: Name, sexpr: SExpr) !TExpr {
         render_time += now() - t;
     }
 
-    // lower to ssa ir
-    var ssa = try lower(env.ally, env, texpr);
-    defer ssa.deinit(env.ally);
+    // analysis may produce a constant, otherwise the expr must be lowered,
+    // compiled, and executed on the virtual machine
+    const final = final: {
+        if (texpr.isValue()) {
+            // constant
+            if (builtin.mode == .Debug) {
+                try stdout.writeAll("analyzed a constant.\n");
+            }
 
-    if (builtin.mode == .Debug) {
-        const t = now();
-        var ctx = kz.Context.init(env.ally);
-        defer ctx.deinit();
+            break :final try texpr.clone(env.ally);
+        } else if (texpr.data == .name) {
+            // symbolic reference to constant
+            const bound = env.get(texpr.data.name);
 
-        const tex = try ssa.render(&ctx, env);
+            if (bound.isValue()) {
+                if (builtin.mode == .Debug) {
+                    try stdout.writeAll("analyzed a bound constant.\n");
+                }
 
-        try stdout.writeAll("[SSA Program]\n");
-        try ctx.write(tex, stdout);
-        try stdout.writeByte('\n');
+                break :final try bound.clone(env.ally);
+            }
+        }
 
-        render_time += now() - t;
-    }
+        // lower to ssa ir
+        var ssa = try lower(env.ally, env, texpr);
+        defer ssa.deinit(env.ally);
 
-    // compile to bytecode
-    const bc = try compile(env.ally, env.tw, ssa);
-    defer bc.deinit(env.ally);
+        if (builtin.mode == .Debug) {
+            const t = now();
+            var ctx = kz.Context.init(env.ally);
+            defer ctx.deinit();
 
-    if (builtin.mode == .Debug) {
-        const t = now();
-        var ctx = kz.Context.init(env.ally);
-        defer ctx.deinit();
+            const tex = try ssa.render(&ctx, env);
 
-        const tex = try bc.render(&ctx);
+            try stdout.writeAll("[SSA Program]\n");
+            try ctx.write(tex, stdout);
+            try stdout.writeByte('\n');
 
-        try stdout.writeAll("[Bytecode]\n");
-        try ctx.write(tex, stdout);
-        try stdout.writeByte('\n');
+            render_time += now() - t;
+        }
 
-        render_time += now() - t;
-    }
+        // compile to bytecode
+        const bc = try compile(env.ally, env.tw, ssa);
+        defer bc.deinit(env.ally);
 
-    // run compiled bytecode
-    const return_ty = bc.returns;
-    const value = try run(env.ally, &env.tw, bc);
-    defer value.deinit(env.ally);
+        if (builtin.mode == .Debug) {
+            const t = now();
+            var ctx = kz.Context.init(env.ally);
+            defer ctx.deinit();
 
-    const final = try value.resurrect(env.*, return_ty);
+            const tex = try bc.render(&ctx);
+
+            try stdout.writeAll("[Bytecode]\n");
+            try ctx.write(tex, stdout);
+            try stdout.writeByte('\n');
+
+            render_time += now() - t;
+        }
+
+        // run compiled bytecode
+        const return_ty = bc.returns;
+        const value = try run(env.ally, &env.tw, bc);
+        defer value.deinit(env.ally);
+
+        break :final try value.resurrect(env.*, return_ty);
+    };
+    defer final.deinit(env.ally);
 
     // render final value
     if (builtin.mode == .Debug) {

@@ -163,6 +163,7 @@ fn lowerExpr(
     return switch (expr.data) {
         .@"bool" => try lowerBool(func, expr),
         .number => try lowerNumber(func, expr),
+        .name => |name| try lowerExpr(env, prog, func, env.get(name)),
         .cast => try lowerCast(env, prog, func, expr),
         .call => try lowerCall(env, prog, func, expr),
         .do => try lowerDo(env, prog, func, expr),

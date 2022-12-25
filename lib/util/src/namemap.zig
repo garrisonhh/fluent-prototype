@@ -37,7 +37,7 @@ pub const Name = struct {
         return wyhash.final();
     }
 
-    fn initOwned(syms: []Symbol) NameError!Self {
+    fn initBuf(syms: []Symbol) NameError!Self {
         if (syms.len > MAX_LENGTH) {
             return error.NameTooLong;
         }
@@ -49,7 +49,7 @@ pub const Name = struct {
     }
 
     fn init(ally: Allocator, syms: []const Symbol) NameError!Self {
-        return try Self.initOwned(try ally.dupe(Symbol, syms));
+        return try Self.initBuf(try ally.dupe(Symbol, syms));
     }
 
     fn initAppend(ally: Allocator, ns: Name, sym: Symbol) NameError!Self {
@@ -57,16 +57,22 @@ pub const Name = struct {
         std.mem.copy(Symbol, syms, ns.syms);
         syms[syms.len - 1] = sym;
 
-        return try Self.initOwned(syms);
+        return try Self.initBuf(syms);
     }
 
     fn drop(ns: Name) Name {
         std.debug.assert(ns.syms.len > 0);
-        return Self.initOwned(ns.syms[0..ns.syms.len - 1]) catch unreachable;
+        return Self.initBuf(ns.syms[0..ns.syms.len - 1]) catch unreachable;
     }
 
     fn deinit(self: Self, ally: Allocator) void {
         ally.free(self.syms);
+    }
+
+    fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
+        return Self.init(ally, self.syms) catch |e| {
+            return @errSetCast(Allocator.Error, e);
+        };
     }
 
     pub fn eql(self: Self, other: Self) bool {
@@ -135,12 +141,14 @@ pub fn NameMap(comptime V: type) type {
     return struct {
         const Self = @This();
 
+        const Backing = Name.HashMapUnmanaged(V);
+
         /// set of owned symbols
         syms: Symbol.HashMapUnmanaged(void) = .{},
         /// set of owned names
         names: Name.HashMapUnmanaged(void) = .{},
         /// maps names to values
-        map: Name.HashMapUnmanaged(V) = .{},
+        map: Backing = .{},
 
         pub fn deinit(self: *Self, ally: Allocator) void {
             // deinit syms
@@ -167,10 +175,22 @@ pub fn NameMap(comptime V: type) type {
             self: *Self,
             ally: Allocator,
             sym: Symbol
-        ) NameError!Symbol {
+        ) Allocator.Error!Symbol {
             const res = try self.syms.getOrPut(ally, sym);
             if (!res.found_existing) {
                 res.key_ptr.* = try sym.clone(ally);
+            }
+            return res.key_ptr.*;
+        }
+
+        fn acquireName(
+            self: *Self,
+            ally: Allocator,
+            name: Name
+        ) Allocator.Error!Name {
+            const res = try self.names.getOrPut(ally, name);
+            if (!res.found_existing) {
+                res.key_ptr.* = try name.clone(ally);
             }
             return res.key_ptr.*;
         }
@@ -186,22 +206,27 @@ pub fn NameMap(comptime V: type) type {
             sym: Symbol,
             value: V
         ) NameError!Name {
+            // get name, check if it exists already
             const owned = try self.acquireSym(ally, sym);
-            const name = try Name.initAppend(ally, ns, owned);
 
-            const res = try self.names.getOrPut(ally, name);
-            if (res.found_existing) {
+            var buf: [Name.MAX_LENGTH]Symbol = undefined;
+            std.mem.copy(Symbol, &buf, ns.syms);
+            buf[ns.syms.len] = owned;
+
+            const buf_name = try Name.initBuf(buf[0..ns.syms.len + 1]);
+
+            if (self.map.contains(buf_name)) {
                 return error.NameRedef;
-            } else {
-                res.key_ptr.* = name;
             }
 
+            // acquire and set name
+            const name = try self.acquireName(ally, buf_name);
             try self.map.put(ally, name, value);
 
-            return res.key_ptr.*;
+            return name;
         }
 
-        fn getSymbol(self: *Self, ns: Name, sym: Symbol) ?V {
+        fn getSymbolEntry(self: *Self, ns: Name, sym: Symbol) ?Backing.Entry {
             const Key = struct {
                 ns: Name,
                 sym: Symbol,
@@ -240,7 +265,7 @@ pub fn NameMap(comptime V: type) type {
                 .sym = sym,
             };
 
-            return self.map.getAdapted(key, Adapter{});
+            return self.map.getEntryAdapted(key, Adapter{});
         }
 
         /// find the mapping for a specific name
@@ -252,12 +277,18 @@ pub fn NameMap(comptime V: type) type {
 
         /// search up through the path of namespaces for a symbol which
         /// matches this one
-        pub fn seek(self: *Self, ns: Name, sym: Symbol) ?V {
+        pub fn seek(self: *Self, ns: Name, sym: Symbol, out_name: ?*Name) ?V {
             var scope = ns;
-            while (scope.syms.len > 0) : (scope = scope.drop()) {
-                if (self.getSymbol(ns, sym)) |value| {
-                    return value;
+            while (true) : (scope = scope.drop()) {
+                if (self.getSymbolEntry(scope, sym)) |entry| {
+                    if (out_name) |ptr| {
+                        ptr.* = entry.key_ptr.*;
+                    }
+
+                    return entry.value_ptr.*;
                 }
+
+                if (scope.syms.len == 0) break;
             }
 
             return null;

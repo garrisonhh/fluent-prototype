@@ -51,19 +51,33 @@ fn typeOfNumber(env: *Env, num: Number) SemaError!TypeId {
     });
 }
 
-fn typeOfSymbol(env: *Env, scope: Name, expr: SExpr) SemaError!TypeId {
+fn analyzeSymbol(
+    env: *Env,
+    scope: Name,
+    expr: SExpr,
+    outward: TypeId
+) SemaError!TExpr {
     const symbol = expr.data.symbol;
 
     // holes
     if (symbol.str[0] == '_') {
-        return try env.identify(Type{ .hole = {} });
+        return holeError(env.*, expr.loc, outward);
     }
 
     // normal symbol
-    return if (env.seek(scope, symbol)) |value| value.ty else {
+    var name: Name = undefined;
+    const ty = if (env.seek(scope, symbol, &name)) |value| value.ty else {
         _ = try context.post(.err, expr.loc, "unknown symbol `{}`", .{symbol});
         return error.FluentError;
     };
+
+    const inner_expr = TExpr{
+        .ty = ty,
+        .loc = expr.loc,
+        .data = .{ .name = name }
+    };
+
+    return try unifyTExpr(env, inner_expr, outward);
 }
 
 fn analyzeDo(
@@ -264,11 +278,6 @@ fn analyzeCall(
 fn unifyTExpr(env: *Env, texpr: TExpr, outward: TypeId) SemaError!TExpr {
     const inner = env.tw.get(texpr.ty);
 
-    // identify holes
-    if (inner.* == .hole) {
-        return holeError(env.*, texpr.loc, outward);
-    }
-
     // check for already unified texprs
     const outer = env.tw.get(outward);
     const is_unified = switch (outer.*) {
@@ -300,30 +309,43 @@ fn analyzeExpr(
     expr: SExpr,
     outward: TypeId
 ) SemaError!TExpr {
-    // calls (and builtins)
-    if (expr.data == .call) {
-        return try analyzeCall(env, scope, expr, outward);
+    return switch (expr.data) {
+        .call => try analyzeCall(env, scope, expr, outward),
+        .symbol => try analyzeSymbol(env, scope, expr, outward),
+        else => lit: {
+            const texpr = TExpr{
+                .ty = switch (expr.data) {
+                    .@"bool" => try env.identify(Type{ .@"bool" = {} }),
+                    .number => |num| try typeOfNumber(env, num),
+                    // string literals are (List u8)
+                    .string => try env.identify(Type{
+                        .list = try env.identify(Type{
+                            .number = .{ .layout = .uint, .bits = 8 }
+                        })
+                    }),
+                    .call, .symbol => unreachable
+                },
+                .loc = expr.loc,
+                .data = try TExpr.Data.fromSExprData(env.ally, expr.data),
+            };
+
+            break :lit unifyTExpr(env, texpr, outward);
+        }
+    };
+}
+
+/// flattens `do` blocks with one expression into the expression
+fn pruneDoBlocks(env: Env, texpr: *TExpr) SemaError!void {
+    if (texpr.data == .do and texpr.data.do.len == 1) {
+        const child = texpr.data.do[0];
+        env.ally.free(texpr.data.do);
+
+        texpr.* = child;
     }
 
-    // literals
-    const texpr = TExpr{
-        .ty = switch (expr.data) {
-            .@"bool" => try env.identify(Type{ .@"bool" = {} }),
-            .number => |num| try typeOfNumber(env, num),
-            .symbol => try typeOfSymbol(env, scope, expr),
-            // string literals are (List u8)
-            .string => try env.identify(Type{
-                .list = try env.identify(Type{
-                    .number = .{ .layout = .uint, .bits = 8 }
-                })
-            }),
-            .call => unreachable
-        },
-        .loc = expr.loc,
-        .data = try TExpr.Data.fromSExprData(env.ally, expr.data),
-    };
-
-    return unifyTExpr(env, texpr, outward);
+    for (texpr.getChildren()) |*child| {
+        try pruneDoBlocks(env, child);
+    }
 }
 
 /// after analysis, it's possible that types that fluent can't actually lower
@@ -343,7 +365,9 @@ fn verifyDynamic(env: Env, texpr: TExpr) SemaError!void {
     }
 
     // recurse
-    for (texpr.getChildren()) |child| try verifyDynamic(env, child);
+    for (texpr.getChildren()) |child| {
+        try verifyDynamic(env, child);
+    }
 }
 
 pub fn analyze(
@@ -352,7 +376,10 @@ pub fn analyze(
     expr: SExpr,
     expects: TypeId
 ) SemaError!TExpr {
-    const texpr = try analyzeExpr(env, scope, expr, expects);
+    var texpr = try analyzeExpr(env, scope, expr, expects);
+
+    // postprocessing
+    try pruneDoBlocks(env.*, &texpr);
     try verifyDynamic(env.*, texpr);
 
     return texpr;

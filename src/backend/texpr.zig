@@ -1,12 +1,13 @@
 //! contains all of the information of SExpr, but with extra type information.
 //! this is the glorious holy altar to which we must sacrifice all data.
 //!
-//! instances own all data.
+//! instances own all data, except for names
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const util = @import("util");
 const Symbol = util.Symbol;
+const Name = util.Name;
 const kz = @import("kritzler");
 const context = @import("../context.zig");
 const Loc = context.Loc;
@@ -27,7 +28,7 @@ pub const Data = union(enum) {
     @"bool": bool,
     number: Number,
     string: Symbol,
-    symbol: Symbol,
+    name: Name,
     call: []Self,
 
     // special syntax
@@ -46,8 +47,8 @@ pub const Data = union(enum) {
 
     pub fn deinit(self: Data, ally: Allocator) void {
         switch (self) {
-            .namespace, .@"bool", .number, .ty => {},
-            .string, .symbol => |sym| ally.free(sym.str),
+            .namespace, .@"bool", .number, .ty, .name => {},
+            .string => |sym| ally.free(sym.str),
             .call, .do, .list => |exprs| {
                 for (exprs) |expr| expr.deinit(ally);
                 ally.free(exprs);
@@ -68,7 +69,6 @@ pub const Data = union(enum) {
             .@"bool" => |val| Data{ .@"bool" = val },
             .number => |num| Data{ .number = num },
             .string => |sym| Data{ .string = try sym.clone(ally) },
-            .symbol => |sym| Data{ .symbol = try sym.clone(ally) },
             else => unreachable
         };
     }
@@ -85,9 +85,8 @@ pub const Data = union(enum) {
 
     pub fn clone(data: Data, ally: Allocator) Allocator.Error!Data {
         return switch (data) {
-            .namespace, .ty, .@"bool", .number => data,
+            .namespace, .ty, .@"bool", .number, .name => data,
             .string => |sym| Data{ .string = try sym.clone(ally) },
-            .symbol => |sym| Data{ .symbol = try sym.clone(ally) },
             .call => |exprs| Data{ .call = try cloneChildren(exprs, ally) },
             .do => |exprs| Data{ .do = try cloneChildren(exprs, ally) },
             .list => |exprs| Data{ .list = try cloneChildren(exprs, ally) },
@@ -174,6 +173,21 @@ pub fn getChildren(self: Self) []Self {
     };
 }
 
+/// finds whether the TExpr represents a value, meaning that it requires no
+/// further execution
+///
+/// TODO in many cases when I create a value TExpr I already know that it is a
+/// value TExpr, so I should cache `known_value: bool` and add it to `init`
+pub fn isValue(self: Self) bool {
+    return switch (self.data) {
+        .namespace, .ty, .@"bool", .number, .string => true,
+        .list => |children| for (children) |child| {
+            if (!child.isValue()) break false;
+        } else true,
+        .cast, .name, .call, .do => false,
+    };
+}
+
 pub fn render(
     self: Self,
     ctx: *kz.Context,
@@ -201,7 +215,7 @@ pub fn render(
         .@"bool" => |val| try ctx.print(magenta, "{}", .{val}),
         .number => |num| try ctx.print(magenta, "{}", .{num}),
         .string => |sym| try ctx.print(green, "\"{}\"", .{sym}),
-        .symbol => |sym| try ctx.print(red, "{}", .{sym}),
+        .name => |name| try ctx.print(red, "{}", .{name}),
         .do, .cast, .call, .list, .namespace,
             => try ctx.print(.{}, "{s}", .{@tagName(self.data)}),
     };

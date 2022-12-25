@@ -54,13 +54,13 @@ pub fn identify(self: *Self, ty: Type) Allocator.Error!TypeId {
 // accessors ===================================================================
 
 /// searches up through the namespace for a symbol
-pub fn seek(self: *Self, scope: Name, sym: Symbol) ?TExpr {
-    return self.nmap.seek(scope, sym);
+pub fn seek(self: *Self, scope: Name, sym: Symbol, out_name: ?*Name) ?TExpr {
+    return self.nmap.seek(scope, sym, out_name);
 }
 
 /// searches for an exact name
 pub fn get(self: *Self, name: Name) TExpr {
-    return self.nmap.get(name).value;
+    return self.nmap.get(name);
 }
 
 // definitions =================================================================
