@@ -11,6 +11,21 @@ fn exec(env: *backend.Env, handle: context.FileHandle) !backend.TExpr {
     };
 }
 
+fn expectCompiles(str: []const u8) !void {
+    const ally = std.testing.allocator;
+
+    try context.init(ally);
+    defer context.deinit();
+
+    const file = try context.addExternalSource("test", str);
+
+    var env = try backend.generatePrelude(ally);
+    defer env.deinit();
+
+    const expr = try exec(&env, file);
+    defer expr.deinit(env.ally);
+}
+
 fn expectEqual(expected: []const u8, actual: []const u8) !void {
     const ally = std.testing.allocator;
 
@@ -28,6 +43,31 @@ fn expectEqual(expected: []const u8, actual: []const u8) !void {
 
     try std.testing.expect(exp_val.eql(act_val));
 }
+
+test "prelude types" {
+    try expectCompiles("namespace");
+    try expectCompiles("type");
+    try expectCompiles("unit");
+    try expectCompiles("bool");
+
+    try expectCompiles("i8");
+    try expectCompiles("i16");
+    try expectCompiles("i32");
+    try expectCompiles("i64");
+    try expectCompiles("u8");
+    try expectCompiles("u16");
+    try expectCompiles("u32");
+    try expectCompiles("u64");
+    try expectCompiles("f32");
+    try expectCompiles("f64");
+
+    try expectCompiles("Any");
+    try expectCompiles("Int");
+    try expectCompiles("UInt");
+    try expectCompiles("Float");
+    try expectCompiles("Number");
+}
+
 
 test "0xdeadbeef" {
     var buf: [16]u8 = undefined;
@@ -62,8 +102,8 @@ test "0x1.1" {
 }
 
 test "bool consts" {
-    try expectEqual("true", "true");
-    try expectEqual("false", "false");
+    try expectCompiles("true");
+    try expectCompiles("false");
 }
 
 test "and" {

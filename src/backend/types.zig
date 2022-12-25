@@ -493,7 +493,7 @@ pub const Type = union(enum) {
     ) WriteError!void {
         switch (self) {
             .unit, .@"bool", .namespace => try writer.writeAll(@tagName(self)),
-            .ty => try writer.writeAll("Type"),
+            .ty => try writer.writeAll("type"),
             .hole, .symbol, .any => try util.writeCaps(@tagName(self), writer),
             .atom => |sym| try writer.print("#{}", .{sym}),
             .set => |set| {

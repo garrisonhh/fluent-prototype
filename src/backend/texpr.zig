@@ -121,7 +121,7 @@ pub const Data = union(enum) {
             .@"bool" => |b| b == other.@"bool",
             .number => |n| n.eql(other.number),
             .string => |sym| sym.eql(other.string),
-            .symbol => |sym| sym.eql(other.symbol),
+            .name => |name| name.eql(other.name),
             .call => |call| eqlChildren(call, other.call),
             .do => |do| eqlChildren(do, other.do),
             .list => |list| eqlChildren(list, other.list),

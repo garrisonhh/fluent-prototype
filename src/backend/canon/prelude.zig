@@ -85,10 +85,12 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     const @"type" = try defType(&env, "type", Type{ .ty = {} });
     const unit = try defType(&env, "unit", Type{ .unit = {} });
     const @"bool" = try defType(&env, "bool", Type{ .@"bool" = {} });
+    const namespace = try defType(&env, "namespace", Type{ .namespace = {} });
 
     _ = any;
     _ = @"type";
     _ = unit;
+    _ = namespace;
 
     // define number types
     const compiler_int = try defNumeric(&env, "compiler-int", .int, null);
