@@ -46,7 +46,9 @@ pub fn eval(env: *Env, scope: Name, sexpr: SExpr) !TExpr {
         if (texpr.isValue()) {
             // constant
             if (builtin.mode == .Debug) {
+                const msg_start = now();
                 try stdout.writeAll("analyzed a constant.\n");
+                render_time += now() - msg_start;
             }
 
             break :final try texpr.clone(env.ally);
@@ -56,7 +58,9 @@ pub fn eval(env: *Env, scope: Name, sexpr: SExpr) !TExpr {
 
             if (bound.isValue()) {
                 if (builtin.mode == .Debug) {
+                    const msg_start = now();
                     try stdout.writeAll("analyzed a bound constant.\n");
+                    render_time += now() - msg_start;
                 }
 
                 break :final try bound.clone(env.ally);
