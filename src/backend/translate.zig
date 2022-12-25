@@ -36,10 +36,13 @@ fn translateCallTo(
 ) TranslateError!SExpr {
     const children = expr.children.?;
     const exprs = try ally.alloc(SExpr, 1 + children.len);
+    errdefer ally.free(exprs);
 
     exprs[0] = try SExpr.initSymbol(ally, expr.loc, name);
+    errdefer exprs[0].deinit(ally);
 
     for (children) |child, i| {
+        errdefer for (exprs[1..i + 1]) |e| e.deinit(ally);
         exprs[i + 1] = try translate(ally, child);
     }
 

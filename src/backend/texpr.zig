@@ -98,7 +98,7 @@ pub const Data = union(enum) {
 
                 break :call true;
             },
-            .builtin => |b| b == other.data.builtin,
+            .builtin => |b| b == other.builtin,
         };
     }
 };

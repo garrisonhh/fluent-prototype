@@ -46,7 +46,7 @@ pub fn asValue(self: @This(), ally: Allocator) Allocator.Error!Value {
     std.debug.assert(bits % 8 == 0 and bits / 8 <= 8);
     std.debug.assert(builtin.target.cpu.arch.endian() == .Little);
 
-    return Value.init(ally, data[0..bits / 8]);
+    return try Value.init(ally, data[0..bits / 8]);
 }
 
 pub fn eql(self: @This(), other: @This()) bool {
@@ -58,14 +58,14 @@ pub fn eql(self: @This(), other: @This()) bool {
     }
 
     // compare bytes
-    var mem: [16]u8 = undefined;
+    var mem: [32]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&mem);
     const ally = fba.allocator();
 
-    const bytes1 = self.asBytes(ally) catch unreachable;
-    const bytes2 = other.asBytes(ally) catch unreachable;
+    const val1 = self.asValue(ally) catch unreachable;
+    const val2 = other.asValue(ally) catch unreachable;
 
-    return std.mem.eql(u8, bytes1, bytes2);
+    return std.mem.eql(u8, val1.ptr, val2.ptr);
 }
 
 pub fn format(
