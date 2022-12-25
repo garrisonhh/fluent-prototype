@@ -11,12 +11,11 @@ const Loc = context.Loc;
 const types = @import("types.zig");
 const TypeId = types.TypeId;
 const Type = types.Type;
-const Pattern = types.Pattern;
 const Env = @import("env.zig");
 const SExpr = @import("sexpr.zig");
 const TExpr = @import("texpr.zig");
-const canon = @import("canon.zig");
-const Number = canon.Number;
+const Number = @import("canon.zig").Number;
+const eval = @import("eval.zig").eval;
 
 pub const SemaError =
     Allocator.Error
@@ -114,13 +113,6 @@ fn analyzeDo(
     return try unifyTExpr(env, texpr, outward);
 }
 
-// badass error haha
-fn badAsError(loc: Loc) SemaError {
-    const text = "`as` expression requires a type and a body";
-    _ = try context.post(.err, loc, text, .{});
-    return error.FluentError;
-}
-
 fn analyzeAs(
     env: *Env,
     scope: Name,
@@ -129,19 +121,27 @@ fn analyzeAs(
 ) SemaError!TExpr {
     const exprs = expr.data.call;
 
-    if (exprs.len != 3) return badAsError(expr.loc);
+    if (exprs.len != 3) {
+        const text = "`as` expression requires a type and a body";
+        _ = try context.post(.err, expr.loc, text, .{});
+        return error.FluentError;
+    }
 
     const type_expr = exprs[1];
     const body_expr = exprs[2];
 
-    // TODO this is a temporary hack before I can compile types by execution
-    // TODO replace this with a call to `eval`
-    const anno_ty = if (type_expr.data == .symbol) sym: {
-        break :sym env.seek(scope, type_expr.data.symbol).?.ty;
-    } else @panic("TODO generalized type annotations");
+    // compile type
+    const type_val = try eval(env, scope, type_expr);
+
+    const tyty = try env.identify(Type{ .ty = {} });
+    if (!type_val.ty.eql(tyty)) {
+        return expectError(env.*, type_val.loc, tyty, type_val.ty);
+    }
+
+    const anno = type_val.data.ty;
 
     // generate inner expr and unify
-    const texpr = try analyzeExpr(env, scope, body_expr, anno_ty);
+    const texpr = try analyzeExpr(env, scope, body_expr, anno);
     return try unifyTExpr(env, texpr, outward);
 }
 
