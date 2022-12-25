@@ -125,18 +125,11 @@ fn translateString(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
 }
 
 fn translateSymbol(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
-    const symbol = Symbol.init(expr.loc.getSlice());
-
-    // detect reserved keywords
-    if (symbol.eql(comptime Symbol.init("true"))) {
-        return SExpr.initBool(expr.loc, true);
-    } else if (symbol.eql(comptime Symbol.init("false"))) {
-        return SExpr.initBool(expr.loc, false);
-    }
+    const symbol = Symbol.init(try ally.dupe(u8, expr.loc.getSlice()));
 
     // regular symbol
     return SExpr{
-        .data = .{ .symbol = try symbol.clone(ally) },
+        .data = .{ .symbol = symbol },
         .loc = expr.loc,
     };
 }
