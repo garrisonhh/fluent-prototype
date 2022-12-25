@@ -97,16 +97,20 @@ fn analyzeDo(
         return error.FluentError;
     }
 
-    const texprs = try ally.alloc(TExpr, exprs.len - 1);
-    errdefer ally.free(texprs);
+    const texprs = try env.ally.alloc(TExpr, exprs.len);
+    errdefer env.ally.free(texprs);
+
+    // do expr
+    const builtin_ty = try env.identify(Type{ .builtin = {} });
+    texprs[0] = TExpr.initBuiltin(exprs[0].loc, builtin_ty, .do);
 
     // analyze statements
     const unit = try env.identify(Type{ .unit = {} });
 
     const stmts = exprs[1..exprs.len - 1];
     for (stmts) |stmt, i| {
-        errdefer for (texprs[0..i]) |texpr| texpr.deinit(ally);
-        texprs[i] = try analyzeExpr(env, scope, stmt, unit);
+        errdefer for (texprs[1..i + 1]) |texpr| texpr.deinit(ally);
+        texprs[i + 1] = try analyzeExpr(env, scope, stmt, unit);
     }
 
     errdefer for (texprs[0..stmts.len]) |texpr| {
@@ -122,7 +126,7 @@ fn analyzeDo(
     const texpr = TExpr{
         .ty = ret_expr.ty,
         .loc = expr.loc,
-        .data = .{ .do = texprs },
+        .data = .{ .call = texprs }
     };
     return try unifyTExpr(env, texpr, outward);
 }
@@ -167,9 +171,13 @@ fn analyzeList(
 ) SemaError!TExpr {
     const ally = env.ally;
 
-    const elements = expr.data.call[1..];
-    const texprs = try ally.alloc(TExpr, elements.len);
+    const exprs = expr.data.call;
+    const texprs = try ally.alloc(TExpr, exprs.len);
     errdefer ally.free(texprs);
+
+    // list expr
+    const builtin_ty = try env.identify(Type{ .builtin = {} });
+    texprs[0] = TExpr.initBuiltin(exprs[0].loc, builtin_ty, .do);
 
     // determine type expectations
     const any = try env.identify(Type{ .any = {} });
@@ -177,22 +185,22 @@ fn analyzeList(
     const elem_outward = if (expected.* == .list) expected.list else any;
 
     // analyze each element
-    for (elements) |elem, i| {
-        errdefer for (texprs[0..i]) |texpr| {
+    for (exprs[1..]) |elem, i| {
+        errdefer for (texprs[1..i + 1]) |texpr| {
             texpr.deinit(ally);
         };
-        texprs[i] = try analyzeExpr(env, scope, elem, elem_outward);
+        texprs[i + 1] = try analyzeExpr(env, scope, elem, elem_outward);
     }
 
     // TODO list elements must be retyped again either here or as a verification
     // step to ensure consistency across the list
 
     // create TExpr
-    const final_subty = if (texprs.len > 0) texprs[0].ty else elem_outward;
+    const final_subty = if (texprs.len > 1) texprs[1].ty else elem_outward;
     const texpr = TExpr{
         .ty = try env.identify(Type{ .list = final_subty }),
         .loc = expr.loc,
-        .data = .{ .list = texprs },
+        .data = .{ .call = texprs },
     };
     return unifyTExpr(env, texpr, outward);
 }
@@ -291,12 +299,12 @@ fn unifyTExpr(env: *Env, texpr: TExpr, outward: TypeId) SemaError!TExpr {
     // check for coercion
     if (try inner.coercesTo(env.ally, &env.tw, outer.*)) {
         // cast is possible
-        const cloned = try texpr.clone(env.ally);
-        return TExpr{
-            .ty = outward,
-            .loc = texpr.loc,
-            .data = .{ .cast = try util.placeOn(env.ally, cloned) },
-        };
+        const builtin_ty = try env.identify(Type{ .builtin = {} });
+        const cast = TExpr.initBuiltin(texpr.loc, builtin_ty, .cast);
+        const final = try TExpr.initCall(env.ally, texpr.loc, outward, cast, 1);
+        final.data.call[1] = try texpr.clone(env.ally);
+
+        return final;
     }
 
     // bad unification :(
@@ -336,11 +344,14 @@ fn analyzeExpr(
 
 /// flattens `do` blocks with one expression into the expression
 fn pruneDoBlocks(env: Env, texpr: *TExpr) SemaError!void {
-    if (texpr.data == .do and texpr.data.do.len == 1) {
-        const child = texpr.data.do[0];
-        env.ally.free(texpr.data.do);
+    if (texpr.data == .call and texpr.data.call[0].isBuiltin(.do)) {
+        const xs = texpr.data.call;
+        if (xs.len == 2) {
+            const child = xs[1];
+            env.ally.free(xs);
 
-        texpr.* = child;
+            texpr.* = child;
+        }
     }
 
     for (texpr.getChildren()) |*child| {

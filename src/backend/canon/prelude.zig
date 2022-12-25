@@ -86,6 +86,7 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     const unit = try defType(&env, "unit", Type{ .unit = {} });
     const @"bool" = try defType(&env, "bool", Type{ .@"bool" = {} });
     const namespace = try defType(&env, "namespace", Type{ .namespace = {} });
+    const flbuiltin = try defType(&env, "builtin", Type{ .builtin = {} });
 
     _ = any;
     _ = @"type";
@@ -140,6 +141,12 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
 
     try def(&env, "true", TExpr.init(null, @"bool", .{ .@"bool" = true }));
     try def(&env, "false", TExpr.init(null, @"bool", .{ .@"bool" = false }));
+
+    // builtins
+    inline for (comptime std.enums.values(TExpr.Builtin)) |b| {
+        const name = comptime b.getName();
+        try def(&env, name, TExpr.initBuiltin(null, flbuiltin, b));
+    }
 
     return env;
 }

@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const builtin = @import("builtin");
 const util = @import("util");
 const Symbol = util.Symbol;
 const Name = util.Name;
@@ -21,44 +22,43 @@ const Self = @This();
 
 pub const Number = canon.Number;
 
+pub const Builtin = enum {
+    ns,
+
+    // ops
+    list,
+    cast,
+
+    // control flow
+    do,
+    @"if",
+
+    pub fn getName(b: Builtin) []const u8 {
+        return switch (b) {
+            inline else => |tag| @tagName(tag),
+        };
+    }
+};
+
 pub const Tag = std.meta.Tag(Data);
+
 pub const Data = union(enum) {
-    namespace,
-    ty: TypeId,
+    unit,
     @"bool": bool,
     number: Number,
     string: Symbol,
+    ty: TypeId,
     name: Name,
     call: []Self,
 
-    // special syntax
-    // TODO unify these into one tagged union type which contains all builtins.
-    // this will keep Env super clean, and will make homoiconicity incredibly
-    // natural
+    // special syntax, often used as the head of a call texpr
     // TODO I should have a `lambda` builtin and then a `template` builtin which
     // stores a function that hasn't been monomorphized. lambdas can then store
     // compiled SSA and/or bytecode, and templates can store generic parameters
     // and a SExpr which is only analyzed when used. when a template is
     // monomorphized, it can then be stored back in the env as a fully
     // functional lambda.
-    do: []Self,
-    list: []Self,
-    cast: *Self,
-
-    pub fn deinit(self: Data, ally: Allocator) void {
-        switch (self) {
-            .namespace, .@"bool", .number, .ty, .name => {},
-            .string => |sym| ally.free(sym.str),
-            .call, .do, .list => |exprs| {
-                for (exprs) |expr| expr.deinit(ally);
-                ally.free(exprs);
-            },
-            .cast => |expr| {
-                expr.deinit(ally);
-                ally.destroy(expr);
-            },
-        }
-    }
+    builtin: Builtin,
 
     /// for easy literal analysis
     pub fn fromSExprData(
@@ -73,59 +73,32 @@ pub const Data = union(enum) {
         };
     }
 
-    fn cloneChildren(
-        children: []const Self,
-        ally: Allocator
-    ) Allocator.Error![]Self {
-        const cloned = try ally.alloc(Self, children.len);
-        for (children) |child, i| cloned[i] = try child.clone(ally);
-
-        return cloned;
-    }
-
-    pub fn clone(data: Data, ally: Allocator) Allocator.Error!Data {
-        return switch (data) {
-            .namespace, .ty, .@"bool", .number, .name => data,
-            .string => |sym| Data{ .string = try sym.clone(ally) },
-            .call => |exprs| Data{ .call = try cloneChildren(exprs, ally) },
-            .do => |exprs| Data{ .do = try cloneChildren(exprs, ally) },
-            .list => |exprs| Data{ .list = try cloneChildren(exprs, ally) },
-            .cast => |expr| Data{
-                .cast = try util.placeOn(ally, try expr.clone(ally))
-            },
-        };
-    }
-
-    fn eqlChildren(children: []const Self, other_children: []const Self) bool {
-        if (children.len != other_children.len) {
-            return false;
-        }
-
-        var i: usize = 0;
-        while (i < children.len) : (i += 1) {
-            if (!children[i].eql(other_children[i])) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
     fn eql(data: Data, other: Data) bool {
         if (@as(Tag, data) != @as(Tag, other)) {
             return false;
         }
 
         return switch (data) {
-            .namespace, .ty => true,
+            .ty, .unit => true,
             .@"bool" => |b| b == other.@"bool",
             .number => |n| n.eql(other.number),
             .string => |sym| sym.eql(other.string),
             .name => |name| name.eql(other.name),
-            .call => |call| eqlChildren(call, other.call),
-            .do => |do| eqlChildren(do, other.do),
-            .list => |list| eqlChildren(list, other.list),
-            .cast => |to| to.eql(other.cast.*),
+            .call => |exprs| call: {
+                const other_exprs = other.call;
+                if (exprs.len != other_exprs.len) {
+                    break :call false;
+                }
+
+                for (exprs) |expr, i| {
+                    if (expr.eql(other_exprs[i])) {
+                        break :call false;
+                    }
+                }
+
+                break :call true;
+            },
+            .builtin => |b| b == other.data.builtin,
         };
     }
 };
@@ -142,13 +115,50 @@ pub fn init(loc: ?Loc, ty: TypeId, data: Data) Self {
     };
 }
 
+pub fn initBuiltin(loc: ?Loc, ty: TypeId, b: Builtin) Self {
+    return Self.init(loc, ty, Data{ .builtin = b });
+}
+
+pub fn initCall(
+    ally: Allocator,
+    loc: ?Loc,
+    ty: TypeId,
+    head: Self,
+    nargs: usize
+) Allocator.Error!Self {
+    const exprs = try ally.alloc(Self, nargs + 1);
+    exprs[0] = head;
+
+    return Self.init(loc, ty, Data{ .call = exprs });
+}
+
 pub fn deinit(self: Self, ally: Allocator) void {
-    self.data.deinit(ally);
+    switch (self.data) {
+        .unit, .ty, .@"bool", .number, .name, .builtin => {},
+        .string => |str| ally.free(str.str),
+        .call => |children| {
+            for (children) |child| child.deinit(ally);
+            ally.free(children);
+        }
+    }
 }
 
 pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
+    const data = switch (self.data) {
+        .unit, .ty, .@"bool", .number, .name, .builtin => self.data,
+        .string => |sym| Data{ .string = try sym.clone(ally) },
+        .call => |children| call: {
+            const cloned = try ally.alloc(Self, children.len);
+            for (children) |child, i| {
+                cloned[i] = try child.clone(ally);
+            }
+
+            break :call Data{ .call = cloned };
+        }
+    };
+
     return Self{
-        .data = try self.data.clone(ally),
+        .data = data,
         .loc = self.loc,
         .ty = self.ty,
     };
@@ -166,11 +176,11 @@ pub fn eql(self: Self, other: Self) bool {
 ///
 /// useful for recursive operations on TExprs.
 pub fn getChildren(self: Self) []Self {
-    return switch (self.data) {
-        .call, .do, .list => |children| children,
-        .cast => |expr| @ptrCast([*]Self, expr)[0..1],
-        else => &.{}
-    };
+    return if (self.data == .call) self.data.call else &.{};
+}
+
+pub fn isBuiltin(self: Self, tag: Builtin) bool {
+    return self.data == .builtin and self.data.builtin == tag;
 }
 
 /// finds whether the TExpr represents a value, meaning that it requires no
@@ -180,11 +190,8 @@ pub fn getChildren(self: Self) []Self {
 /// value TExpr, so I should cache `known_value: bool` and add it to `init`
 pub fn isValue(self: Self) bool {
     return switch (self.data) {
-        .namespace, .ty, .@"bool", .number, .string => true,
-        .list => |children| for (children) |child| {
-            if (!child.isValue()) break false;
-        } else true,
-        .cast, .name, .call, .do => false,
+        .unit, .ty, .@"bool", .number, .string, .builtin => true,
+        .name, .call => false,
     };
 }
 
@@ -207,6 +214,7 @@ pub fn render(
 
     // other inline header stuff
     const data = switch (self.data) {
+        .call, .unit => try ctx.print(.{}, "{s}", .{@tagName(self.data)}),
         .ty => |ty| ty: {
             const str = try tw.get(ty).writeAlloc(ctx.ally, tw);
             defer ctx.ally.free(str);
@@ -214,10 +222,9 @@ pub fn render(
         },
         .@"bool" => |val| try ctx.print(magenta, "{}", .{val}),
         .number => |num| try ctx.print(magenta, "{}", .{num}),
-        .string => |sym| try ctx.print(green, "\"{}\"", .{sym}),
+        .string => |str| try ctx.print(green, "\"{}\"", .{str}),
         .name => |name| try ctx.print(red, "{}", .{name}),
-        .do, .cast, .call, .list, .namespace,
-            => try ctx.print(.{}, "{s}", .{@tagName(self.data)}),
+        .builtin => |b| try ctx.print(red, "{s}", .{@tagName(b)}),
     };
 
     // header

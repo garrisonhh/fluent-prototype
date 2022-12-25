@@ -183,6 +183,7 @@ pub const Type = union(enum) {
     unit,
     hole,
     namespace,
+    builtin,
 
     // dynamic time
     symbol,
@@ -218,8 +219,8 @@ pub const Type = union(enum) {
 
     pub fn deinit(self: *Self, ally: Allocator) void {
         switch (self.*) {
-            .unit, .hole, .namespace, .symbol, .any, .ty, .number, .list,
-            .@"bool", .@"ptr", .atom
+            .unit, .hole, .namespace, .builtin, .symbol, .any, .ty, .number,
+            .list, .@"bool", .@"ptr", .atom
                 => {},
             .set => |*set| set.deinit(ally),
             .tuple => |tup| ally.free(tup),
@@ -235,7 +236,8 @@ pub const Type = union(enum) {
         wyhash.update(asBytes(&std.meta.activeTag(self)));
 
         switch (self) {
-            .unit, .symbol, .hole, .any, .ty, .@"bool", .namespace => {},
+            .unit, .symbol, .hole, .any, .ty, .@"bool", .namespace, .builtin
+                => {},
             .set => {
                 // NOTE if there is a serious issue here, figure out if there is
                 // a way to hash this in constant space. for now I'm just
@@ -274,7 +276,8 @@ pub const Type = union(enum) {
         if (@as(Tag, self) != @as(Tag, ty)) return false;
 
         return switch (self) {
-            .unit, .symbol, .hole, .any, .ty, .@"bool", .namespace => true,
+            .unit, .symbol, .hole, .any, .ty, .@"bool", .namespace, .builtin
+                => true,
             .set => |set| set: {
                 if (set.count() != ty.set.count()) {
                     break :set false;
@@ -301,8 +304,8 @@ pub const Type = union(enum) {
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch (self) {
-            .unit, .symbol, .hole, .namespace, .any, .number, .ty, .list,
-            .@"bool", .ptr
+            .unit, .symbol, .hole, .namespace, .builtin, .any, .number, .ty,
+            .list, .@"bool", .ptr
                 => self,
             .set => |set| Self{ .set = try set.clone(ally) },
             .atom => |name| Self{ .atom = name },
@@ -341,8 +344,8 @@ pub const Type = union(enum) {
 
         // concrete matching
         return switch (target) {
-            .any, .set, .hole, => unreachable,
-            .unit, .@"bool", .symbol, .ty, .namespace => true,
+            .any, .set, .hole => unreachable,
+            .unit, .@"bool", .symbol, .ty, .namespace, .builtin => true,
             .atom => |sym| sym.eql(target.atom),
             .tuple => self.eql(target),
             .number => |num| num: {
@@ -436,7 +439,7 @@ pub const Type = union(enum) {
         return switch (self) {
             .any, .set, .hole => .analysis,
             .ty, .symbol, .namespace => .dynamic,
-            .unit, .atom, .@"bool" => .static,
+            .unit, .atom, .@"bool", .builtin => .static,
             .number => |num| if (num.bits != null) .static else .dynamic,
             .list, .ptr
                 => |subty| typewelt.get(subty).classifyRuntime(typewelt),
@@ -492,7 +495,8 @@ pub const Type = union(enum) {
         writer: anytype
     ) WriteError!void {
         switch (self) {
-            .unit, .@"bool", .namespace => try writer.writeAll(@tagName(self)),
+            .unit, .@"bool", .namespace, .builtin
+                => try writer.writeAll(@tagName(self)),
             .ty => try writer.writeAll("type"),
             .hole, .symbol, .any => try util.writeCaps(@tagName(self), writer),
             .atom => |sym| try writer.print("#{}", .{sym}),

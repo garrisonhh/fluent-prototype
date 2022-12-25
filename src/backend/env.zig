@@ -77,7 +77,8 @@ pub fn def(self: *Self, scope: Name, sym: Symbol, value: TExpr) DefError!Name {
 
 pub fn defNamespace(self: *Self, scope: Name, sym: Symbol) DefError!Name {
     const nsty = try self.identify(Type{ .namespace = {} });
-    const expr = TExpr.init(null, nsty, .{ .namespace = {} });
+    // TODO what the fuck is stored in the namespace's value?
+    const expr = TExpr.init(null, nsty, .{ .unit = {} });
     return self.def(scope, sym, expr);
 }
 
