@@ -10,6 +10,7 @@ const TypeId = types.TypeId;
 const TypeWelt = types.TypeWelt;
 const Env = @import("../env.zig");
 const TExpr = @import("../texpr.zig");
+const Builtin = @import("../canon.zig").Builtin;
 
 fn filterDefError(e: Env.DefError, comptime str: []const u8) Allocator.Error {
     return switch (e) {
@@ -143,7 +144,7 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     try def(&env, "false", TExpr.init(null, @"bool", .{ .@"bool" = false }));
 
     // builtins
-    inline for (comptime std.enums.values(TExpr.Builtin)) |b| {
+    inline for (comptime std.enums.values(Builtin)) |b| {
         const name = comptime b.getName();
         try def(&env, name, TExpr.initBuiltin(null, flbuiltin, b));
     }

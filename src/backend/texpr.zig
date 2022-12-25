@@ -17,28 +17,11 @@ const TypeId = types.TypeId;
 const TypeWelt = types.TypeWelt;
 const SExpr = @import("sexpr.zig");
 const canon = @import("canon.zig");
+const Builtin = canon.Builtin;
 
 const Self = @This();
 
 pub const Number = canon.Number;
-
-pub const Builtin = enum {
-    ns,
-
-    // ops
-    list,
-    cast,
-
-    // control flow
-    do,
-    @"if",
-
-    pub fn getName(b: Builtin) []const u8 {
-        return switch (b) {
-            inline else => |tag| @tagName(tag),
-        };
-    }
-};
 
 pub const Tag = std.meta.Tag(Data);
 
