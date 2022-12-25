@@ -1,191 +1,108 @@
 //! implements lowering the analyzed AST into SSA IR
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const util = @import("util");
+const Symbol = util.Symbol;
+const Name = util.Name;
 const builtin = @import("builtin");
 const ssa = @import("ssa.zig");
-const types = @import("types.zig");
-const Env = @import("env.zig");
-const TExpr = @import("texpr.zig");
-
-const Allocator = std.mem.Allocator;
-const asBytes = std.mem.asBytes;
-const Symbol = util.Symbol;
 const Const = ssa.Const;
 const Local = ssa.Local;
 const Op = ssa.Op;
-const Type = types.Type;
+const Label = ssa.Label;
+const Func = ssa.Func;
+const types = @import("types.zig");
 const TypeId = types.TypeId;
+const Type = types.Type;
+const Env = @import("env.zig");
+const TExpr = @import("texpr.zig");
+const Value = @import("value.zig");
+const canon = @import("canon.zig");
 
-pub const LowerError =
-    Allocator.Error;
+pub const LowerError = Allocator.Error;
 
 fn lowerLoadConst(
-    func: *ssa.FuncBuilder,
+    ally: Allocator,
+    func: *Func,
+    block: Label,
     ty: TypeId,
-    data: []const u8,
+    value: Value
 ) LowerError!Local {
-    const value = try func.addConst(data);
-    const out = try func.addLocal(ty);
-    try func.addOp(Op{ .ldc = .{ .a = value, .to = out } });
+    const @"const" = try func.addConst(ally, value);
+    const out = try func.addLocal(ally, ty);
+    try func.addOp(ally, block, Op{ .ldc = .{ .a = @"const", .to = out } });
 
     return out;
 }
 
-fn lowerBool(func: *ssa.FuncBuilder, expr: TExpr) LowerError!Local {
+fn lowerBool(
+    ally: Allocator,
+    func: *Func,
+    block: Label,
+    expr: TExpr
+) LowerError!Local {
     const byte: u8 = if (expr.data.@"bool") 1 else 0;
-    return lowerLoadConst(func, expr.ty, &.{byte});
+    const value = try Value.init(ally, std.mem.asBytes(&byte));
+
+    return lowerLoadConst(ally, func, block, expr.ty, value);
 }
 
-fn lowerNumber(func: *ssa.FuncBuilder, expr: TExpr) LowerError!Local {
-    var buf: [8]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&buf);
-    const data = try expr.data.number.asBytes(fba.allocator());
-
-    return lowerLoadConst(func, expr.ty, data);
-}
-
-fn lowerCast(
-    env: *Env,
-    prog: *ssa.ProgramBuilder,
-    func: *ssa.FuncBuilder,
+fn lowerNumber(
+    ally: Allocator,
+    func: *Func,
+    block: Label,
     expr: TExpr
 ) LowerError!Local {
-    const in = try lowerExpr(env, prog, func, expr.data.cast.*);
-    const out = try func.addLocal(expr.ty);
-    try func.addOp(Op{ .cast = .{ .a = in, .to = out } });
-
-    return out;
-}
-
-fn lowerBuiltinOp(
-    func: *ssa.FuncBuilder,
-    out: Local,
-    builtin_op: Env.BuiltinOp,
-    args: []const Local
-) LowerError!void {
-    // can assume args are proper length; this is handled in sema
-    const op = switch (builtin_op) {
-        .add => Op{ .add = .{ .to = out, .a = args[0], .b = args[1] } },
-        .sub => Op{ .sub = .{ .to = out, .a = args[0], .b = args[1] } },
-        .mul => Op{ .mul = .{ .to = out, .a = args[0], .b = args[1] } },
-        .div => Op{ .div = .{ .to = out, .a = args[0], .b = args[1] } },
-        .@"and" => Op{ .@"and" = .{ .to = out, .a = args[0], .b = args[1] } },
-        .@"or" => Op{ .@"or" = .{ .to = out, .a = args[0], .b = args[1] } },
-        .not => Op{ .not = .{ .to = out, .a = args[0] } },
-    };
-
-    try func.addOp(op);
-}
-
-fn lowerIf(
-    env: *Env,
-    prog: *ssa.ProgramBuilder,
-    func: *ssa.FuncBuilder,
-    expr: TExpr
-) LowerError!Local {
-    const exprs = expr.data.call[1..];
-
-    const cond = try lowerExpr(env, prog, func, exprs[0]);
-
-    // alloca correct amount of memory for branch output
-    const mem_size = env.typeGet(expr.ty).sizeOf(env.typewelt.*);
-    const ptr_ty = try env.typeIdentify(Type{ .ptr = expr.ty });
-    const out_ptr = try func.addLocal(ptr_ty);
-
-    try func.addOp(Op{ .alloca = .{ .to = out_ptr, .size = mem_size } });
-
-    // branch op with labels
-    const branches = [2]ssa.Label{try func.addLabel(), try func.addLabel()};
-    try func.addOp(Op{
-        .br = .{ .cond = cond, .a = branches[0], .b = branches[1] }
-    });
-
-    // create final block dest
-    var merge_at = try func.addLabel();
-
-    // create branches which store value on allocated stack memory
-    for (exprs[1..]) |branch_expr, i| {
-        try func.replaceLabel(branches[i]);
-
-        const out = try lowerExpr(env, prog, func, branch_expr);
-        try func.addOp(Op{ .store = .{ .a = out, .b = out_ptr } });
-        try func.addOp(Op{ .jmp = .{ .dst = merge_at } });
-    }
-
-    // finally, merge and load value from stack
-    try func.replaceLabel(merge_at);
-
-    const final = try func.addLocal(expr.ty);
-    try func.addOp(Op{ .load = .{ .to = final, .a = out_ptr } });
-
-    return final;
+    const value = try expr.data.number.asValue(ally);
+    return lowerLoadConst(ally, func, block, expr.ty, value);
 }
 
 fn lowerCall(
     env: *Env,
-    prog: *ssa.ProgramBuilder,
-    func: *ssa.FuncBuilder,
+    func: *Func,
+    block: Label,
     expr: TExpr
 ) LowerError!Local {
     _ = env;
-    _ = prog;
     _ = func;
+    _ = block;
     _ = expr;
 
-    @panic("TODO function calls");
-}
-
-fn lowerDo(
-    env: *Env,
-    prog: *ssa.ProgramBuilder,
-    func: *ssa.FuncBuilder,
-    expr: TExpr
-) LowerError!Local {
-    var final: Local = undefined;
-
-    // lower each child in order
-    const children = expr.getChildren();
-    std.debug.assert(children.len > 0);
-    for (children) |child| {
-        final = try lowerExpr(env, prog, func, child);
-    }
-
-    return final;
+    @panic("TODO lower function calls");
 }
 
 fn lowerExpr(
     env: *Env,
-    prog: *ssa.ProgramBuilder,
-    func: *ssa.FuncBuilder,
+    func: *Func,
+    block: Label,
     expr: TExpr
 ) LowerError!Local {
     return switch (expr.data) {
-        .@"bool" => try lowerBool(func, expr),
-        .number => try lowerNumber(func, expr),
-        .name => |name| try lowerExpr(env, prog, func, env.get(name)),
-        .cast => try lowerCast(env, prog, func, expr),
-        .call => try lowerCall(env, prog, func, expr),
-        .do => try lowerDo(env, prog, func, expr),
-        else => std.debug.panic(
-            "TODO lower {s} exprs\n",
-            .{@tagName(expr.data)}
-        )
+        .@"bool" => try lowerBool(env.ally, func, block, expr),
+        .number => try lowerNumber(env.ally, func, block, expr),
+        .name => |name| {
+            std.debug.panic("TODO lower name {}", .{name});
+        },
+        .call => try lowerCall(env, func, block, expr),
+        else => {
+            const tag = @tagName(expr.data);
+            std.debug.panic("TODO lower {s} exprs\n", .{tag});
+        }
     };
 }
 
-pub fn lower(ally: Allocator, env: *Env, expr: TExpr) LowerError!ssa.Program {
+/// lowers expression as if it is the body of a function with no args
+pub fn lower(env: *Env, scope: Name, expr: TExpr) LowerError!ssa.Func {
     // set up context
-    var prog = ssa.ProgramBuilder.init(ally);
-    const root = comptime Symbol.init("root");
-    var func = try ssa.FuncBuilder.init(ally, root, &.{}, expr.ty);
-    const func_entry = try func.addLabel();
+    var func = try Func.init(env.ally, scope, &.{}, expr.ty);
 
-    // lower program expr
-    const final = try lowerExpr(env, &prog, &func, expr);
-    try func.addOp(Op{ .ret = .{ .a = final } });
+    // lower expr as a function
+    const block = try func.addBlock(env.ally);
+    const final = try lowerExpr(env, &func, block, expr);
 
-    // build program with root as entry point
-    const prog_entry = try prog.addFunc(func.build(func_entry));
-    return try prog.build(prog_entry);
+    // TODO add return stmt
+    _ = final;
+
+    return func;
 }

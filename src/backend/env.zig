@@ -26,6 +26,7 @@ const TypeWelt = types.TypeWelt;
 const TypeId = types.TypeId;
 const Type = types.Type;
 const TExpr = @import("texpr.zig");
+const ssa = @import("ssa.zig");
 
 const Self = @This();
 
@@ -35,6 +36,8 @@ ally: Allocator,
 tw: TypeWelt = .{},
 // env owns everything in every binding
 nmap: NameMap(TExpr) = .{},
+// stores lowered functions
+prog: ssa.Program = .{},
 
 pub fn init(ally: Allocator) Allocator.Error!Self {
     return Self{

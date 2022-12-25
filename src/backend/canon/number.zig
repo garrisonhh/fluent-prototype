@@ -5,6 +5,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const util = @import("util");
+const Value = @import("../value.zig");
 
 const Self = @This();
 
@@ -33,8 +34,8 @@ pub fn from(num: util.Number) util.ParseNumberError!Self {
     };
 }
 
-/// returns this value as bytes on an allocator
-pub fn asBytes(self: @This(), ally: Allocator) Allocator.Error![]const u8 {
+/// returns this as a value on an allocator
+pub fn asValue(self: @This(), ally: Allocator) Allocator.Error!Value {
     const data = switch (self.data) {
         .int => |n| std.mem.asBytes(&n),
         .uint => |n| std.mem.asBytes(&n),
@@ -45,7 +46,7 @@ pub fn asBytes(self: @This(), ally: Allocator) Allocator.Error![]const u8 {
     std.debug.assert(bits % 8 == 0 and bits / 8 <= 8);
     std.debug.assert(builtin.target.cpu.arch.endian() == .Little);
 
-    return ally.dupe(u8, data[0..bits / 8]);
+    return Value.init(ally, data[0..bits / 8]);
 }
 
 pub fn eql(self: @This(), other: @This()) bool {

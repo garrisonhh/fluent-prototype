@@ -68,7 +68,7 @@ pub fn eval(env: *Env, scope: Name, sexpr: SExpr) !TExpr {
         }
 
         // lower to ssa ir
-        var ssa = try lower(env.ally, env, texpr);
+        var ssa = try lower(env, scope, texpr);
         defer ssa.deinit(env.ally);
 
         if (builtin.mode == .Debug) {
@@ -76,7 +76,7 @@ pub fn eval(env: *Env, scope: Name, sexpr: SExpr) !TExpr {
             var ctx = kz.Context.init(env.ally);
             defer ctx.deinit();
 
-            const tex = try ssa.render(&ctx, env);
+            const tex = try ssa.render(&ctx, env.*);
 
             try stdout.writeAll("[SSA Program]\n");
             try ctx.write(tex, stdout);
@@ -85,30 +85,32 @@ pub fn eval(env: *Env, scope: Name, sexpr: SExpr) !TExpr {
             render_time += now() - t;
         }
 
-        // compile to bytecode
-        const bc = try compile(env.ally, env.tw, ssa);
-        defer bc.deinit(env.ally);
+        @panic("TODO everything after ssa");
 
-        if (builtin.mode == .Debug) {
-            const t = now();
-            var ctx = kz.Context.init(env.ally);
-            defer ctx.deinit();
+        // // compile to bytecode
+        // const bc = try compile(env.ally, env.tw, ssa);
+        // defer bc.deinit(env.ally);
 
-            const tex = try bc.render(&ctx);
+        // if (builtin.mode == .Debug) {
+            // const t = now();
+            // var ctx = kz.Context.init(env.ally);
+            // defer ctx.deinit();
 
-            try stdout.writeAll("[Bytecode]\n");
-            try ctx.write(tex, stdout);
-            try stdout.writeByte('\n');
+            // const tex = try bc.render(&ctx);
 
-            render_time += now() - t;
-        }
+            // try stdout.writeAll("[Bytecode]\n");
+            // try ctx.write(tex, stdout);
+            // try stdout.writeByte('\n');
 
-        // run compiled bytecode
-        const return_ty = bc.returns;
-        const value = try run(env.ally, &env.tw, bc);
-        defer value.deinit(env.ally);
+            // render_time += now() - t;
+        // }
 
-        break :final try value.resurrect(env.*, return_ty);
+        // // run compiled bytecode
+        // const return_ty = bc.returns;
+        // const value = try run(env.ally, &env.tw, bc);
+        // defer value.deinit(env.ally);
+
+        // break :final try value.resurrect(env.*, return_ty);
     };
     defer final.deinit(env.ally);
 
