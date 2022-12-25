@@ -123,6 +123,7 @@ pub fn dump(self: *Self, ally: Allocator, writer: anytype) !void {
     defer ctx.drop(eq);
 
     const entries = try self.nmap.getSortedEntries(ally);
+    defer ally.free(entries);
     for (entries) |entry| {
         const name = try renderName(&ctx, entry.key.*);
         const pred = try ctx.slap(name, try ctx.clone(eq), .right, .{});
