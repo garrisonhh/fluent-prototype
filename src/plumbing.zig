@@ -41,27 +41,9 @@ pub fn exec(env: *Env, handle: FileHandle) !TExpr {
         render_time += now() - t;
     }
 
-    // analyze
+    // get analysis info
     const file_sym = util.Symbol.init(handle.getName());
     const scope = try env.defNamespace(Env.ROOT, file_sym);
-
-    const any = try env.identify(backend.Type{ .any = {} });
-    const texpr = try backend.analyze(env, scope, sexpr, any);
-    defer texpr.deinit(env.ally);
-
-    if (builtin.mode == .Debug) {
-        const t = now();
-        var ctx = kz.Context.init(env.ally);
-        defer ctx.deinit();
-
-        const tex = try texpr.render(&ctx, env.tw);
-
-        try stdout.writeAll("[Analyzed AST]\n");
-        try ctx.write(tex, stdout);
-        try stdout.writeByte('\n');
-
-        render_time += now() - t;
-    }
 
     // time logging
     const stop = std.time.nanoTimestamp();
@@ -74,5 +56,5 @@ pub fn exec(env: *Env, handle: FileHandle) !TExpr {
     }
 
     // call backend
-    return try eval(env, texpr);
+    return try eval(env, scope, sexpr);
 }

@@ -247,7 +247,9 @@ fn execute(self: *Self, program: Program) RuntimeError!void {
             // )
         }
 
-        // iterate ip
+        // iterate ip. this cannot be in the second while loop stmt because I
+        // don't want this to run on `continue` when I manipulate the IP
+        // otherwise
         ip.* += 1;
     }
 }
