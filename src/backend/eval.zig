@@ -17,6 +17,7 @@ const analyze = @import("sema.zig").analyze;
 const lower = @import("lower.zig").lower;
 const compile = @import("compile.zig").compile;
 const run = @import("bytecode/vm.zig").run;
+const Value = @import("value.zig");
 
 pub const Error =
     std.mem.Allocator.Error
@@ -103,32 +104,34 @@ pub fn evalTyped(
             render_time += now() - t;
         }
 
-        @panic("TODO compile + run bytecode");
-
         // compile to bytecode
-        // const bc = try compile(env, ssa);
-        // defer bc.deinit(env.ally);
+        try compile(env, ssa);
 
-        // if (builtin.mode == .Debug) {
-            // const t = now();
-            // var ctx = kz.Context.init(env.ally);
-            // defer ctx.deinit();
+        const prog = env.bc.build(ssa);
 
-            // const tex = try bc.render(&ctx);
+        if (builtin.mode == .Debug) {
+            const t = now();
+            var ctx = kz.Context.init(env.ally);
+            defer ctx.deinit();
 
-            // try stdout.writeAll("[Bytecode]\n");
-            // try ctx.write(tex, stdout);
-            // try stdout.writeByte('\n');
+            const tex = try prog.render(&ctx);
 
-            // render_time += now() - t;
-        // }
+            try stdout.writeAll("[Bytecode]\n");
+            try ctx.write(tex, stdout);
+            try stdout.writeByte('\n');
+
+            render_time += now() - t;
+        }
 
         // run compiled bytecode
-        // const return_ty = bc.returns;
-        // const value = try run(env.ally, &env.tw, bc);
-        // defer value.deinit(env.ally);
+        const ret_size = env.sizeOf(ssa.returns);
+        const value = try Value.initEmpty(env.ally, ret_size);
+        defer value.deinit(env.ally);
 
-        // break :final try value.resurrect(env.*, return_ty);
+        try env.vm.run(value.ptr, prog);
+        try env.bc.removeFunc(env.ally, ssa.ref);
+
+        break :final try value.resurrect(env.*, ssa.returns);
     };
     defer final.deinit(env.ally);
 

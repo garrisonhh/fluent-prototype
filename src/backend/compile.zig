@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
+const Env = @import("env.zig");
 const ssa = @import("ssa.zig");
 const types = @import("types.zig");
 const TypeId = types.TypeId;
@@ -13,6 +14,8 @@ const Program = bytecode.Program;
 const Vm = @import("bytecode/vm.zig");
 const Register = Vm.Register;
 const canon = @import("canon.zig");
+
+// TODO give builder its own file
 
 const InstRef = packed struct {
     const Self = @This();
@@ -39,65 +42,65 @@ const SsaPos = struct {
     }
 
     /// gets ssa pos for a function's entry point
-    fn ofFunc(ssa_prog: ssa.Program, func_ref: ssa.FuncRef) Self {
-        const func = ssa_prog.funcs[func_ref.index];
-        return of(func_ref, func.entry);
+    fn ofFunc(func_ref: ssa.FuncRef) Self {
+        return Self.of(func_ref, ssa.Label.of(0));
     }
 };
 
-const BackRef = union(enum) {
-    // what an SsaPos resolved to
-    resolved: InstRef,
-    // instructions to resolve once this SsaPos is resolved
-    unresolved: std.ArrayListUnmanaged(InstRef),
-};
-
-const Builder = struct {
+pub const Builder = struct {
     const Self = @This();
 
-    ally: Allocator,
-    typewelt: *const TypeWelt,
+    const BackRef = union(enum) {
+        // what an SsaPos resolved to
+        resolved: InstRef,
+        // instructions to resolve once this SsaPos is resolved
+        unresolved: std.ArrayListUnmanaged(InstRef),
+    };
+
+    const Region = struct {
+        start: InstRef,
+        stop: InstRef,
+    };
+
     static: std.ArrayListUnmanaged(u8) = .{},
     program: std.ArrayListAlignedUnmanaged(Inst, 16) = .{},
+    // tracks backreferences while compiling
     refs: std.AutoHashMapUnmanaged(SsaPos, BackRef) = .{},
+    // tracks slices of the program
+    regions: std.AutoHashMapUnmanaged(ssa.FuncRef, Region) = .{},
 
-    fn init(ally: Allocator, typewelt: *const TypeWelt) Self {
-        return Self{
-            .ally = ally,
-            .typewelt = typewelt,
-        };
+    pub fn deinit(self: *Self, ally: Allocator) void {
+        self.static.deinit(ally);
+        self.program.deinit(ally);
+        self.refs.deinit(ally);
+        self.regions.deinit(ally);
     }
 
-    /// invalidates this builder
-    fn build(self: *Self, ssa_prog: ssa.Program) Program {
+    pub fn build(self: *Self, func: ssa.Func) Program {
         if (builtin.mode == .Debug) {
-            // validate backrefs are done
+            // validate backrefs are completed
             var entries = self.refs.iterator();
             while (entries.next()) |entry| {
                 if (entry.value_ptr.* == .unresolved) {
                     const sp = entry.key_ptr;
-                    const func = ssa_prog.funcs[sp.func.index].label;
                     const label = sp.label.index;
 
                     std.debug.panic(
-                        "bytecode compilation failed to resolve {}:{}",
-                        .{func, label}
+                        "bytecode compilation failed to resolve {}@{}",
+                        .{func.name, label}
                     );
                 }
             }
         }
-        self.refs.deinit(self.ally);
+
+        // get function backref
+        const backref = self.refs.get(SsaPos.ofFunc(func.ref)).?;
 
         return Program{
-            .returns = ssa_prog.funcs[ssa_prog.entry.index].returns,
-            .static = self.static.toOwnedSlice(self.ally),
-            .program = self.program.toOwnedSlice(self.ally),
+            .entry = backref.resolved.index,
+            .static = self.static.items,
+            .program = self.program.items,
         };
-    }
-
-
-    fn sizeOf(self: Self, ty: TypeId) usize {
-        return self.typewelt.get(ty).sizeOf(self.typewelt.*);
     }
 
     /// for jumps + backrefs
@@ -108,35 +111,46 @@ const Builder = struct {
     /// branching instructions expect a position to branch to. this effectively
     /// handles adding the position with any required backreferencing, and hides
     /// the internal backreference impl
-    fn addBranch(self: *Self, sp: SsaPos) Allocator.Error!void {
-        const res = try self.refs.getOrPut(self.ally, sp);
+    fn addBranch(
+        self: *Self,
+        ally: Allocator,
+        sp: SsaPos
+    ) Allocator.Error!void {
+        const res = try self.refs.getOrPut(ally, sp);
         if (res.found_existing) {
             // retrieve resolved ref or add unresolved ref
             switch (res.value_ptr.*) {
-                .resolved => |ref| try self.addInst(Inst.fromInt(ref.index)),
+                .resolved => |ref| {
+                    try self.addInst(ally, Inst.fromInt(ref.index));
+                },
                 .unresolved => |*list| {
-                    try list.append(self.ally, self.here());
-                    try self.addInst(Inst.fromInt(0));
+                    try list.append(ally, self.here());
+                    try self.addInst(ally, Inst.fromInt(0));
                 },
             }
         } else {
             // add unresolved backref
             res.value_ptr.* = BackRef{ .unresolved = .{} };
-            try res.value_ptr.unresolved.append(self.ally, self.here());
-            try self.addInst(Inst.fromInt(0));
+            try res.value_ptr.unresolved.append(ally, self.here());
+            try self.addInst(ally, Inst.fromInt(0));
         }
     }
 
     /// resolve a backreference to a real instref
-    fn resolve(self: *Self, sp: SsaPos, to: InstRef) Allocator.Error!void {
-        const res = try self.refs.getOrPut(self.ally, sp);
+    fn resolve(
+        self: *Self,
+        ally: Allocator,
+        sp: SsaPos,
+        to: InstRef
+    ) Allocator.Error!void {
+        const res = try self.refs.getOrPut(ally, sp);
         if (res.found_existing) {
             // can't resolve the same SsaPos twice
             std.debug.assert(res.value_ptr.* == .unresolved);
 
             // resolve backrefs
             const list = &res.value_ptr.unresolved;
-            defer list.deinit(self.ally);
+            defer list.deinit(ally);
 
             for (list.items) |ref| {
                 self.program.items[ref.index] = Inst.fromInt(to.index);
@@ -147,14 +161,46 @@ const Builder = struct {
         res.value_ptr.* = BackRef{ .resolved = to };
     }
 
-    fn addInst(self: *Self, inst: Inst) Allocator.Error!void {
-        try self.program.append(self.ally, inst);
+    fn addInst(self: *Self, ally: Allocator, inst: Inst) Allocator.Error!void {
+        try self.program.append(ally, inst);
     }
 
-    fn addStatic(self: *Self, data: []const u8) Allocator.Error!usize {
+    fn addStatic(
+        self: *Self,
+        ally: Allocator,
+        data: []const u8
+    ) Allocator.Error!usize {
         const index = self.static.items.len;
-        try self.static.appendSlice(self.ally, data);
+        try self.static.appendSlice(ally, data);
         return index;
+    }
+
+    fn addRegion(
+        self: *Self,
+        ally: Allocator,
+        func: ssa.FuncRef,
+        start: InstRef,
+        stop: InstRef
+    ) Allocator.Error!void {
+        std.debug.assert(start.index < stop.index);
+        try self.regions.put(ally, func, Region{
+            .start = start,
+            .stop = stop
+        });
+    }
+
+    /// removes instructions associated with a function. this is very useful
+    /// for `eval` to not clutter the env's builder.
+    pub fn removeFunc(
+        self: *Self,
+        ally: Allocator,
+        func: ssa.FuncRef
+    ) Allocator.Error!void {
+        const region = self.regions.get(func).?;
+        const start = region.start.index;
+        const len = region.stop.index - start;
+
+        try self.program.replaceRange(ally, start, len, &.{});
     }
 };
 
@@ -174,8 +220,7 @@ const Builder = struct {
 //   - TODO how to static pointers? maybe a `static` instruction which loads
 //     static memory
 
-pub const CompileError =
-    Allocator.Error;
+pub const Error = Allocator.Error;
 
 const RegisterMap = struct {
     const Self = @This();
@@ -232,11 +277,10 @@ const RegisterMap = struct {
 
 /// does whatever it needs to to get a constant into a register. this should
 /// either load an immediate value or a ptr into static
-fn compileLoadConst(
-    b: *Builder,
-    reg: Register,
-    value: Value
-) CompileError!void {
+fn compileLoadConst(env: *Env, reg: Register, value: Value) Error!void {
+    const ally = env.ally;
+    const bc = &env.bc;
+
     if (value.ptr.len <= 8) {
         // convert value to uint
         // TODO I should probably do this with a union, this is already a source
@@ -257,15 +301,15 @@ fn compileLoadConst(
 
         // store with smallest imm op possible
         if (to_store <= 2) {
-            try b.addInst(Inst.of(.imm2, reg.n, bytes[0], bytes[1]));
+            try bc.addInst(ally, Inst.of(.imm2, reg.n, bytes[0], bytes[1]));
         } else if (to_store <= 4) {
-            try b.addInst(Inst.of(.imm4, reg.n, 0, 0));
-            try b.addInst(Inst.fromInt(@ptrCast(*const u32, bytes).*));
+            try bc.addInst(ally, Inst.of(.imm4, reg.n, 0, 0));
+            try bc.addInst(ally, Inst.fromInt(@ptrCast(*const u32, bytes).*));
         } else {
             const data = @ptrCast(*const [2]u32, bytes);
-            try b.addInst(Inst.of(.imm8, reg.n, 0, 0));
-            try b.addInst(Inst.fromInt(data[0]));
-            try b.addInst(Inst.fromInt(data[1]));
+            try bc.addInst(ally, Inst.of(.imm8, reg.n, 0, 0));
+            try bc.addInst(ally, Inst.fromInt(data[0]));
+            try bc.addInst(ally, Inst.fromInt(data[1]));
         }
     } else {
         @panic("TODO compile ldc -> static");
@@ -277,52 +321,56 @@ fn todoCompileOp(op: ssa.Op) noreturn {
 }
 
 fn compileOp(
-    b: *Builder,
-    func_ref: ssa.FuncRef,
+    env: *Env,
     func: ssa.Func,
     registers: *RegisterMap,
     op: ssa.Op,
-) CompileError!void {
+) Error!void {
+    const ally = env.ally;
+    const bc = &env.bc;
+
     switch (op.classify()) {
         .ldc => |ldc| {
             const reg = registers.find(ldc.to);
-            try compileLoadConst(b, reg, func.consts[ldc.a.index]);
+            try compileLoadConst(env, reg, func.getConst(ldc.a));
         },
         .branch => |br| {
             const cond = registers.find(br.cond);
-            try b.addInst(Inst.of(.jump_if, cond.n, 0, 0));
-            try b.addBranch(SsaPos.of(func_ref, br.a));
-            try b.addInst(Inst.of(.jump, 0, 0, 0));
-            try b.addBranch(SsaPos.of(func_ref, br.b));
+            try bc.addInst(ally, Inst.of(.jump_if, cond.n, 0, 0));
+            try bc.addBranch(ally, SsaPos.of(func.ref, br.a));
+            try bc.addInst(ally, Inst.of(.jump, 0, 0, 0));
+            try bc.addBranch(ally, SsaPos.of(func.ref, br.b));
         },
         .jump => |jmp| {
-            try b.addInst(Inst.of(.jump, 0, 0, 0));
-            try b.addBranch(SsaPos.of(func_ref, jmp.dst));
+            try bc.addInst(ally, Inst.of(.jump, 0, 0, 0));
+            try bc.addBranch(ally, SsaPos.of(func.ref, jmp.dst));
         },
         .alloca => |all| {
             // 1. store sp in output
             // 2. load size constant
             // 3. add size to sp
             const reg = registers.find(all.to);
-            const size_val = try Value.init(b.ally, std.mem.asBytes(&all.size));
-            defer size_val.deinit(b.ally);
+
+            var buf: [8]u8 align(16) = undefined;
+            canon.fromCanonical(&buf, @intCast(u64, all.size));
+            const size_val = Value{ .ptr = &buf };
             const size_reg = registers.temporary(0);
 
-            try b.addInst(Inst.of(.mov, Vm.SP.n, reg.n, 0));
-            try compileLoadConst(b, size_reg, size_val);
-            try b.addInst(Inst.of(.iadd, Vm.SP.n, size_reg.n, Vm.SP.n));
+            try bc.addInst(ally, Inst.of(.mov, Vm.SP.n, reg.n, 0));
+            try compileLoadConst(env, size_reg, size_val);
+            try bc.addInst(ally, Inst.of(.iadd, Vm.SP.n, size_reg.n, Vm.SP.n));
         },
         .unary => |un| switch (op) {
             .load => {
-                const dst_ty = b.typewelt.get(func.locals[un.a.index]);
-                const dst_size = @intCast(u8, dst_ty.sizeOf(b.typewelt.*));
+                const dst_ty = func.getLocal(un.a);
+                const dst_size = @intCast(u8, env.sizeOf(dst_ty));
                 const arg = registers.find(un.a);
                 const to = registers.find(un.to);
-                try b.addInst(Inst.of(.load, dst_size, arg.n, to.n));
+                try bc.addInst(ally, Inst.of(.load, dst_size, arg.n, to.n));
             },
             else => {
                 // most unary opcodes result in a unary instruction
-                const ty = b.typewelt.get(func.locals[un.to.index]);
+                const ty = env.tw.get(func.getLocal(un.to));
                 const opcode: Opcode = switch (ty.*) {
                     .@"bool" => switch (op) {
                         .@"not" => .lnot,
@@ -347,11 +395,11 @@ fn compileOp(
 
                 const arg = registers.find(un.a);
                 const to = registers.find(un.to);
-                try b.addInst(Inst.of(opcode, arg.n, to.n, 0));
+                try bc.addInst(ally, Inst.of(opcode, arg.n, to.n, 0));
             }
         },
         .binary => |bin| {
-            const ty = b.typewelt.get(func.locals[bin.to.index]);
+            const ty = env.tw.get(func.getLocal(bin.to));
             const opcode: Opcode = switch (ty.*) {
                 .@"bool" => switch (op) {
                     .@"or" => .lor,
@@ -380,27 +428,27 @@ fn compileOp(
             const lhs = registers.find(bin.a);
             const rhs = registers.find(bin.b);
             const to = registers.find(bin.to);
-            try b.addInst(Inst.of(opcode, lhs.n, rhs.n, to.n));
+            try bc.addInst(ally, Inst.of(opcode, lhs.n, rhs.n, to.n));
         },
         .unary_eff => |ue| switch (op) {
             .ret => {
                 const value = registers.find(ue.a);
-                try b.addInst(Inst.of(.mov, value.n, Vm.RETURN.n, 0));
-                try b.addInst(Inst.of(.ret, 0, 0, 0));
+                try bc.addInst(ally, Inst.of(.mov, value.n, Vm.RETURN.n, 0));
+                try bc.addInst(ally, Inst.of(.ret, 0, 0, 0));
             },
             else => @panic("TODO")
         },
         .binary_eff => |be| switch (op) {
             .store => {
-                const src_ty = b.typewelt.get(func.locals[be.a.index]);
-                const bytes = switch (src_ty.sizeOf(b.typewelt.*)) {
+                const src_ty = func.getLocal(be.a);
+                const bytes = switch (env.sizeOf(src_ty)) {
                     1, 2, 4, 8 => |n| @intCast(u8, n),
                     else => @panic("TODO store other sizes")
                 };
 
                 const src = registers.find(be.a);
                 const dst = registers.find(be.b);
-                try b.addInst(Inst.of(.store, bytes, src.n, dst.n));
+                try bc.addInst(ally, Inst.of(.store, bytes, src.n, dst.n));
             },
             else => @panic("TODO")
         },
@@ -408,51 +456,36 @@ fn compileOp(
     }
 }
 
-fn compileFunc(
-    b: *Builder,
-    func_ref: ssa.FuncRef,
-    func: ssa.Func
-) CompileError!void {
-    // label mapping for backreference resolution
-    var labels = try func.mapLabels(b.ally);
-    defer labels.deinit(b.ally);
+fn compileFunc(env: *Env, func: ssa.Func) Error!void {
+    const ally = env.ally;
+    const bc = &env.bc;
+
+    const start = env.bc.here();
 
     // register allocation for ssa vars
-    var registers = try RegisterMap.init(b.ally, func.locals.len, func.takes);
-    defer registers.deinit(b.ally);
+    var rmap = try RegisterMap.init(ally, func.locals.items.len, func.takes);
+    defer rmap.deinit(ally);
 
-    for (func.ops) |op, i| {
-        // resolve any labels once found
-        if (labels.get(i)) |label| {
-            try b.resolve(SsaPos.of(func_ref, label), b.here());
+    for (func.blocks.items) |block, i| {
+        // resolve block label
+        const label = ssa.Label.of(i);
+        try bc.resolve(ally, SsaPos.of(func.ref, label), bc.here());
+
+        // compile block ops
+        for (block.ops.items) |op| {
+            try compileOp(env, func, &rmap, op);
         }
-
-        try compileOp(b, func_ref, func, &registers, op);
     }
+
+    // add region
+    const stop = env.bc.here();
+    try env.bc.addRegion(ally, func.ref, start, stop);
 }
 
-pub fn compile(
-    ally: Allocator,
-    typewelt: TypeWelt,
-    ssa_prog: ssa.Program
-) CompileError!Program {
-    var b = Builder.init(ally, &typewelt);
-
-    const entry = ssa_prog.funcs[ssa_prog.entry.index];
-
-    if (b.sizeOf(entry.returns) > 8) {
+pub fn compile(env: *Env, func: ssa.Func) Error!void {
+    if (env.sizeOf(func.returns) > 8) {
         @panic("TODO allocate for program return value");
     }
 
-    // call entry and exit
-    try b.addInst(Inst.of(.call, 0, 0, 0));
-    try b.addBranch(SsaPos.ofFunc(ssa_prog, ssa_prog.entry));
-    try b.addInst(Inst.of(.exit, 0, 0, 0));
-
-    // compile all functions
-    for (ssa_prog.funcs) |func, i| {
-        try compileFunc(&b, ssa.FuncRef.of(i), func);
-    }
-
-    return b.build(ssa_prog);
+    try compileFunc(env, func);
 }

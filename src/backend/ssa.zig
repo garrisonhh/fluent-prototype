@@ -213,27 +213,11 @@ pub const Func = struct {
     name: Name, // unowned
     takes: usize,
     returns: TypeId,
+    ref: FuncRef,
 
     consts: std.ArrayListUnmanaged(Value) = .{},
     locals: std.ArrayListUnmanaged(TypeId) = .{},
     blocks: std.ArrayListUnmanaged(Block) = .{},
-
-    pub fn init(
-        ally: Allocator,
-        name: Name,
-        params: []const TypeId,
-        returns: TypeId
-    ) Allocator.Error!Self {
-        var self = Self{
-            .name = name,
-            .takes = params.len,
-            .returns = returns,
-        };
-
-        try self.locals.appendSlice(ally, params);
-
-        return self;
-    }
 
     pub fn deinit(self: *Self, ally: Allocator) void {
         for (self.consts.items) |*value| value.deinit(ally);
@@ -241,6 +225,14 @@ pub const Func = struct {
         self.locals.deinit(ally);
         for (self.blocks.items) |*block| block.deinit(ally);
         self.blocks.deinit(ally);
+    }
+
+    pub fn getConst(self: Self, c: Const) Value {
+        return self.consts.items[c.index];
+    }
+
+    pub fn getLocal(self: Self, l: Local) TypeId {
+        return self.locals.items[l.index];
     }
 
     /// expects value to already be owned
@@ -419,7 +411,7 @@ pub const Func = struct {
         defer header_texs.deinit();
 
         if (self.name.syms.len > 0) {
-            try header_texs.append(try ctx.print(.{}, "{}", .{self.name}));
+            try header_texs.append(try ctx.print(.{}, "{} ", .{self.name}));
         } else {
             try header_texs.append(try ctx.print(.{}, "<expr> ", .{}));
         }
@@ -467,12 +459,21 @@ pub const Program = struct {
     pub fn addFunc(
         self: *Self,
         ally: Allocator,
-        func: Func
-    ) Allocator.Error!FuncRef {
-        const ref = FuncRef.of(self.funcs.items.len);
+        name: Name,
+        params: []const TypeId,
+        returns: TypeId
+    ) Allocator.Error!Func {
+        var func = Func{
+            .name = name,
+            .takes = params.len,
+            .returns = returns,
+            .ref = FuncRef.of(self.funcs.items.len),
+        };
+
+        try func.locals.appendSlice(ally, params);
         try self.funcs.append(ally, func);
 
-        return ref;
+        return func;
     }
 
     pub fn render(self: Self, ctx: *kz.Context, env: Env) !kz.Ref {

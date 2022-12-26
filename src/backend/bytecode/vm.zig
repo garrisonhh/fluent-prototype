@@ -3,11 +3,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
-const bytecode = @import("bytecode.zig");
-const Program = bytecode.Program;
+const Program = @import("bytecode.zig").Program;
 const canon = @import("../canon.zig");
-const TypeWelt = @import("../types.zig").TypeWelt;
-const Value = @import("../value.zig");
 
 const Self = @This();
 
@@ -28,21 +25,19 @@ pub const FP = Register.of(2); // frame pointer (bottom of frame)
 pub const RESERVED = 8; // number of reserved registers
 pub const RETURN = Register.of(RESERVED); // the return register by callconv
 
-ally: Allocator,
 // registers for instructions to use
 scratch: [256]u64 = undefined,
 // the call stack, used for temporary storage and function memory
 stack: []align(16) u8,
 
-fn init(ally: Allocator, stack_size: usize) Allocator.Error!Self {
+pub fn init(ally: Allocator, stack_size: usize) Allocator.Error!Self {
     return Self{
-        .ally = ally,
         .stack = try ally.alignedAlloc(u8, 16, stack_size),
     };
 }
 
-fn deinit(self: Self) void {
-    self.ally.free(self.stack);
+pub fn deinit(self: Self, ally: Allocator) void {
+    ally.free(self.stack);
 }
 
 fn get(self: Self, reg: Register) u64 {
@@ -98,25 +93,20 @@ const RuntimeError = Allocator.Error;
 fn execute(self: *Self, program: Program) RuntimeError!void {
     const start = now();
 
-    std.mem.set(u64, self.scratch[0..RESERVED], 0);
-
     const insts = program.program;
     const ip = &self.scratch[IP.n];
 
-    while (ip.* < insts.len) {
+    // initialization
+    std.mem.set(u64, self.scratch[0..RESERVED], 0);
+    ip.* = program.entry;
+
+    // execution loop
+    loop: while (ip.* < insts.len) {
         const inst = insts[ip.*];
         const op = inst.op;
         const args = inst.getArgs();
 
         switch (op) {
-            .exit => {
-                if (builtin.mode == .Debug) {
-                    const t = now() - start;
-                    std.debug.print("vm.run took {d:.6}ms\n", .{t});
-                }
-
-                return;
-            },
             .mov => {
                 const src = Register.of(args[0]);
                 const dst = Register.of(args[1]);
@@ -152,6 +142,11 @@ fn execute(self: *Self, program: Program) RuntimeError!void {
                 }
             },
             .ret => {
+                // return from the first frame
+                if (self.get(FP) == 0) {
+                    break :loop;
+                }
+
                 self.mov(FP, SP);
                 self.pop(8, IP);
             },
@@ -252,34 +247,28 @@ fn execute(self: *Self, program: Program) RuntimeError!void {
         // otherwise
         ip.* += 1;
     }
+
+    // end of execution
+    if (builtin.mode == .Debug) {
+        const stdout = std.io.getStdOut().writer();
+        const t = now() - start;
+        stdout.print("vm.run took {d:.6}ms\n", .{t}) catch {};
+    }
 }
 
-/// returns a value allocated on ally
-pub fn run(
-    ally: Allocator,
-    typewelt: *TypeWelt,
-    program: Program
-) RuntimeError!Value {
+/// expects ret_buf to have a size equivalent to the program's return size.
+/// this can be determined by calling Env.sizeOf on the ssa func's return type
+pub fn run(vm: *Self, ret: []u8, program: Program) RuntimeError!void {
     // run program
-    var vm = try Self.init(ally, 32 * 1024);
-    defer vm.deinit();
-
     try vm.execute(program);
 
     // copy return value
-    const ret_size = typewelt.get(program.returns).sizeOf(typewelt.*);
-    const value = try Value.initEmpty(ally, ret_size);
-
     const out: u64 = vm.scratch[RESERVED];
-    if (ret_size > 8) {
+    if (ret.len > 8) {
         // deref r0 and read
-        const data = @intToPtr([*]const u8, out)[0..ret_size];
-        std.mem.copy(u8, value.ptr, data);
+        const data = @intToPtr([*]const u8, out)[0..ret.len];
+        std.mem.copy(u8, ret, data);
     } else {
-        // copy lowest bytes of r0
-        const data = @ptrCast(*const [8]u8, &out)[8 - ret_size..];
-        std.mem.copy(u8, value.ptr, data);
+        canon.fromCanonical(ret, out);
     }
-
-    return value;
 }

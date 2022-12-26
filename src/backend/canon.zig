@@ -20,6 +20,11 @@ pub fn toCanonical(bytes: []const u8) u64 {
 }
 
 pub fn fromCanonical(buf: []u8, n: u64) void {
-    std.debug.assert(buf.len >= 8);
-    std.mem.copy(u8, buf, @ptrCast(*const [8]u8, &n));
+    std.debug.assert(builtin.cpu.arch.endian() == .Little);
+
+    const slice = @ptrCast(*const [8]u8, &n);
+    const nbytes = 8 - (@clz(n) / 8);
+
+    std.mem.set(u8, buf, 0);
+    std.mem.copy(u8, buf, slice[0..nbytes]);
 }

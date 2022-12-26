@@ -26,23 +26,29 @@ const TypeWelt = types.TypeWelt;
 const TypeId = types.TypeId;
 const Type = types.Type;
 const TExpr = @import("texpr.zig");
-const ssa = @import("ssa.zig");
-const Program = ssa.Program;
+const SsaProgram = @import("ssa.zig").Program;
+const BcBuilder = @import("compile.zig").Builder;
+const Vm = @import("bytecode/vm.zig");
 
 const Self = @This();
 
 pub const ROOT = Name.ROOT;
 
+const VM_STACK_SIZE = 32 * 1024;
+
 ally: Allocator,
 tw: TypeWelt = .{},
 // env owns everything in every binding
 nmap: NameMap(TExpr) = .{},
-// stores lowered functions
-prog: Program = .{},
+// these store the lowered + compiled forms of functions
+prog: SsaProgram = .{},
+bc: BcBuilder = .{},
+vm: Vm,
 
 pub fn init(ally: Allocator) Allocator.Error!Self {
     return Self{
         .ally = ally,
+        .vm = try Vm.init(ally, VM_STACK_SIZE),
     };
 }
 
@@ -50,10 +56,18 @@ pub fn deinit(self: *Self) void {
     self.tw.deinit(self.ally);
     self.nmap.deinit(self.ally);
     self.prog.deinit(self.ally);
+    self.bc.deinit(self.ally);
+    self.vm.deinit(self.ally);
 }
+
+// types =======================================================================
 
 pub fn identify(self: *Self, ty: Type) Allocator.Error!TypeId {
     return self.tw.identify(self.ally, ty);
+}
+
+pub fn sizeOf(self: Self, ty: TypeId) usize {
+    return self.tw.get(ty).sizeOf(self.tw);
 }
 
 // accessors ===================================================================

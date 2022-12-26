@@ -3,15 +3,12 @@
 const std = @import("std");
 const kz = @import("kritzler");
 const Allocator = std.mem.Allocator;
-const types = @import("../types.zig");
-const TypeId = types.TypeId;
 const canon = @import("../canon.zig");
 
 /// a single operation
 pub const Opcode = enum(u8) {
     // NOTE '$bytes' here expects 1, 2, 4, or 8
 
-    exit, // no args
     mov, // mov %src %dst
     // static, // (? unsure) get pointer to static at an offset
 
@@ -86,17 +83,16 @@ pub const Inst = packed struct(u32) {
     }
 };
 
+/// program is an executable 'view' into the env's bytecode builder.
+///
+/// in order to execute, the vm can call the entry point and then observe the
+/// return value.
 pub const Program = struct {
     const Self = @This();
 
-    returns: TypeId,
-    static: []u8,
-    program: []align(16) Inst,
-
-    pub fn deinit(self: Self, ally: Allocator) void {
-        ally.free(self.static);
-        ally.free(self.program);
-    }
+    entry: u64,
+    static: []const u8,
+    program: []const align(16) Inst,
 
     fn renderOpcode(ctx: *kz.Context, opcode: Opcode) !kz.Ref {
         // for adding buffered spaces
@@ -152,7 +148,7 @@ pub const Program = struct {
             // args
             const args = inst.getArgs();
             switch (inst.op) {
-                .exit, .ret => {},
+                .ret => {},
                 .mov => {
                     try line.append(try renderReg(ctx, args[0]));
                     try line.append(try renderReg(ctx, args[1]));

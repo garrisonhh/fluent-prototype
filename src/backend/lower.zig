@@ -177,15 +177,13 @@ fn lowerExpr(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
 
 /// lowers expression as if it is the body of a function with no args
 pub fn lower(env: *Env, scope: Name, expr: TExpr) Error!Func {
-    // set up context
-    var func = try Func.init(env.ally, scope, &.{}, expr.ty);
-
-    // lower expr as a function
+    // lower expr as the body of function with no args
+    var func = try env.prog.addFunc(env.ally, scope, &.{}, expr.ty);
     var block = try func.addBlock(env.ally);
     const final = try lowerExpr(env, &func, &block, expr);
 
-    // TODO add return stmt
-    _ = final;
+    // function returns the final value
+    try func.addOp(env.ally, block, Op{ .ret = .{ .a = final } });
 
     return func;
 }
