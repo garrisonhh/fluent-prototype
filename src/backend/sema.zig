@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const util = @import("util");
 const Symbol = util.Symbol;
 const Name = util.Name;
+const NameMap = util.NameMap;
 const kz = @import("kritzler");
 const context = @import("../context.zig");
 const FluentError = context.FluentError;
@@ -17,13 +18,12 @@ const TExpr = @import("texpr.zig");
 const canon = @import("canon.zig");
 const Number = canon.Number;
 const Builtin = canon.Builtin;
-const eval = @import("eval.zig").eval;
+const evalTyped = @import("eval.zig").evalTyped;
 
 pub const SemaError =
     Allocator.Error
  || context.MessageError
- || context.FluentError
- || Env.DefError;
+ || context.FluentError;
 
 fn holeError(env: Env, loc: ?Loc, ty: TypeId) SemaError {
     const ty_text = try ty.writeAlloc(env.ally, env.tw);
@@ -82,6 +82,35 @@ fn analyzeSymbol(
     return try unifyTExpr(env, inner_expr, outward);
 }
 
+fn analyzeAs(
+    env: *Env,
+    scope: Name,
+    expr: SExpr,
+    outward: TypeId
+) SemaError!TExpr {
+    const exprs = expr.data.call;
+
+    if (exprs.len != 3) {
+        const text = "`as` expression requires a type and a body";
+        _ = try context.post(.err, expr.loc, text, .{});
+        return error.FluentError;
+    }
+
+    const type_expr = exprs[1];
+    const body_expr = exprs[2];
+
+    // compile type
+    const tyty = try env.identify(Type{ .ty = {} });
+    const type_val = try evalTyped(env, scope, type_expr, tyty);
+    defer type_val.deinit(env.ally);
+
+    const anno = type_val.data.ty;
+
+    // generate inner expr and unify
+    const texpr = try analyzeExpr(env, scope, body_expr, anno);
+    return try unifyTExpr(env, texpr, outward);
+}
+
 fn analyzeDo(
     env: *Env,
     scope: Name,
@@ -94,7 +123,7 @@ fn analyzeDo(
     const exprs = expr.data.call;
 
     if (exprs.len < 2) {
-        const text = "block requires at least one expression";
+        const text = "`do` block requires at least one expression";
         _ = try context.post(.err, expr.loc, text, .{});
         return error.FluentError;
     }
@@ -130,38 +159,6 @@ fn analyzeDo(
         .loc = expr.loc,
         .data = .{ .call = texprs }
     };
-    return try unifyTExpr(env, texpr, outward);
-}
-
-fn analyzeCast(
-    env: *Env,
-    scope: Name,
-    expr: SExpr,
-    outward: TypeId
-) SemaError!TExpr {
-    const exprs = expr.data.call;
-
-    if (exprs.len != 3) {
-        const text = "`as` expression requires a type and a body";
-        _ = try context.post(.err, expr.loc, text, .{});
-        return error.FluentError;
-    }
-
-    const type_expr = exprs[1];
-    const body_expr = exprs[2];
-
-    // compile type
-    const type_val = try eval(env, scope, type_expr);
-
-    const tyty = try env.identify(Type{ .ty = {} });
-    if (!type_val.ty.eql(tyty)) {
-        return expectError(env.*, type_val.loc, tyty, type_val.ty);
-    }
-
-    const anno = type_val.data.ty;
-
-    // generate inner expr and unify
-    const texpr = try analyzeExpr(env, scope, body_expr, anno);
     return try unifyTExpr(env, texpr, outward);
 }
 
@@ -207,16 +204,145 @@ fn analyzeList(
     return unifyTExpr(env, texpr, outward);
 }
 
+fn filterDefError(loc: Loc, err: (SemaError || Env.DefError)) SemaError {
+    return switch (err) {
+        error.NameNoRedef => unreachable,
+        error.NameTooLong => err: {
+            const text = "name is nested too deeply in namespaces";
+            _ = try context.post(.err, loc, text, .{});
+            break :err error.FluentError;
+        },
+        error.NameRedef, error.RenamedType => err: {
+            _ = try context.post(.err, loc, "this name already exists", .{});
+            break :err error.FluentError;
+        },
+        else => |e| @errSetCast(SemaError, e),
+    };
+}
+
+const DeferredDef = struct {
+    name: Name,
+    ty: TypeId,
+    body: SExpr
+};
+
+/// the first pass over a `def` declaration. evaluates type info and stores
+/// a pie stone.
+fn firstDefPass(env: *Env, scope: Name, expr: SExpr) SemaError!DeferredDef {
+    const args = expr.data.call[1..];
+
+    // check syntax form
+    if (args.len != 3) {
+        const text = "`def` expression requires a name, a type, and a body";
+        _ = try context.post(.err, expr.loc, text, .{});
+        return error.FluentError;
+    }
+
+    const name_expr = args[0];
+    const type_expr = args[1];
+    const body_expr = args[2];
+
+    if (name_expr.data != .symbol) {
+        _ = try context.post(.err, name_expr.loc, "expected identifier", .{});
+        return error.FluentError;
+    }
+
+    const symbol = name_expr.data.symbol;
+
+    // eval type expr
+    const tyty = try env.identify(Type{ .ty = {} });
+    const type_value = try evalTyped(env, scope, type_expr, tyty);
+
+    // store first pass info for the def
+    const ty = type_value.data.ty;
+    const pie_stone = TExpr.init(expr.loc, ty, .{ .builtin = .pie_stone });
+    const name = env.def(scope, symbol, pie_stone) catch |e| {
+        return filterDefError(expr.loc, e);
+    };
+
+    return DeferredDef{
+        .name = name,
+        .ty = ty,
+        .body = body_expr,
+    };
+}
+
 fn analyzeNamespace(
     env: *Env,
     scope: Name,
     expr: SExpr,
     outward: TypeId
 ) SemaError!TExpr {
-    _ = env;
-    _ = scope;
-    _ = expr;
-    _ = outward;
+    const ally = env.ally;
+    const args = expr.data.call[1..];
+
+    // check syntax form
+    if (args.len < 1) {
+        const text = "`ns` expression requires a name";
+        _ = try context.post(.err, expr.loc, text, .{});
+        return error.FluentError;
+    }
+
+    const name_expr = args[0];
+    const defs = args[1..];
+
+    if (name_expr.data != .symbol) {
+        _ = try context.post(.err, name_expr.loc, "expected identifier", .{});
+        return error.FluentError;
+    }
+
+    // create ns
+    const symbol = name_expr.data.symbol;
+    const ns = env.defNamespace(scope, symbol) catch |e| {
+        return filterDefError(name_expr.loc, e);
+    };
+
+    // first pass
+    const deferred = try ally.alloc(DeferredDef, defs.len);
+    defer ally.free(deferred);
+
+    for (defs) |def_expr, i| {
+        errdefer for (deferred[0..i]) |dedef| {
+            dedef.body.deinit(ally);
+        };
+
+        // verify that this is a def
+        if (def_expr.data != .call or def_expr.data.call.len == 0) {
+            _ = try context.post(.err, def_expr.loc, "expected def", .{});
+            return error.FluentError;
+        }
+
+        const head = def_expr.data.call[0];
+        const def_sym = comptime Symbol.init("def");
+        if (head.data != .symbol or !head.data.symbol.eql(def_sym)) {
+            _ = try context.post(.err, def_expr.loc, "expected def", .{});
+            return error.FluentError;
+        }
+
+        // do first pass
+        deferred[i] = try firstDefPass(env, ns, def_expr);
+    }
+
+    // second pass, eval and redefine everything
+    for (deferred) |dedef| {
+        const texpr = try evalTyped(env, dedef.name, dedef.body, dedef.ty);
+        env.redef(dedef.name, texpr) catch |e| {
+            return filterDefError(dedef.body.loc, e);
+        };
+    }
+
+    if (builtin.mode == .Debug) {
+        const stdout = std.io.getStdOut().writer();
+
+        stdout.writeAll("[defined namespace]\n") catch {};
+        env.dump(env.ally, stdout) catch {};
+        stdout.writeAll("\n") catch {};
+    }
+
+    // evaluate to unit
+    const unit = try env.identify(Type{ .unit = {} });
+    const texpr = TExpr.init(expr.loc, unit, .{ .unit = {} });
+    return try unifyTExpr(env, texpr, outward);
 }
 
 fn analyzeBuiltin(
@@ -227,10 +353,18 @@ fn analyzeBuiltin(
     outward: TypeId,
 ) SemaError!TExpr {
     return switch (b) {
-        .cast => try analyzeCast(env, scope, expr, outward),
+        .pie_stone => unreachable,
+        .cast => try analyzeAs(env, scope, expr, outward),
+        .def => def: {
+            const text = "`def` declarations can only exist inside of a "
+                      ++ "namespace.";
+            _ = try context.post(.err, expr.loc, text, .{});
+            break :def error.FluentError;
+        },
         .do => try analyzeDo(env, scope, expr, outward),
         .list => try analyzeList(env, scope, expr, outward),
-        .add, .sub, .mul, .div, .mod, .@"and", .@"or", .not, .@"if", .ns => {
+        .ns => try analyzeNamespace(env, scope, expr, outward),
+        .add, .sub, .mul, .div, .mod, .@"and", .@"or", .not, .@"if" => {
             std.debug.panic("TODO analyze builtin `{s}`", .{@tagName(b)});
         },
     };
@@ -244,27 +378,38 @@ fn analyzeCall(
 ) SemaError!TExpr {
     const ally = env.ally;
     const exprs = expr.data.call;
+
+    // check for unit expr `()`
+    if (exprs.len == 0) {
+        const unit = try env.identify(Type{ .unit = {} });
+        const texpr = TExpr.init(expr.loc, unit, .{ .unit = {} });
+        return try unifyTExpr(env, texpr, outward);
+    }
+
     const head = exprs[0];
     const tail = exprs[1..];
-
-    const texprs = try ally.alloc(TExpr, exprs.len);
-    errdefer ally.free(texprs);
 
     // analyze head
     const any = try env.identify(Type{ .any = {} });
     const flbuiltin = try env.identify(Type{ .builtin = {} });
 
-    texprs[0] = try analyzeExpr(env, scope, head, any);
-    errdefer texprs[0].deinit(ally);
+    const head_expr = try analyzeExpr(env, scope, head, any);
+    errdefer head_expr.deinit(ally);
 
     // builtins get special logic
-    if (texprs[0].ty.eql(flbuiltin)) {
-        std.debug.assert(texprs[0].data == .name);
+    if (head_expr.ty.eql(flbuiltin)) {
+        std.debug.assert(head_expr.data == .name);
 
-        const bound = env.get(texprs[0].data.name);
+        const bound = env.get(head_expr.data.name);
         const b = bound.data.builtin;
         return try analyzeBuiltin(env, scope, expr, b, outward);
     }
+
+    // analyze a regular call
+    const texprs = try ally.alloc(TExpr, exprs.len);
+    errdefer ally.free(texprs);
+
+    texprs[0] = head_expr;
 
     // get called expr type, ensure it is a function
     const fn_ty = env.tw.get(texprs[0].ty);
@@ -313,9 +458,9 @@ fn analyzeCall(
 ///    error
 fn unifyTExpr(env: *Env, texpr: TExpr, outward: TypeId) SemaError!TExpr {
     const inner = env.tw.get(texpr.ty);
+    const outer = env.tw.get(outward);
 
     // check for already unified texprs
-    const outer = env.tw.get(outward);
     const is_unified = switch (outer.*) {
         .any => true,
         .set => try inner.coercesTo(env.ally, &env.tw, outer.*),
@@ -324,7 +469,7 @@ fn unifyTExpr(env: *Env, texpr: TExpr, outward: TypeId) SemaError!TExpr {
 
     if (is_unified) return texpr;
 
-    // check for coercion
+    // types aren't unified, check whether an implicit cast is allowed
     if (try inner.coercesTo(env.ally, &env.tw, outer.*)) {
         // cast is possible
         const builtin_ty = try env.identify(Type{ .builtin = {} });
@@ -335,7 +480,7 @@ fn unifyTExpr(env: *Env, texpr: TExpr, outward: TypeId) SemaError!TExpr {
         return final;
     }
 
-    // bad unification :(
+    // no unification :(
     return expectError(env.*, texpr.loc, outward, texpr.ty);
 }
 
@@ -372,6 +517,10 @@ fn analyzeExpr(
 
 /// flattens `do` blocks with one expression into the expression
 fn pruneDoBlocks(env: Env, texpr: *TExpr) SemaError!void {
+    for (texpr.getChildren()) |*child| {
+        try pruneDoBlocks(env, child);
+    }
+
     if (texpr.data == .call and texpr.data.call[0].isBuiltin(.do)) {
         const xs = texpr.data.call;
         if (xs.len == 2) {
@@ -380,10 +529,6 @@ fn pruneDoBlocks(env: Env, texpr: *TExpr) SemaError!void {
 
             texpr.* = child;
         }
-    }
-
-    for (texpr.getChildren()) |*child| {
-        try pruneDoBlocks(env, child);
     }
 }
 
@@ -416,6 +561,7 @@ pub fn analyze(
     expects: TypeId
 ) SemaError!TExpr {
     var texpr = try analyzeExpr(env, scope, expr, expects);
+    errdefer texpr.deinit(env.ally);
 
     // postprocessing
     try pruneDoBlocks(env.*, &texpr);

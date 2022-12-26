@@ -72,9 +72,15 @@ pub fn get(self: *Self, name: Name) TExpr {
 
 pub const DefError = util.NameError || TypeWelt.RenameError;
 
+/// expects value to be owned
 pub fn def(self: *Self, scope: Name, sym: Symbol, value: TExpr) DefError!Name {
-    const owned = try value.clone(self.ally);
-    return self.nmap.put(self.ally, scope, sym, owned);
+    return self.nmap.put(self.ally, scope, sym, value);
+}
+
+/// expects value to be owned
+pub fn redef(self: *Self, name: Name, value: TExpr) DefError!void {
+    const old = try self.nmap.reput(self.ally, name, value);
+    old.deinit(self.ally);
 }
 
 pub fn defNamespace(self: *Self, scope: Name, sym: Symbol) DefError!Name {

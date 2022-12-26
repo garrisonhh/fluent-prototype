@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const stdout = std.io.getStdOut().writer();
 const builtin = @import("builtin");
 const kz = @import("kritzler");
 const util = @import("util");
@@ -14,8 +15,6 @@ const TExpr = backend.TExpr;
 const eval = backend.eval;
 const context = @import("context.zig");
 const FileHandle = context.FileHandle;
-
-const stdout = std.io.getStdOut().writer();
 
 /// loads a file and evaluate it
 pub fn exec(env: *Env, handle: FileHandle, what: frontend.ParseType) !TExpr {

@@ -197,7 +197,8 @@ pub fn render(
 
     // other inline header stuff
     const data = switch (self.data) {
-        .call, .unit => try ctx.print(.{}, "{s}", .{@tagName(self.data)}),
+        .call => try ctx.print(.{}, "{s}", .{@tagName(self.data)}),
+        .unit => try ctx.print(.{}, "()", .{}),
         .ty => |ty| ty: {
             const str = try tw.get(ty).writeAlloc(ctx.ally, tw);
             defer ctx.ally.free(str);

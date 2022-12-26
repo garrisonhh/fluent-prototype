@@ -1,12 +1,17 @@
 pub const Builtin = enum {
+    // this is a transient value that only exists during the first sema pass
+    // over defs in a namespace (a.k.a while the pie crust is baking)
+    pie_stone,
+
     // pure syntax
     ns,
+    def,
 
     // control flow
     do,
     @"if",
 
-    // operators
+    // operator
     list,
     cast,
 
@@ -22,8 +27,9 @@ pub const Builtin = enum {
 
     /// what this builtin is named as it exists in the prelude. returns null
     /// for operators that shouldn't exist in the prelude.
-    pub fn getName(b: Builtin) []const u8 {
+    pub fn getName(b: Builtin) ?[]const u8 {
         return switch (b) {
+            .pie_stone, .list => null,
             .add => "+",
             .sub => "-",
             .mul => "*",
@@ -31,7 +37,7 @@ pub const Builtin = enum {
             .mod => "%",
             // `as` is an explicit cast, casts are also created implicitly
             .cast => "as",
-            inline else => |tag| @tagName(tag),
+            else => |tag| @tagName(tag),
         };
     }
 };

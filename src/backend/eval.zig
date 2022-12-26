@@ -6,24 +6,42 @@ const builtin = @import("builtin");
 const kz = @import("kritzler");
 const util = @import("util");
 const Name = util.Name;
+const context = @import("../context.zig");
 const TExpr = @import("texpr.zig");
 const SExpr = @import("sexpr.zig");
 const Env = @import("env.zig");
-const Type = @import("types.zig").Type;
+const types = @import("types.zig");
+const Type = types.Type;
+const TypeId = types.TypeId;
 const analyze = @import("sema.zig").analyze;
 const lower = @import("lower.zig").lower;
 const compile = @import("compile.zig").compile;
 const run = @import("bytecode/vm.zig").run;
 
-/// evaluate in the provided scope.
-pub fn eval(env: *Env, scope: Name, sexpr: SExpr) !TExpr {
+pub const Error =
+    std.mem.Allocator.Error
+ || context.MessageError
+ || context.FluentError;
+
+/// evaluate any dynamic value in the provided scope
+pub fn eval(env: *Env, scope: Name, sexpr: SExpr) Error!TExpr {
+    const any = try env.identify(Type{ .any = {} });
+    return try evalTyped(env, scope, sexpr, any);
+}
+
+/// evaluate in the provided scope, expecting a type
+pub fn evalTyped(
+    env: *Env,
+    scope: Name,
+    sexpr: SExpr,
+    expected: TypeId
+) Error!TExpr {
     const now = std.time.nanoTimestamp;
     const start = now();
     var render_time: i128 = 0;
 
     // analyze
-    const any = try env.identify(Type{ .any = {} });
-    const texpr = try analyze(env, scope, sexpr, any);
+    const texpr = try analyze(env, scope, sexpr, expected);
     defer texpr.deinit(env.ally);
 
     if (builtin.mode == .Debug) {

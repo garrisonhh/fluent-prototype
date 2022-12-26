@@ -5,7 +5,9 @@ const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const Symbol = @import("symbol.zig");
 
-pub const NameError = Allocator.Error || error { NameTooLong, NameRedef };
+pub const NameError =
+    Allocator.Error
+ || error { NameTooLong, NameRedef, NameNoRedef };
 
 /// names represent keys into a namemap. operations with names are generally
 /// done through their namemap.
@@ -105,11 +107,13 @@ pub const Name = struct {
 
         var i: usize = 0;
         while (i < n) : (i += 1) {
-            const sym_a = a.syms[i];
-            const sym_b = b.syms[i];
+            const sa = a.syms[i].str;
+            const sb = b.syms[i].str;
 
-            if (std.ascii.lessThanIgnoreCase(sym_a.str, sym_b.str)) {
-                return true;
+            switch (std.ascii.orderIgnoreCase(sa, sb)) {
+                .lt => return true,
+                .gt => return false,
+                .eq => {}
             }
         }
 
@@ -195,7 +199,8 @@ pub fn NameMap(comptime V: type) type {
             return res.key_ptr.*;
         }
 
-        /// puts a value into the table and returns its unique name
+        /// puts a value into the table and returns its unique name.
+        /// if name already exists, will return an `error.NameRedef`.
         ///
         /// given an owned name and an unowned symbol, create a new name which
         /// represents this symbol inside the name as a namespace
@@ -224,6 +229,26 @@ pub fn NameMap(comptime V: type) type {
             try self.map.put(ally, name, value);
 
             return name;
+        }
+
+        /// overrides an existing name's value and returns the old value.
+        /// essentially `put` but the name MUST redefine, otherwise this will
+        /// return error.NameNoRedef
+        pub fn reput(
+            self: *Self,
+            ally: Allocator,
+            name: Name,
+            value: V
+        ) NameError!V {
+            const res = try self.map.getOrPut(ally, name);
+            if (!res.found_existing) {
+                return error.NameNoRedef;
+            }
+
+            const old = res.value_ptr.*;
+            res.value_ptr.* = value;
+
+            return old;
         }
 
         fn getSymbolEntry(self: *Self, ns: Name, sym: Symbol) ?Backing.Entry {

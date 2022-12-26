@@ -14,7 +14,8 @@ const Builtin = @import("../canon.zig").Builtin;
 
 fn filterDefError(e: Env.DefError, comptime str: []const u8) Allocator.Error {
     return switch (e) {
-        error.NameRedef, error.RenamedType, error.NameTooLong => {
+        error.NameRedef, error.NameNoRedef, error.RenamedType, error.NameTooLong
+            => {
             const fmt = "uh oh, got {} in prelude definition while trying "
                      ++ "to define {s}.";
             std.debug.panic(fmt, .{e, str});
@@ -28,7 +29,8 @@ fn def(
     comptime str: []const u8,
     value: TExpr,
 ) Allocator.Error!void {
-    _ = env.def(Env.ROOT, comptime Symbol.init(str), value) catch |e| {
+    const cloned = try value.clone(env.ally);
+    _ = env.def(Env.ROOT, comptime Symbol.init(str), cloned) catch |e| {
         return filterDefError(e, str);
     };
 }
@@ -59,16 +61,12 @@ fn defNumeric(
 
 fn funcType(
     ally: Allocator,
-    generics: []const TypeId,
     takes: []const TypeId,
-    contexts: []const TypeId,
     returns: TypeId
 ) Allocator.Error!Type {
     return Type{
         .func = Type.Func{
-            .generics = try ally.dupe(TypeId, generics),
             .takes = try ally.dupe(TypeId, takes),
-            .contexts = try ally.dupe(TypeId, contexts),
             .returns = returns
         }
     };
@@ -140,13 +138,15 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     _ = float;
     _ = number;
 
+    // the bool consts
     try def(&env, "true", TExpr.init(null, @"bool", .{ .@"bool" = true }));
     try def(&env, "false", TExpr.init(null, @"bool", .{ .@"bool" = false }));
 
-    // builtins
+    // some nice metaprogramming to define all of the builtins
     inline for (comptime std.enums.values(Builtin)) |b| {
-        const name = comptime b.getName();
-        try def(&env, name, TExpr.initBuiltin(null, flbuiltin, b));
+        if (comptime b.getName()) |name| {
+            try def(&env, name, TExpr.initBuiltin(null, flbuiltin, b));
+        }
     }
 
     return env;
