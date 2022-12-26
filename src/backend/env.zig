@@ -90,6 +90,7 @@ pub fn defNamespace(self: *Self, scope: Name, sym: Symbol) DefError!Name {
     return self.def(scope, sym, expr);
 }
 
+/// type does not need to be owned, it is cloned during identification
 pub fn defType(
     self: *Self,
     scope: Name,

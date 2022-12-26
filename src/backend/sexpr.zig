@@ -111,13 +111,10 @@ pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
 
 pub fn format(
     self: Self,
-    comptime fmt: []const u8,
-    options: std.fmt.FormatOptions,
+    comptime _: []const u8,
+    _: std.fmt.FormatOptions,
     writer: anytype,
 ) @TypeOf(writer).Error!void {
-    _ = fmt;
-    _ = options;
-
     switch (self.data) {
         .@"bool" => |val| try writer.print("{}", .{val}),
         .number => |num| try writer.print("{}", .{num}),

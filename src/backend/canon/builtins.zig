@@ -8,10 +8,11 @@ pub const Builtin = enum {
     def,
 
     // control flow
+    @"fn",
     do,
     @"if",
 
-    // operator
+    // value operators
     list,
     cast,
 
@@ -25,19 +26,6 @@ pub const Builtin = enum {
     @"or",
     not,
 
-    /// what this builtin is named as it exists in the prelude. returns null
-    /// for operators that shouldn't exist in the prelude.
-    pub fn getName(b: Builtin) ?[]const u8 {
-        return switch (b) {
-            .pie_stone, .list => null,
-            .add => "+",
-            .sub => "-",
-            .mul => "*",
-            .div => "/",
-            .mod => "%",
-            // `as` is an explicit cast, casts are also created implicitly
-            .cast => "as",
-            else => |tag| @tagName(tag),
-        };
-    }
+    // type operators
+    fn_type,
 };

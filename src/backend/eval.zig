@@ -103,10 +103,10 @@ pub fn evalTyped(
             render_time += now() - t;
         }
 
-        @panic("TODO everything after ssa");
+        @panic("TODO compile + run bytecode");
 
-        // // compile to bytecode
-        // const bc = try compile(env.ally, env.tw, ssa);
+        // compile to bytecode
+        // const bc = try compile(env, ssa);
         // defer bc.deinit(env.ally);
 
         // if (builtin.mode == .Debug) {
@@ -123,7 +123,7 @@ pub fn evalTyped(
             // render_time += now() - t;
         // }
 
-        // // run compiled bytecode
+        // run compiled bytecode
         // const return_ty = bc.returns;
         // const value = try run(env.ally, &env.tw, bc);
         // defer value.deinit(env.ally);

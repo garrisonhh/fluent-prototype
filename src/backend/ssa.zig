@@ -418,10 +418,11 @@ pub const Func = struct {
         var header_texs = std.ArrayList(kz.Ref).init(ctx.ally);
         defer header_texs.deinit();
 
-        try header_texs.appendSlice(&.{
-            try ctx.print(.{}, "{}", .{self.name}),
-            try ctx.print(.{}, " : ", .{}),
-        });
+        if (self.name.syms.len > 0) {
+            try header_texs.append(try ctx.print(.{}, "{}", .{self.name}));
+        } else {
+            try header_texs.append(try ctx.print(.{}, "<expr> ", .{}));
+        }
 
         var param = Local.of(0);
         while (param.index < self.takes) : (param.index += 1) {

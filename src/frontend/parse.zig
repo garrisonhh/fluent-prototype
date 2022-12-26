@@ -214,31 +214,16 @@ fn collectList(ally: Allocator, parser: *Parser) ParseError![]RawExpr {
     // collect
     var children = std.ArrayList(RawExpr).init(ally);
 
-    while (true) {
+    parser.skipWhitespace();
+
+    while ((try parser.expectPeek()).tag != .rbracket) {
+        // expect next element
+        try children.append(try expectExpr(ally, parser));
         parser.skipWhitespace();
-
-        // rbracket or next element
-        if ((try parser.expectPeek()).tag == .rbracket) {
-            parser.mustSkip(1);
-            break;
-        } else {
-            try children.append(try expectExpr(ally, parser));
-        }
-
-        // comma or rbracket
-        parser.skipWhitespace();
-
-        const tok = try parser.expectNext();
-        switch (tok.tag) {
-            .comma => {},
-            .rbracket => break,
-            else => {
-                const msg = "expected comma or right bracket.";
-                _ = try context.post(.err, tok.loc, msg, .{});
-                return error.FluentError;
-            }
-        }
     }
+
+    // skip rbracket
+    parser.mustSkip(1);
 
     return children.toOwnedSlice();
 }

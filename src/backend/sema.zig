@@ -364,7 +364,7 @@ fn analyzeBuiltin(
         .do => try analyzeDo(env, scope, expr, outward),
         .list => try analyzeList(env, scope, expr, outward),
         .ns => try analyzeNamespace(env, scope, expr, outward),
-        .add, .sub, .mul, .div, .mod, .@"and", .@"or", .not, .@"if" => {
+        else => {
             std.debug.panic("TODO analyze builtin `{s}`", .{@tagName(b)});
         },
     };

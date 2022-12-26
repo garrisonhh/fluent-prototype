@@ -59,17 +59,29 @@ fn defNumeric(
     });
 }
 
-fn funcType(
-    ally: Allocator,
+fn defBuiltin(
+    env: *Env,
+    comptime str: []const u8,
+    ty: TypeId,
+    b: Builtin
+) Allocator.Error!void {
+    try def(env, str, TExpr.initBuiltin(null, ty, b));
+}
+
+fn fnType(
+    env: *Env,
     takes: []const TypeId,
     returns: TypeId
-) Allocator.Error!Type {
-    return Type{
+) Allocator.Error!TypeId {
+    var buf: [256]TypeId = undefined;
+    std.mem.copy(TypeId, &buf, takes);
+
+    return try env.identify(Type{
         .func = Type.Func{
-            .takes = try ally.dupe(TypeId, takes),
+            .takes = buf[0..takes.len],
             .returns = returns
         }
-    };
+    });
 }
 
 pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
@@ -118,19 +130,12 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     const uint = try defType(&env, "UInt", uint_ty);
     const float = try defType(&env, "Float", float_ty);
 
-    const number_ids = try tmp.alloc(
-        TypeId,
-        int_ids.len + uint_ids.len + float_ids.len
-    );
-    var i: usize = 0;
+    var number_ids = std.ArrayList(TypeId).init(tmp);
     for ([_][]TypeId{int_ids, uint_ids, float_ids}) |id_list| {
-        for (id_list) |id| {
-            number_ids[i] = id;
-            i += 1;
-        }
+        try number_ids.appendSlice(id_list);
     }
 
-    const number_ty = try Type.initSet(tmp, number_ids);
+    const number_ty = try Type.initSet(tmp, number_ids.items);
     const number = try defType(&env, "Number", number_ty);
 
     _ = int;
@@ -142,12 +147,15 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     try def(&env, "true", TExpr.init(null, @"bool", .{ .@"bool" = true }));
     try def(&env, "false", TExpr.init(null, @"bool", .{ .@"bool" = false }));
 
-    // some nice metaprogramming to define all of the builtins
-    inline for (comptime std.enums.values(Builtin)) |b| {
-        if (comptime b.getName()) |name| {
-            try def(&env, name, TExpr.initBuiltin(null, flbuiltin, b));
-        }
-    }
+    // define builtins
+    const bin_cond = try fnType(&env, &.{@"bool", @"bool"}, @"bool");
+    const un_cond = try fnType(&env, &.{@"bool"}, @"bool");
+
+    try defBuiltin(&env, "ns", flbuiltin, .ns);
+    try defBuiltin(&env, "def", flbuiltin, .def);
+    try defBuiltin(&env, "and", bin_cond, .@"and");
+    try defBuiltin(&env, "or", bin_cond, .@"or");
+    try defBuiltin(&env, "not", un_cond, .not);
 
     return env;
 }
