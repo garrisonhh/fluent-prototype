@@ -167,13 +167,11 @@ pub const Type = union(enum) {
 
     pub const Func = struct {
         takes: []TypeId,
-        contexts: []TypeId, // implicit parameters for effect management
         returns: TypeId,
 
         pub fn clone(self: Func, ally: Allocator) Allocator.Error!Func {
             return Func{
                 .takes = try ally.dupe(TypeId, self.takes),
-                .contexts = try ally.dupe(TypeId, self.contexts),
                 .returns = self.returns,
             };
         }
@@ -224,10 +222,7 @@ pub const Type = union(enum) {
                 => {},
             .set => |*set| set.deinit(ally),
             .tuple => |tup| ally.free(tup),
-            .func => |func| {
-                ally.free(func.takes);
-                ally.free(func.contexts);
-            },
+            .func => |func| ally.free(func.takes),
         }
     }
 
@@ -253,7 +248,6 @@ pub const Type = union(enum) {
             .tuple => |tup| wyhash.update(asBytes(&tup)),
             .func => |func| {
                 wyhash.update(asBytes(&func.takes));
-                wyhash.update(asBytes(&func.contexts));
                 wyhash.update(asBytes(&func.returns));
             }
         }
@@ -297,7 +291,6 @@ pub const Type = union(enum) {
             .tuple => |tup| idsEql(tup, ty.tuple),
             .func => |func|
                 idsEql(func.takes, ty.func.takes)
-                and idsEql(func.contexts, ty.func.contexts)
                 and func.returns.eql(ty.func.returns),
         };
     }
@@ -445,9 +438,8 @@ pub const Type = union(enum) {
                 => |subty| typewelt.get(subty).classifyRuntime(typewelt),
             .tuple => |tup| classifyList(tup, typewelt),
             .func => |func| func: {
-                var reqs = [3]RuntimeClass{
+                var reqs = [2]RuntimeClass{
                     classifyList(func.takes, typewelt),
-                    classifyList(func.contexts, typewelt),
                     typewelt.get(func.returns).classifyRuntime(typewelt)
                 };
 
@@ -559,8 +551,6 @@ pub const Type = union(enum) {
             .func => |func| {
                 try writer.writeAll("(Fn ");
                 try writeList(func.takes, ally, tw, writer);
-                try writer.writeByte(' ');
-                try writeList(func.contexts, ally, tw, writer);
                 try writer.writeByte(' ');
                 try func.returns.write(ally, tw, writer);
                 try writer.writeByte(')');
