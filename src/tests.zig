@@ -5,7 +5,7 @@ const context = @import("context.zig");
 const plumbing = @import("plumbing.zig");
 
 fn exec(env: *backend.Env, handle: context.FileHandle) !backend.TExpr {
-    return plumbing.exec(env, handle) catch |e| {
+    return plumbing.exec(env, handle, .expr) catch |e| {
         _ = try context.flushMessages();
         return e;
     };

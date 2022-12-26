@@ -350,8 +350,14 @@ fn expectFile(ally: Allocator, parser: *Parser) ParseError!RawExpr {
     );
 }
 
+pub const ParseType = enum { file, expr };
+
 /// parses a token string, providing errors
-pub fn parse(ally: Allocator, file: FileHandle) ParseError!RawExpr {
+pub fn parse(
+    ally: Allocator,
+    file: FileHandle,
+    what: ParseType
+) ParseError!RawExpr {
     // lex
     const tokens = try lex.tokenize(ally, file);
     defer ally.free(tokens);
@@ -363,5 +369,15 @@ pub fn parse(ally: Allocator, file: FileHandle) ParseError!RawExpr {
         .index = 0,
     };
 
-    return try expectFile(ally, &parser);
+    return switch (what) {
+        .file => try expectFile(ally, &parser),
+        .expr => expr: {
+            if (parser.mustPeek().tag == .indent) {
+                parser.mustSkip(1);
+            }
+
+            // TODO check for tokens left over in token stream
+            break :expr try expectIndentedExpr(ally, &parser, 0);
+        }
+    };
 }

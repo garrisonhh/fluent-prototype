@@ -20,6 +20,7 @@ pub const Builtin = enum {
 
     pub fn getName(b: Builtin) []const u8 {
         return switch (b) {
+            .cast => "as",
             inline else => |tag| @tagName(tag),
         };
     }

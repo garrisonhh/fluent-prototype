@@ -29,21 +29,25 @@ fn translateGroup(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
     return SExpr.initCall(expr.loc, exprs);
 }
 
-fn translateCallTo(
+/// translate a call with some symbols at the front
+fn translateCall(
     ally: Allocator,
-    name: []const u8,
+    initial: []const []const u8,
     expr: RawExpr
 ) TranslateError!SExpr {
     const children = expr.children.?;
-    const exprs = try ally.alloc(SExpr, 1 + children.len);
+    const exprs = try ally.alloc(SExpr, initial.len + children.len);
     errdefer ally.free(exprs);
 
-    exprs[0] = try SExpr.initSymbol(ally, expr.loc, name);
-    errdefer exprs[0].deinit(ally);
+    for (initial) |str, i| {
+        errdefer for (exprs[0..i]) |e| e.deinit(ally);
+        exprs[i] = try SExpr.initSymbol(ally, expr.loc, str);
+    }
 
+    const dst = exprs[initial.len..];
     for (children) |child, i| {
-        errdefer for (exprs[1..i + 1]) |e| e.deinit(ally);
-        exprs[i + 1] = try translate(ally, child);
+        errdefer for (dst[0..i]) |e| e.deinit(ally);
+        dst[i] = try translate(ally, child);
     }
 
     return SExpr.initCall(expr.loc, exprs);
@@ -136,11 +140,15 @@ fn translateSymbol(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
 
 pub fn translate(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
     return switch (expr.tag) {
-        .file => try translateCallTo(ally, "do", expr),
+        .file => file: {
+            const filename = expr.loc.file.getName();
+            const initial = &[_][]const u8{"ns", filename};
+            break :file try translateCall(ally, initial, expr);
+        },
         .group => try translateGroup(ally, expr),
         .number => try translateNumber(ally, expr),
         .string => try translateString(ally, expr),
         .symbol => try translateSymbol(ally, expr),
-        .list => try translateCallTo(ally, "list", expr),
+        .list => try translateCall(ally, &[_][]const u8{"list"}, expr),
     };
 }

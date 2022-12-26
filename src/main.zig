@@ -83,7 +83,7 @@ fn repl(ally: Allocator, env: *Env) !void {
         if (is_empty) break;
 
         // eval and print any messages
-        const value = plumbing.exec(env, input) catch |e| {
+        const value = plumbing.exec(env, input, .expr) catch |e| {
             if (e == error.FluentError) {
                 try context.flushMessages();
                 continue :loop;
@@ -165,7 +165,7 @@ fn executeFile(ally: Allocator, env: *Env, path: []const u8) !void {
     };
 
     // time execution
-    const value = plumbing.exec(env, handle) catch |e| {
+    const value = plumbing.exec(env, handle, .file) catch |e| {
         try stdout.print("execution failed: {}\n", .{e});
         return;
     };

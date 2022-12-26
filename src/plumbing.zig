@@ -18,13 +18,13 @@ const FileHandle = context.FileHandle;
 const stdout = std.io.getStdOut().writer();
 
 /// loads a file and evaluate it
-pub fn exec(env: *Env, handle: FileHandle) !TExpr {
+pub fn exec(env: *Env, handle: FileHandle, what: frontend.ParseType) !TExpr {
     const now = std.time.nanoTimestamp;
     const start = now();
     var render_time: i128 = 0;
 
     // parse
-    const ast = frontend.parse(env.ally, handle) catch {
+    const ast = frontend.parse(env.ally, handle, what) catch {
         try context.flushMessages();
         return error.FluentError;
     };
@@ -41,10 +41,6 @@ pub fn exec(env: *Env, handle: FileHandle) !TExpr {
         render_time += now() - t;
     }
 
-    // get analysis info
-    const file_sym = util.Symbol.init(handle.getName());
-    const scope = try env.defNamespace(Env.ROOT, file_sym);
-
     // time logging
     const stop = std.time.nanoTimestamp();
     const seconds = @intToFloat(f64, stop - start - render_time) * 1e-9;
@@ -56,5 +52,5 @@ pub fn exec(env: *Env, handle: FileHandle) !TExpr {
     }
 
     // call backend
-    return try eval(env, scope, sexpr);
+    return try eval(env, Env.ROOT, sexpr);
 }

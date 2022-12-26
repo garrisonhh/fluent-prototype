@@ -14,7 +14,9 @@ const Type = types.Type;
 const Env = @import("env.zig");
 const SExpr = @import("sexpr.zig");
 const TExpr = @import("texpr.zig");
-const Number = @import("canon.zig").Number;
+const canon = @import("canon.zig");
+const Number = canon.Number;
+const Builtin = canon.Builtin;
 const eval = @import("eval.zig").eval;
 
 pub const SemaError =
@@ -131,7 +133,7 @@ fn analyzeDo(
     return try unifyTExpr(env, texpr, outward);
 }
 
-fn analyzeAs(
+fn analyzeCast(
     env: *Env,
     scope: Name,
     expr: SExpr,
@@ -205,38 +207,80 @@ fn analyzeList(
     return unifyTExpr(env, texpr, outward);
 }
 
+fn analyzeNamespace(
+    env: *Env,
+    scope: Name,
+    expr: SExpr,
+    outward: TypeId
+) SemaError!TExpr {
+    _ = env;
+    _ = scope;
+    _ = expr;
+    _ = outward;
+}
+
+fn analyzeBuiltin(
+    env: *Env,
+    scope: Name,
+    expr: SExpr,
+    b: Builtin,
+    outward: TypeId,
+) SemaError!TExpr {
+    const never = (struct {
+        fn analyzeNever(
+            _: *Env,
+            _: Name,
+            _: SExpr,
+            _: TypeId
+        ) SemaError!TExpr {
+            @panic("called analyzeNever");
+        }
+    }).analyzeNever;
+
+    const AnalyzeFn = *const fn(*Env, Name, SExpr, TypeId) SemaError!TExpr;
+
+    const Table = util.EnumTable(Builtin, AnalyzeFn, .{
+        .{.cast, &analyzeCast},
+        .{.do, &analyzeDo},
+        .{.@"if", &never},
+        .{.list, &analyzeList},
+        .{.ns, &never},
+    });
+
+    return switch (b) {
+        inline else => |val| Table.get(val)(env, scope, expr, outward)
+    };
+}
+
 fn analyzeCall(
     env: *Env,
     scope: Name,
     expr: SExpr,
     outward: TypeId
-) SemaError!TExpr{
+) SemaError!TExpr {
     const ally = env.ally;
     const exprs = expr.data.call;
     const head = exprs[0];
     const tail = exprs[1..];
-
-    if (head.data == .symbol) {
-        // builtins require special type analysis
-        const sym = head.data.symbol;
-
-        if (sym.eql(comptime Symbol.init("do"))) {
-            return try analyzeDo(env, scope, expr, outward);
-        } else if (sym.eql(comptime Symbol.init("as"))) {
-            return try analyzeAs(env, scope, expr, outward);
-        } else if (sym.eql(comptime Symbol.init("list"))) {
-            return try analyzeList(env, scope, expr, outward);
-        }
-    }
 
     const texprs = try ally.alloc(TExpr, exprs.len);
     errdefer ally.free(texprs);
 
     // analyze head
     const any = try env.identify(Type{ .any = {} });
+    const flbuiltin = try env.identify(Type{ .builtin = {} });
 
     texprs[0] = try analyzeExpr(env, scope, head, any);
     errdefer texprs[0].deinit(ally);
+
+    // builtins get special logic
+    if (texprs[0].ty.eql(flbuiltin)) {
+        std.debug.assert(texprs[0].data == .name);
+
+        const bound = env.get(texprs[0].data.name);
+        const b = bound.data.builtin;
+        return try analyzeBuiltin(env, scope, expr, b, outward);
+    }
 
     // get called expr type, ensure it is a function
     const fn_ty = env.tw.get(texprs[0].ty);
