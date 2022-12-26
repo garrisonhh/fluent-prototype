@@ -4,27 +4,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 pub const Number = @import("canon/number.zig");
+pub const Builtin = @import("canon/builtins.zig").Builtin;
 pub usingnamespace @import("canon/prelude.zig");
-
-pub const Builtin = enum {
-    // pure syntax
-    ns,
-
-    // control flow
-    do,
-    @"if",
-
-    // ops
-    list,
-    cast,
-
-    pub fn getName(b: Builtin) []const u8 {
-        return switch (b) {
-            .cast => "as",
-            inline else => |tag| @tagName(tag),
-        };
-    }
-};
 
 /// given up to 8 bytes, return canonical u64 representation for vm
 pub fn toCanonical(bytes: []const u8) u64 {

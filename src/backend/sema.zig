@@ -226,29 +226,13 @@ fn analyzeBuiltin(
     b: Builtin,
     outward: TypeId,
 ) SemaError!TExpr {
-    const never = (struct {
-        fn analyzeNever(
-            _: *Env,
-            _: Name,
-            _: SExpr,
-            _: TypeId
-        ) SemaError!TExpr {
-            @panic("called analyzeNever");
-        }
-    }).analyzeNever;
-
-    const AnalyzeFn = *const fn(*Env, Name, SExpr, TypeId) SemaError!TExpr;
-
-    const Table = util.EnumTable(Builtin, AnalyzeFn, .{
-        .{.cast, &analyzeCast},
-        .{.do, &analyzeDo},
-        .{.@"if", &never},
-        .{.list, &analyzeList},
-        .{.ns, &never},
-    });
-
     return switch (b) {
-        inline else => |val| Table.get(val)(env, scope, expr, outward)
+        .cast => try analyzeCast(env, scope, expr, outward),
+        .do => try analyzeDo(env, scope, expr, outward),
+        .list => try analyzeList(env, scope, expr, outward),
+        .add, .sub, .mul, .div, .mod, .@"and", .@"or", .not, .@"if", .ns => {
+            std.debug.panic("TODO analyze builtin `{s}`", .{@tagName(b)});
+        },
     };
 }
 
