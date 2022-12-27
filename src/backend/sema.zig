@@ -19,6 +19,7 @@ const canon = @import("canon.zig");
 const Number = canon.Number;
 const Builtin = canon.Builtin;
 const evalTyped = @import("eval.zig").evalTyped;
+const postprocess = @import("sema/postprocessing.zig").postprocess;
 
 pub const SemaError =
     Allocator.Error
@@ -516,9 +517,9 @@ fn analyzeExpr(
 }
 
 /// flattens `do` blocks with one expression into the expression
-fn pruneDoBlocks(env: Env, texpr: *TExpr) SemaError!void {
+fn pruneDoBlocks(env: Env, texpr: *TExpr) void {
     for (texpr.getChildren()) |*child| {
-        try pruneDoBlocks(env, child);
+        pruneDoBlocks(env, child);
     }
 
     if (texpr.data == .call and texpr.data.call[0].isBuiltin(.do)) {
@@ -563,9 +564,7 @@ pub fn analyze(
     var texpr = try analyzeExpr(env, scope, expr, expects);
     errdefer texpr.deinit(env.ally);
 
-    // postprocessing
-    try pruneDoBlocks(env.*, &texpr);
-    try verifyDynamic(env.*, texpr);
+    try postprocess(env.*, &texpr);
 
     return texpr;
 }

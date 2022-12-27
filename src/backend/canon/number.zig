@@ -34,6 +34,31 @@ pub fn from(num: util.Number) util.ParseNumberError!Self {
     };
 }
 
+pub fn cast(self: Self, bits: ?u8, layout: util.Number.Layout) Self {
+    const data = switch (self.data) {
+        .int => |i| switch (layout) {
+            .int => self.data,
+            .uint => Concrete{ .uint = @intCast(UInt, i) },
+            .float => Concrete{ .float = @intToFloat(Float, i) },
+        },
+        .uint => |u| switch (layout) {
+            .int => Concrete{ .int = @intCast(Int, u) },
+            .uint => self.data,
+            .float => Concrete{ .float = @intToFloat(Float, u) },
+        },
+        .float => |f| switch (layout) {
+            .int => Concrete{ .int = @floatToInt(Int, f) },
+            .uint => Concrete{ .uint = @floatToInt(UInt, f) },
+            .float => self.data,
+        },
+    };
+
+    return Self{
+        .bits = bits,
+        .data = data,
+    };
+}
+
 /// returns this as a value on an allocator
 pub fn asValue(self: @This(), ally: Allocator) Allocator.Error!Value {
     const data = switch (self.data) {

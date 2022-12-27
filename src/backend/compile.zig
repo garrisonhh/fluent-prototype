@@ -368,35 +368,42 @@ fn compileOp(
                 const to = registers.find(un.to);
                 try bc.addInst(ally, Inst.of(.load, dst_size, arg.n, to.n));
             },
-            else => {
-                // most unary opcodes result in a unary instruction
+            .not => {
                 const ty = env.tw.get(func.getLocal(un.to));
                 const opcode: Opcode = switch (ty.*) {
-                    .@"bool" => switch (op) {
-                        .@"not" => .lnot,
-                        else => todoCompileOp(op)
-                    },
+                    .@"bool" => .lnot,
                     .number => |num| switch (num.layout) {
-                        .int, .uint => switch (op) {
-                            .@"not" => .bnot,
-                            else => todoCompileOp(op)
-                        },
-                        .float => switch (op) {
-                            else => todoCompileOp(op)
-                        },
+                         .int, .uint => .bnot,
+                         .float => unreachable
                     },
-                    else => {
-                        std.debug.panic(
-                            "TODO compile unary op for type tag {s}",
-                            .{@tagName(ty.*)}
-                        );
-                    }
+                    else => unreachable
                 };
 
                 const arg = registers.find(un.a);
                 const to = registers.find(un.to);
                 try bc.addInst(ally, Inst.of(opcode, arg.n, to.n, 0));
-            }
+            },
+            .cast => {
+                const dst = env.tw.get(func.getLocal(un.to));
+                // const src = env.tw.get(func.getLocal(un.a));
+
+                const arg = registers.find(un.a);
+                const to = registers.find(un.to);
+
+                switch (dst.*) {
+                    .@"bool" => {
+                        try bc.addInst(ally, Inst.of(.mov, arg.n, to.n, 0));
+                    },
+                    .number => |num| switch (num.layout) {
+                        .uint => {
+                            try bc.addInst(ally, Inst.of(.mov, arg.n, to.n, 0));
+                        },
+                        else => @panic("TODO")
+                    },
+                    else => unreachable
+                }
+            },
+            else => todoCompileOp(op)
         },
         .binary => |bin| {
             const ty = env.tw.get(func.getLocal(bin.to));

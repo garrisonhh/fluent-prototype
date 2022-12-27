@@ -131,15 +131,17 @@ fn lowerCall(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
     const head_expr = exprs[0];
     const args = exprs[1..];
 
-    if (head_expr.data != .name) {
-        std.debug.panic(
-            "TODO lower calls to {s} texprs\n",
-            .{@tagName(head_expr.data)}
-        );
-    }
-
-    // compile function calls to a name
-    const head = env.get(head_expr.data.name);
+    // head may be a name or a builtin
+    const head = switch (head_expr.data) {
+        .name => |name| env.get(name),
+        .builtin => head_expr,
+        else => {
+            std.debug.panic(
+                "TODO lower calls to {s} texprs\n",
+                .{@tagName(head_expr.data)}
+            );
+        }
+    };
 
     // delegate operators
     if (head.data == .builtin) {

@@ -89,7 +89,7 @@ test "bool literals" {
     try expectCompiles("false");
 }
 
-test "bool operators" {
+test "conditional operators" {
     try expectEqual("and true true", "true");
     try expectEqual("and false true", "false");
     try expectEqual("and true false", "false");
@@ -104,13 +104,12 @@ test "bool operators" {
     try expectEqual("not false", "true");
 }
 
-test "arithmetic" {
-    try expectEqual(
-        \\/ (+ 45 69)
-        \\  2
-        ,
-        "57"
-    );
+test "arithmetic operators" {
+    try expectEqual("+ 2 3", "5i64");
+    try expectEqual("- 3 2", "1i64");
+    try expectEqual("* 3 2", "6i64");
+    try expectEqual("/ 5 2", "2i64");
+    try expectEqual("% 5 2", "1i64");
 }
 
 test "if" {
