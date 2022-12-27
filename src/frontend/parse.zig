@@ -32,7 +32,7 @@ pub const RawExpr = struct {
         symbol,
 
         // syntax
-        list,
+        array,
     };
 
     tag: Tag,
@@ -79,7 +79,7 @@ pub const RawExpr = struct {
                 // slap to tag
                 break :lit try tex.slap(ally, tag_tex, .left, .close);
             },
-            .file, .group, .list => parent: {
+            .file, .group, .array => parent: {
                 // stack child textures
                 var textures = std.ArrayList(kz.Texture).init(ally);
                 defer {
@@ -210,7 +210,7 @@ fn collectParens(ally: Allocator, parser: *Parser) ParseError![]RawExpr {
 }
 
 /// helper for expectExpr
-fn collectList(ally: Allocator, parser: *Parser) ParseError![]RawExpr {
+fn collectArray(ally: Allocator, parser: *Parser) ParseError![]RawExpr {
     // collect
     var children = std.ArrayList(RawExpr).init(ally);
 
@@ -241,9 +241,9 @@ fn expectExpr(ally: Allocator, parser: *Parser) ParseError!RawExpr {
             try collectParens(ally, parser)
         ),
         .lbracket => RawExpr.init(
-            .list,
+            .array,
             fst.loc.beginning(),
-            try collectList(ally, parser)
+            try collectArray(ally, parser)
         ),
         .rparen, .rbracket, .comma => {
             _ = try context.post(.err, fst.loc, "expected expression.", .{});

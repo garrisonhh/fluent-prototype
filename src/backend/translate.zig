@@ -138,6 +138,20 @@ fn translateSymbol(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
     };
 }
 
+fn translateArray(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
+    const children = expr.children.?;
+    const exprs = try ally.alloc(SExpr, children.len);
+
+    for (children) |child, i| {
+        exprs[i] = try translate(ally, child);
+    }
+
+    return SExpr{
+        .data = .{ .array = exprs },
+        .loc = expr.loc,
+    };
+}
+
 pub fn translate(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
     return switch (expr.tag) {
         .file => file: {
@@ -149,6 +163,6 @@ pub fn translate(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
         .number => try translateNumber(ally, expr),
         .string => try translateString(ally, expr),
         .symbol => try translateSymbol(ally, expr),
-        .list => try translateCall(ally, &[_][]const u8{"list"}, expr),
+        .array => try translateArray(ally, expr),
     };
 }

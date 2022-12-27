@@ -33,6 +33,7 @@ pub const Data = union(enum) {
     ty: TypeId,
     name: Name,
     call: []Self,
+    array: []Self,
 
     // special syntax, often used as the head of a call texpr
     // TODO I should have a `lambda` builtin and then a `template` builtin which
@@ -56,6 +57,18 @@ pub const Data = union(enum) {
         };
     }
 
+    fn eqlChildren(a: []const Self, b: []const Self) bool {
+        if (a.len != b.len) return false;
+
+        for (a) |expr, i| {
+            if (!expr.eql(b[i])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     fn eql(data: Data, other: Data) bool {
         if (@as(Tag, data) != @as(Tag, other)) {
             return false;
@@ -67,20 +80,8 @@ pub const Data = union(enum) {
             .number => |n| n.eql(other.number),
             .string => |sym| sym.eql(other.string),
             .name => |name| name.eql(other.name),
-            .call => |exprs| call: {
-                const other_exprs = other.call;
-                if (exprs.len != other_exprs.len) {
-                    break :call false;
-                }
-
-                for (exprs) |expr, i| {
-                    if (expr.eql(other_exprs[i])) {
-                        break :call false;
-                    }
-                }
-
-                break :call true;
-            },
+            .call => |exprs| eqlChildren(exprs, other.call),
+            .array => |arr| eqlChildren(arr, other.array),
             .builtin => |b| b == other.builtin,
         };
     }
@@ -119,25 +120,28 @@ pub fn deinit(self: Self, ally: Allocator) void {
     switch (self.data) {
         .unit, .ty, .@"bool", .number, .name, .builtin => {},
         .string => |str| ally.free(str.str),
-        .call => |children| {
+        .call, .array => |children| {
             for (children) |child| child.deinit(ally);
             ally.free(children);
         }
     }
 }
 
+fn cloneChildren(ally: Allocator, exprs: []Self) Allocator.Error![]Self {
+    const cloned = try ally.alloc(Self, exprs.len);
+    for (exprs) |child, i| {
+        cloned[i] = try child.clone(ally);
+    }
+
+    return cloned;
+}
+
 pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
     const data = switch (self.data) {
         .unit, .ty, .@"bool", .number, .name, .builtin => self.data,
         .string => |sym| Data{ .string = try sym.clone(ally) },
-        .call => |children| call: {
-            const cloned = try ally.alloc(Self, children.len);
-            for (children) |child, i| {
-                cloned[i] = try child.clone(ally);
-            }
-
-            break :call Data{ .call = cloned };
-        }
+        .call => |children| Data{ .call = try cloneChildren(ally, children) },
+        .array => |children| Data{ .array = try cloneChildren(ally, children) },
     };
 
     return Self{
@@ -159,11 +163,24 @@ pub fn eql(self: Self, other: Self) bool {
 ///
 /// useful for recursive operations on TExprs.
 pub fn getChildren(self: Self) []Self {
-    return if (self.data == .call) self.data.call else &.{};
+    return switch (self.data) {
+        .call, .array => |xs| xs,
+        else => &.{}
+    };
 }
 
 pub fn isBuiltin(self: Self, tag: Builtin) bool {
     return self.data == .builtin and self.data.builtin == tag;
+}
+
+fn isValueChildren(exprs: []const Self) bool {
+    for (exprs) |expr| {
+        if (!expr.isValue()) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 /// finds whether the TExpr represents a value, meaning that it requires no
@@ -174,6 +191,7 @@ pub fn isBuiltin(self: Self, tag: Builtin) bool {
 pub fn isValue(self: Self) bool {
     return switch (self.data) {
         .unit, .ty, .@"bool", .number, .string, .builtin => true,
+        .array => |arr| isValueChildren(arr),
         .name, .call => false,
     };
 }
@@ -197,7 +215,7 @@ pub fn render(
 
     // other inline header stuff
     const data = switch (self.data) {
-        .call => try ctx.print(.{}, "{s}", .{@tagName(self.data)}),
+        .call, .array => try ctx.print(.{}, "{s}", .{@tagName(self.data)}),
         .unit => try ctx.print(.{}, "()", .{}),
         .ty => |ty| ty: {
             const str = try tw.get(ty).writeAlloc(ctx.ally, tw);

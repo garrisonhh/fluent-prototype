@@ -163,7 +163,7 @@ fn analyzeDo(
     return try unifyTExpr(env, texpr, outward);
 }
 
-fn analyzeList(
+fn analyzeArray(
     env: *Env,
     scope: Name,
     expr: SExpr,
@@ -171,36 +171,38 @@ fn analyzeList(
 ) SemaError!TExpr {
     const ally = env.ally;
 
-    const exprs = expr.data.call;
+    const exprs = expr.data.array;
     const texprs = try ally.alloc(TExpr, exprs.len);
     errdefer ally.free(texprs);
-
-    // list expr
-    const builtin_ty = try env.identify(Type{ .builtin = {} });
-    texprs[0] = TExpr.initBuiltin(exprs[0].loc, builtin_ty, .do);
 
     // determine type expectations
     const any = try env.identify(Type{ .any = {} });
     const expected = env.tw.get(outward);
-    const elem_outward = if (expected.* == .list) expected.list else any;
+    const elem_outward = if (expected.* == .array) expected.array.of else any;
 
     // analyze each element
-    for (exprs[1..]) |elem, i| {
-        errdefer for (texprs[1..i + 1]) |texpr| {
+    for (exprs) |elem, i| {
+        errdefer for (texprs[0..i]) |texpr| {
             texpr.deinit(ally);
         };
-        texprs[i + 1] = try analyzeExpr(env, scope, elem, elem_outward);
+        texprs[i] = try analyzeExpr(env, scope, elem, elem_outward);
     }
 
-    // TODO list elements must be retyped again either here or as a verification
-    // step to ensure consistency across the list
+    // TODO array elements must be retyped again either here or as a verification
+    // step to ensure consistency across the array
 
     // create TExpr
     const final_subty = if (texprs.len > 1) texprs[1].ty else elem_outward;
+    const ty = try env.identify(Type{
+        .array = Type.Array{
+            .size = texprs.len,
+            .of = final_subty,
+        }
+    });
     const texpr = TExpr{
-        .ty = try env.identify(Type{ .list = final_subty }),
+        .ty = ty,
         .loc = expr.loc,
-        .data = .{ .call = texprs },
+        .data = .{ .array = texprs },
     };
     return unifyTExpr(env, texpr, outward);
 }
@@ -363,7 +365,6 @@ fn analyzeBuiltin(
             break :def error.FluentError;
         },
         .do => try analyzeDo(env, scope, expr, outward),
-        .list => try analyzeList(env, scope, expr, outward),
         .ns => try analyzeNamespace(env, scope, expr, outward),
         else => {
             std.debug.panic("TODO analyze builtin `{s}`", .{@tagName(b)});
@@ -493,6 +494,7 @@ fn analyzeExpr(
 ) SemaError!TExpr {
     return switch (expr.data) {
         .call => try analyzeCall(env, scope, expr, outward),
+        .array => try analyzeArray(env, scope, expr, outward),
         .symbol => try analyzeSymbol(env, scope, expr, outward),
         else => lit: {
             const texpr = TExpr{
@@ -500,12 +502,15 @@ fn analyzeExpr(
                     .@"bool" => try env.identify(Type{ .@"bool" = {} }),
                     .number => |num| try typeOfNumber(env, num),
                     // string literals are (List u8)
-                    .string => try env.identify(Type{
-                        .list = try env.identify(Type{
-                            .number = .{ .layout = .uint, .bits = 8 }
-                        })
+                    .string => |str| try env.identify(Type{
+                        .array = Type.Array{
+                            .size = str.str.len,
+                            .of = try env.identify(Type{
+                                .number = .{ .layout = .uint, .bits = 8 }
+                            }),
+                        }
                     }),
-                    .call, .symbol => unreachable
+                    .call, .array, .symbol => unreachable,
                 },
                 .loc = expr.loc,
                 .data = try TExpr.Data.fromSExprData(env.ally, expr.data),

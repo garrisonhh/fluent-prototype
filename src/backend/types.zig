@@ -165,6 +165,12 @@ pub const Type = union(enum) {
         layout: util.Number.Layout,
     };
 
+    /// arrays are stack allocated slices with a size known before execution
+    pub const Array = struct {
+        size: usize,
+        of: TypeId,
+    };
+
     pub const Func = struct {
         takes: []TypeId,
         returns: TypeId,
@@ -198,7 +204,7 @@ pub const Type = union(enum) {
 
     // structured
     ptr: TypeId, // stores child type
-    list: TypeId, // lists are slices
+    array: Array,
     tuple: []TypeId,
 
     func: Func,
@@ -218,7 +224,7 @@ pub const Type = union(enum) {
     pub fn deinit(self: *Self, ally: Allocator) void {
         switch (self.*) {
             .unit, .hole, .namespace, .builtin, .symbol, .any, .ty, .number,
-            .list, .@"bool", .@"ptr", .atom
+            .array, .@"bool", .@"ptr", .atom
                 => {},
             .set => |*set| set.deinit(ally),
             .tuple => |tup| ally.free(tup),
@@ -244,7 +250,11 @@ pub const Type = union(enum) {
                 wyhash.update(asBytes(&num.layout));
                 wyhash.update(asBytes(&num.bits));
             },
-            .list, .ptr => |subty| wyhash.update(asBytes(&subty)),
+            .array => |arr| {
+                wyhash.update(asBytes(&arr.size));
+                wyhash.update(asBytes(&arr.of));
+            },
+            .ptr => |subty| wyhash.update(asBytes(&subty)),
             .tuple => |tup| wyhash.update(asBytes(&tup)),
             .func => |func| {
                 wyhash.update(asBytes(&func.takes));
@@ -287,7 +297,9 @@ pub const Type = union(enum) {
             .atom => |sym| sym.eql(ty.atom),
             .number => |num|
                 num.layout == ty.number.layout and num.bits == ty.number.bits,
-            .list, .ptr => |subty| subty.eql(ty.list),
+            .array => |arr|
+                arr.size == ty.array.size and arr.of.eql(ty.array.of),
+            .ptr => |subty| subty.eql(ty.ptr),
             .tuple => |tup| idsEql(tup, ty.tuple),
             .func => |func|
                 idsEql(func.takes, ty.func.takes)
@@ -298,7 +310,7 @@ pub const Type = union(enum) {
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch (self) {
             .unit, .symbol, .hole, .namespace, .builtin, .any, .number, .ty,
-            .list, .@"bool", .ptr
+            .array, .@"bool", .ptr
                 => self,
             .set => |set| Self{ .set = try set.clone(ally) },
             .atom => |name| Self{ .atom = name },
@@ -355,7 +367,9 @@ pub const Type = union(enum) {
                 // must not lose bits in coercion
                 break :num num.bits.? <= target.number.bits.?;
             },
-            .list, .ptr => |subty| subty.eql(self.list),
+            .array => |arr|
+                arr.size == self.array.size and arr.of.eql(self.array.of),
+            .ptr => |subty| subty.eql(self.ptr),
             .func => func: {
                 // TODO I want functions to be able to coerce to functions with
                 // wider effect sets I think?
@@ -434,8 +448,8 @@ pub const Type = union(enum) {
             .ty, .symbol, .namespace => .dynamic,
             .unit, .atom, .@"bool", .builtin => .static,
             .number => |num| if (num.bits != null) .static else .dynamic,
-            .list, .ptr
-                => |subty| typewelt.get(subty).classifyRuntime(typewelt),
+            .array => |arr| typewelt.get(arr.of).classifyRuntime(typewelt),
+            .ptr => |subty| typewelt.get(subty).classifyRuntime(typewelt),
             .tuple => |tup| classifyList(tup, typewelt),
             .func => |func| func: {
                 var reqs = [2]RuntimeClass{
@@ -535,9 +549,9 @@ pub const Type = union(enum) {
                 try subty.write(ally, tw, writer);
                 try writer.writeByte(')');
             },
-            .list => |subty| {
-                try writer.writeAll("(List ");
-                try subty.write(ally, tw, writer);
+            .array => |arr| {
+                try writer.print("(Array {d} ", .{arr.size});
+                try arr.of.write(ally, tw, writer);
                 try writer.writeByte(')');
             },
             .tuple => |tup| {

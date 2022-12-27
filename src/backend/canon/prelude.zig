@@ -154,14 +154,17 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
 
     try defBuiltin(&env, "ns", flbuiltin, .ns);
     try defBuiltin(&env, "def", flbuiltin, .def);
-    try defBuiltin(&env, "and", bin_cond, .@"and");
-    try defBuiltin(&env, "or", bin_cond, .@"or");
-    try defBuiltin(&env, "not", un_cond, .not);
+    try defBuiltin(&env, "array", flbuiltin, .array);
+
     try defBuiltin(&env, "+", bin_i64, .add);
     try defBuiltin(&env, "-", bin_i64, .sub);
     try defBuiltin(&env, "*", bin_i64, .mul);
     try defBuiltin(&env, "/", bin_i64, .div);
     try defBuiltin(&env, "%", bin_i64, .mod);
+
+    try defBuiltin(&env, "and", bin_cond, .@"and");
+    try defBuiltin(&env, "or", bin_cond, .@"or");
+    try defBuiltin(&env, "not", un_cond, .not);
 
     return env;
 }

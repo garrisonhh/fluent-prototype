@@ -89,6 +89,11 @@ test "bool literals" {
     try expectCompiles("false");
 }
 
+test "array literals" {
+    try expectCompiles("[1 2 3]");
+    try expectCompiles("[i64 i8 f32]");
+}
+
 test "conditional operators" {
     try expectEqual("and true true", "true");
     try expectEqual("and false true", "false");

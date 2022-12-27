@@ -78,14 +78,8 @@ fn pop(self: *Self, bytes: usize, dst: Register) void {
     std.mem.copy(u8, dst_bytes, src);
 }
 
-const Now = if (builtin.mode == .Debug) f64 else void;
-
-fn now() Now {
-    if (builtin.mode == .Debug) {
-        return @intToFloat(f64, std.time.nanoTimestamp()) * 1e-6;
-    } else {
-        return {};
-    }
+fn now() f64 {
+    return @intToFloat(f64, std.time.nanoTimestamp()) * 1e-6;
 }
 
 const RuntimeError = Allocator.Error;
@@ -249,11 +243,9 @@ fn execute(self: *Self, program: Program) RuntimeError!void {
     }
 
     // end of execution
-    if (builtin.mode == .Debug) {
-        const stdout = std.io.getStdOut().writer();
-        const t = now() - start;
-        stdout.print("vm.run took {d:.6}ms\n", .{t}) catch {};
-    }
+    const stdout = std.io.getStdOut().writer();
+    const t = now() - start;
+    stdout.print("vm.run took {d:.6}ms\n", .{t}) catch {};
 }
 
 /// expects ret_buf to have a size equivalent to the program's return size.

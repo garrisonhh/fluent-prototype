@@ -13,7 +13,7 @@ pub const Builtin = enum {
     @"if",
 
     // value operators
-    list,
+    array,
     cast,
 
     add,

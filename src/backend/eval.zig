@@ -133,7 +133,6 @@ pub fn evalTyped(
 
         break :final try value.resurrect(env.*, ssa.returns);
     };
-    defer final.deinit(env.ally);
 
     // render final value
     if (builtin.mode == .Debug) {

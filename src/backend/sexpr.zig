@@ -25,6 +25,7 @@ pub const Data = union(enum) {
     string: Symbol,
     symbol: Symbol,
     call: []Self,
+    array: []Self,
 
     pub fn clone(data: Data, ally: Allocator) Allocator.Error!Data {
         return switch (data) {
@@ -127,6 +128,14 @@ pub fn format(
                 try writer.print("{}", .{expr});
             }
             try writer.writeByte(')');
+        },
+        .array => |exprs| {
+            try writer.writeByte('[');
+            for (exprs) |expr, i| {
+                if (i > 0) try writer.writeByte(' ');
+                try writer.print("{}", .{expr});
+            }
+            try writer.writeByte(']');
         }
     }
 }
