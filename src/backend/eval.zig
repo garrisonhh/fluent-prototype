@@ -63,8 +63,8 @@ pub fn evalTyped(
     // analysis may produce a constant, otherwise the expr must be lowered,
     // compiled, and executed on the virtual machine
     const final = final: {
+        // values don't need further execution
         if (texpr.isValue()) {
-            // constant
             if (builtin.mode == .Debug) {
                 const msg_start = now();
                 try stdout.writeAll("analyzed a constant.\n");
@@ -72,19 +72,6 @@ pub fn evalTyped(
             }
 
             break :final try texpr.clone(env.ally);
-        } else if (texpr.data == .name) {
-            // symbolic reference to constant
-            const bound = env.get(texpr.data.name);
-
-            if (bound.isValue()) {
-                if (builtin.mode == .Debug) {
-                    const msg_start = now();
-                    try stdout.writeAll("analyzed a bound constant.\n");
-                    render_time += now() - msg_start;
-                }
-
-                break :final try bound.clone(env.ally);
-            }
         }
 
         // lower to ssa ir

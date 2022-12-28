@@ -108,6 +108,10 @@ pub fn resurrect(
     const data: TExpr.Data = switch (ty.*) {
         .@"bool" => .{ .@"bool" = self.as(u8) > 0 },
         .number => |num| self.toNumber(num.bits orelse 64, num.layout),
+        .ty => ty: {
+            const index = canon.toCanonical(self.ptr);
+            break :ty TExpr.Data{ .ty = TypeId{ .index = index } };
+        },
         .array => |arr| arr: {
             const children = try ally.alloc(TExpr, arr.size);
 

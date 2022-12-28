@@ -37,6 +37,28 @@ fn lowerLoadConst(
     return out;
 }
 
+/// this does all of the boilerplate of loading a const u64. this is
+/// boilerplate I otherwise end up rewriting constantly.
+fn lowerU64(env: *Env, func: *Func, block: Label, n: u64) Error!Local {
+    const value = try Value.init(env.ally, canon.fromCanonical(&n));
+    const @"u64" = try env.identify(Type{
+        .number = .{ .bits = 64, .layout = .uint }
+    });
+    return try lowerLoadConst(env.ally, func, block, @"u64", value);
+}
+
+/// wrapper for loadConst which lowers a raw uint as some type
+fn lowerCanonical(
+    ally: Allocator,
+    func: *Func,
+    block: Label,
+    ty: TypeId,
+    n: u64
+) Error!Local {
+    const value = try Value.init(ally, canon.fromCanonical(&n));
+    return try lowerLoadConst(ally, func, block, ty, value);
+}
+
 fn lowerBool(
     ally: Allocator,
     func: *Func,
@@ -170,16 +192,7 @@ fn lowerArray(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
     }
 
     // get element size in the code as a constant
-    // TODO I need some kind of `lowerZigConst()` or something to help out
-    // with this kind of operation, this is all boilerplate tbh
-    const el_size = env.sizeOf(el_ty);
-
-    const el_size_val = try Value.init(ally, canon.fromCanonical(&el_size));
-    const el_size_ty = try env.identify(Type{
-        .number = .{ .bits = 64, .layout = .uint }
-    });
-    const local_el_size =
-        try lowerLoadConst(ally, func, block.*, el_size_ty, el_size_val);
+    const el_size = try lowerU64(env, func, block.*, env.sizeOf(el_ty));
 
     // store each element
     for (elements) |elem, i| {
@@ -192,7 +205,7 @@ fn lowerArray(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
         if (i < elements.len - 1) {
             const next_ptr = try func.addLocal(ally, el_ptr_ty);
             try func.addOp(ally, block.*, Op{
-                .add = .{ .a = cur_ptr, .b = local_el_size, .to = next_ptr }
+                .add = .{ .a = cur_ptr, .b = el_size, .to = next_ptr }
             });
 
             cur_ptr = next_ptr;
@@ -260,6 +273,10 @@ fn lowerExpr(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
         },
         .array => try lowerArray(env, func, block, expr),
         .call => try lowerCall(env, func, block, expr),
+        .ty => |ty| ty: {
+            const tyty = try env.identify(Type{ .ty = {} });
+            break :ty lowerCanonical(env.ally, func, block.*, tyty, ty.index);
+        },
         else => {
             const tag = @tagName(expr.data);
             std.debug.panic("TODO lower {s} exprs\n", .{tag});

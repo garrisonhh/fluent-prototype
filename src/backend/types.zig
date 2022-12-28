@@ -491,7 +491,7 @@ pub const Type = union(enum) {
             .any, .set, .hole, .namespace => unreachable,
             .number => |num| (num.bits orelse 64) / 8,
             .@"bool" => 1,
-            .ptr => 8,
+            .ptr, .ty => 8,
             .array => |arr| arr.size * tw.get(arr.of).sizeOf(tw),
             else => std.debug.panic("TODO sizeOf {s}", .{@tagName(self)})
         };
