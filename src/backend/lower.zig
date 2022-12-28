@@ -113,6 +113,95 @@ fn lowerOperator(
     };
 }
 
+fn lowerArray(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
+    const ally = env.ally;
+    const exprs = expr.data.array;
+
+    // lower all elements
+    const elements = try ally.alloc(Local, exprs.len);
+    defer ally.free(elements);
+
+    for (exprs) |child, i| {
+        elements[i] = try lowerExpr(env, func, block, child);
+    }
+
+    // alloca array
+    const arr_ptr_ty = try env.identify(Type{
+        .ptr = Type.Pointer{
+            .mut = true,
+            .many = false,
+            .to = expr.ty,
+        }
+    });
+    const arr_ptr = try func.addLocal(ally, arr_ptr_ty);
+
+    try func.addOp(ally, block.*, Op{
+        .alloca = .{
+            .size = env.sizeOf(expr.ty),
+            .to = arr_ptr
+        }
+    });
+
+    // for a zero-length array, everything is done
+    if (elements.len == 0) return arr_ptr;
+
+    // get ptr to first element
+    const el_ty = env.tw.get(expr.ty).array.of;
+    const el_ptr_ty = try env.identify(Type{
+        .ptr = Type.Pointer{
+            .mut = true,
+            .many = false,
+            .to = el_ty,
+        }
+    });
+
+    var cur_ptr = try func.addLocal(ally, el_ptr_ty);
+    try func.addOp(ally, block.*, Op{
+        .cast = .{ .a = arr_ptr, .to = cur_ptr }
+    });
+
+    if (elements.len == 1) {
+        // single element arrays only need 1 store operation
+        try func.addOp(ally, block.*, Op{
+            .store = .{ .a = elements[0], .b = cur_ptr }
+        });
+
+        return arr_ptr;
+    }
+
+    // get element size in the code as a constant
+    // TODO I need some kind of `lowerZigConst()` or something to help out
+    // with this kind of operation, this is all boilerplate tbh
+    const el_size = env.sizeOf(el_ty);
+
+    const el_size_val = try Value.init(ally, canon.fromCanonical(&el_size));
+    const el_size_ty = try env.identify(Type{
+        .number = .{ .bits = 64, .layout = .uint }
+    });
+    const local_el_size =
+        try lowerLoadConst(ally, func, block.*, el_size_ty, el_size_val);
+
+    // store each element
+    for (elements) |elem, i| {
+        // store this element at the current array ptr
+        try func.addOp(ally, block.*, Op{
+            .store = .{ .a = elem, .b = cur_ptr }
+        });
+
+        // increment the current ptr, unless this is the last element
+        if (i < elements.len - 1) {
+            const next_ptr = try func.addLocal(ally, el_ptr_ty);
+            try func.addOp(ally, block.*, Op{
+                .add = .{ .a = cur_ptr, .b = local_el_size, .to = next_ptr }
+            });
+
+            cur_ptr = next_ptr;
+        }
+    }
+
+    return arr_ptr;
+}
+
 /// functions get lowered as their own Func and then stored in the env. for
 /// the current block, their FuncRef can then get lowered in.
 fn lowerFn(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
@@ -169,6 +258,7 @@ fn lowerExpr(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
 
             break :name try lowerExpr(env, func, block, value);
         },
+        .array => try lowerArray(env, func, block, expr),
         .call => try lowerCall(env, func, block, expr),
         else => {
             const tag = @tagName(expr.data);
@@ -186,6 +276,7 @@ pub fn lower(env: *Env, scope: Name, expr: TExpr) Error!Func {
 
     // function returns the final value
     try func.addOp(env.ally, block, Op{ .ret = .{ .a = final } });
+    func.returns = func.getLocal(final);
 
     return func;
 }

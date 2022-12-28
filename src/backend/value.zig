@@ -2,6 +2,8 @@
 //! is what SSA IR constants use, and the bytecode VM follows its layout rules
 //! in code generation.
 
+// TODO move this to canon?
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
@@ -11,10 +13,10 @@ const types = @import("types.zig");
 const TypeId = types.TypeId;
 const Type = types.Type;
 const TExpr = @import("texpr.zig");
+const canon = @import("canon.zig");
 
 const Self = @This();
 
-// NOTE potential optimization here would be to store only the raw array ptr
 ptr: []align(16) u8,
 
 /// allocates and dupes data to aligned ptr
@@ -93,18 +95,54 @@ fn toNumber(
 ///
 /// this is probably the most important function in the entire codebase, as it
 /// is the thing that enables the most interesting features in fluent
-pub fn resurrect(self: Self, env: Env, tid: TypeId) Allocator.Error!TExpr {
+pub fn resurrect(
+    self: Self,
+    env: Env,
+    mem: []const u8,
+    tid: TypeId
+) Allocator.Error!TExpr {
+    const ally = env.ally;
     const ty = env.tw.get(tid);
     const data: TExpr.Data = switch (ty.*) {
         .@"bool" => .{ .@"bool" = self.as(u8) > 0 },
         .number => |num| self.toNumber(num.bits orelse 64, num.layout),
-        else => {
-            const text = tid.writeAlloc(env.ally, env.tw) catch {
-                @panic("write error");
-            };
-            defer env.ally.free(text);
+        .array => |arr| arr: {
+            const children = try ally.alloc(TExpr, arr.size);
 
-            std.debug.panic("TODO revive type {s}", .{text});
+            // resurrect elements
+            const el_size = env.sizeOf(arr.of);
+            const buf = try ally.alignedAlloc(u8, 16, el_size);
+            defer ally.free(buf);
+            const el_val = Self{ .ptr = buf };
+
+            var i: usize = 0;
+            while (i < arr.size) : (i += 1) {
+                const src = self.ptr[i * el_size..(i + 1) * el_size];
+                std.mem.copy(u8, el_val.ptr, src);
+
+                children[i] = try el_val.resurrect(env, mem, arr.of);
+            }
+
+            break :arr TExpr.Data{ .array = children };
+        },
+        .ptr => |ptr| {
+            // pointers that come from the bytecode vm are indices into the vm's
+            // stack
+            const size = env.sizeOf(ptr.to);
+            const index = canon.toCanonical(self.ptr);
+
+            _ = size;
+            _ = index;
+
+            @panic("TODO resurrect pointers");
+        },
+        else => {
+            const text = tid.writeAlloc(ally, env.tw) catch {
+                @panic("writeAlloc failed.");
+            };
+            defer ally.free(text);
+
+            std.debug.panic("TODO resurrect type {s}", .{text});
         }
     };
 

@@ -4,6 +4,7 @@ const std = @import("std");
 const kz = @import("kritzler");
 const Allocator = std.mem.Allocator;
 const canon = @import("../canon.zig");
+const Vm = @import("vm.zig");
 
 /// a single operation
 pub const Opcode = enum(u8) {
@@ -117,8 +118,18 @@ pub const Program = struct {
     }
 
     fn renderReg(ctx: *kz.Context, reg: usize) !kz.Ref {
+        const cyan = kz.Style{ .fg = .cyan };
+        const red = kz.Style{ .fg = .red };
+
         const sym = try ctx.print(.{}, "%", .{});
-        const id = try ctx.print(.{ .fg = .red }, "{}", .{reg});
+        const id = switch (reg) {
+            Vm.IP.n => try ctx.print(cyan, "ip", .{}),
+            Vm.FP.n => try ctx.print(cyan, "fp", .{}),
+            Vm.SP.n => try ctx.print(cyan, "sp", .{}),
+            Vm.RETURN.n => try ctx.print(cyan, "{}", .{reg}),
+            else => try ctx.print(red, "{}", .{reg}),
+        };
+
         return try ctx.slap(sym, id, .right, .{});
     }
 

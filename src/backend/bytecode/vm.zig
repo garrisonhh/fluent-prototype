@@ -17,8 +17,7 @@ pub const Register = packed struct {
 };
 
 // reserved registers
-// TODO do I want to remove these and just have them as locals in `run()`?
-const IP = Register.of(0); // instruction pointer
+pub const IP = Register.of(0); // instruction pointer
 pub const SP = Register.of(1); // stack pointer (top of frame)
 pub const FP = Register.of(2); // frame pointer (bottom of frame)
 
@@ -163,9 +162,8 @@ fn execute(self: *Self, program: Program) RuntimeError!void {
             .push => {
                 const nbytes = args[0];
                 const src = Register.of(args[0]);
-                var buf: [8]u8 = undefined;
-                const data = buf[0..nbytes];
-                canon.fromCanonical(data, self.get(src));
+                const value = self.get(src);
+                const data = canon.fromCanonical(&value);
                 const addr = self.get(SP);
                 std.mem.copy(u8, self.stack[addr..addr + nbytes], data);
             },
@@ -182,10 +180,10 @@ fn execute(self: *Self, program: Program) RuntimeError!void {
                 const nbytes = args[0];
                 const src = Register.of(args[1]);
                 const dst = Register.of(args[2]);
+
                 // format register canonically
-                var buf: [8]u8 = undefined;
-                const data = buf[0..nbytes];
-                canon.fromCanonical(data, self.get(src));
+                const value = self.get(src);
+                const data = canon.fromCanonical(&value);
                 // write
                 const addr = self.get(dst);
                 std.mem.copy(u8, self.stack[addr..addr + nbytes], data);
@@ -256,11 +254,12 @@ pub fn run(vm: *Self, ret: []u8, program: Program) RuntimeError!void {
 
     // copy return value
     const out: u64 = vm.scratch[RESERVED];
-    if (ret.len > 8) {
-        // deref r0 and read
-        const data = @intToPtr([*]const u8, out)[0..ret.len];
-        std.mem.copy(u8, ret, data);
-    } else {
-        canon.fromCanonical(ret, out);
-    }
+    const data =
+        if (ret.len > 8)
+            @intToPtr([*]const u8, out)[0..ret.len]
+        else
+            canon.fromCanonical(&out);
+
+    std.mem.set(u8, ret, 0);
+    std.mem.copy(u8, ret, data);
 }

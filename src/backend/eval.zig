@@ -131,7 +131,7 @@ pub fn evalTyped(
         try env.vm.run(value.ptr, prog);
         try env.bc.removeFunc(env.ally, ssa.ref);
 
-        break :final try value.resurrect(env.*, ssa.returns);
+        break :final try value.resurrect(env.*, env.vm.stack, ssa.returns);
     };
 
     // render final value

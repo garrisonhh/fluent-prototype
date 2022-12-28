@@ -351,8 +351,9 @@ fn compileOp(
             // 3. add size to sp
             const reg = registers.find(all.to);
 
+            const size = @intCast(u64, all.size);
             var buf: [8]u8 align(16) = undefined;
-            canon.fromCanonical(&buf, @intCast(u64, all.size));
+            std.mem.copy(u8, &buf, canon.fromCanonical(&size));
             const size_val = Value{ .ptr = &buf };
             const size_reg = registers.temporary(0);
 
@@ -391,9 +392,12 @@ fn compileOp(
                 const to = registers.find(un.to);
 
                 switch (dst.*) {
-                    .@"bool" => {
+                    // bool and ptr can bitcast
+                    .@"bool", .ptr => {
                         try bc.addInst(ally, Inst.of(.mov, arg.n, to.n, 0));
                     },
+                    // numbers require more complex casting rules
+                    // TODO use different ops for bitcast and other casts
                     .number => |num| switch (num.layout) {
                         .uint => {
                             try bc.addInst(ally, Inst.of(.mov, arg.n, to.n, 0));
@@ -437,7 +441,7 @@ fn compileOp(
             const to = registers.find(bin.to);
             try bc.addInst(ally, Inst.of(opcode, lhs.n, rhs.n, to.n));
         },
-        .unary_eff => |ue| switch (op) {
+        .un_eff => |ue| switch (op) {
             .ret => {
                 const value = registers.find(ue.a);
                 try bc.addInst(ally, Inst.of(.mov, value.n, Vm.RETURN.n, 0));
@@ -445,7 +449,7 @@ fn compileOp(
             },
             else => @panic("TODO")
         },
-        .binary_eff => |be| switch (op) {
+        .bin_eff => |be| switch (op) {
             .store => {
                 const src_ty = func.getLocal(be.a);
                 const bytes = switch (env.sizeOf(src_ty)) {

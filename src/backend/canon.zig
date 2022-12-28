@@ -19,12 +19,9 @@ pub fn toCanonical(bytes: []const u8) u64 {
     return @ptrCast(*const u64, &dst).*;
 }
 
-pub fn fromCanonical(buf: []u8, n: u64) void {
+pub fn fromCanonical(n: *const u64) []const u8 {
     std.debug.assert(builtin.cpu.arch.endian() == .Little);
 
-    const nbytes = 8 - (@clz(n) / 8);
-    const slice = std.mem.asBytes(&n)[0..nbytes];
-
-    std.mem.set(u8, buf, 0);
-    std.mem.copy(u8, buf, slice);
+    const nbytes = 8 - (@ctz(n.*) / 8);
+    return @ptrCast(*const [8]u8, n)[0..nbytes];
 }

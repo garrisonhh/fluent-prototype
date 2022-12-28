@@ -74,6 +74,12 @@ pub const Op = union(enum) {
         b: Local,
     };
 
+    pub const TernaryEffect = struct {
+        a: Local,
+        b: Local,
+        c: Local,
+    };
+
     // unique
     ldc: LoadConst,
     cast: Unary,
@@ -89,7 +95,8 @@ pub const Op = union(enum) {
 
     // memory
     alloca: Alloca, // allocates a number of bytes and returns pointer
-    store: BinaryEffect, // stores local a at address in ptr b
+    store: BinaryEffect, // store a at addr b
+    store_elem: TernaryEffect, // store a at addr b with offset c
     load: Unary, // loads data from ptr a
 
     // math
@@ -116,8 +123,9 @@ pub const Op = union(enum) {
         // generalizable logic
         unary: Unary,
         binary: Binary,
-        unary_eff: UnaryEffect,
-        binary_eff: BinaryEffect,
+        un_eff: UnaryEffect,
+        bin_eff: BinaryEffect,
+        tri_eff: TernaryEffect,
     };
 
     /// makes switching on ops + writing generalized code significantly easier
@@ -132,8 +140,9 @@ pub const Op = union(enum) {
             .cast, .not, .load => |un| Class{ .unary = un },
             .add, .sub, .mul, .div, .mod, .@"or", .@"and"
                 => |bin| Class{ .binary = bin },
-            .ret => |un_eff| Class{ .unary_eff = un_eff },
-            .store => |bin_eff| Class{ .binary_eff = bin_eff },
+            .ret => |un_eff| Class{ .un_eff = un_eff },
+            .store => |bin_eff| Class{ .bin_eff = bin_eff },
+            .store_elem => |tri_eff| Class{ .tri_eff = tri_eff },
         };
     }
 };
@@ -308,7 +317,7 @@ pub const Func = struct {
             .ldc => |ldc| {
                 const ty = self.locals.items[ldc.to.index];
                 const value = self.consts.items[ldc.a.index];
-                const expr = try value.resurrect(env, ty);
+                const expr = try value.resurrect(env, env.vm.stack, ty);
                 defer expr.deinit(ctx.ally);
 
                 try line.appendSlice(&.{
@@ -355,18 +364,28 @@ pub const Func = struct {
                     try self.renderLocal(ctx, env, bin.b),
                 });
             },
-            .unary_eff => |un| {
+            .un_eff => |un| {
                 try line.appendSlice(&.{
                     try ctx.print(.{}, "{s} ", .{tag}),
                     try self.renderLocal(ctx, env, un.a),
                 });
             },
-            .binary_eff => |bin| {
+            .bin_eff => |bin| {
                 try line.appendSlice(&.{
                     try ctx.print(.{}, "{s} ", .{tag}),
                     try self.renderLocal(ctx, env, bin.a),
                     try ctx.clone(comma),
                     try self.renderLocal(ctx, env, bin.b),
+                });
+            },
+            .tri_eff => |tri| {
+                try line.appendSlice(&.{
+                    try ctx.print(.{}, "{s} ", .{tag}),
+                    try self.renderLocal(ctx, env, tri.a),
+                    try ctx.clone(comma),
+                    try self.renderLocal(ctx, env, tri.b),
+                    try ctx.clone(comma),
+                    try self.renderLocal(ctx, env, tri.c),
                 });
             },
             else => std.debug.panic(

@@ -171,6 +171,13 @@ pub const Type = union(enum) {
         of: TypeId,
     };
 
+    /// pointers
+    pub const Pointer = struct {
+        mut: bool,
+        many: bool,
+        to: TypeId,
+    };
+
     pub const Func = struct {
         takes: []TypeId,
         returns: TypeId,
@@ -203,8 +210,8 @@ pub const Type = union(enum) {
     atom: Name, // this is not owned by the type
 
     // structured
-    ptr: TypeId, // stores child type
     array: Array,
+    ptr: Pointer,
     tuple: []TypeId,
 
     func: Func,
@@ -254,7 +261,11 @@ pub const Type = union(enum) {
                 wyhash.update(asBytes(&arr.size));
                 wyhash.update(asBytes(&arr.of));
             },
-            .ptr => |subty| wyhash.update(asBytes(&subty)),
+            .ptr => |ptr| {
+                wyhash.update(asBytes(&ptr.mut));
+                wyhash.update(asBytes(&ptr.many));
+                wyhash.update(asBytes(&ptr.to));
+            },
             .tuple => |tup| wyhash.update(asBytes(&tup)),
             .func => |func| {
                 wyhash.update(asBytes(&func.takes));
@@ -299,7 +310,9 @@ pub const Type = union(enum) {
                 num.layout == ty.number.layout and num.bits == ty.number.bits,
             .array => |arr|
                 arr.size == ty.array.size and arr.of.eql(ty.array.of),
-            .ptr => |subty| subty.eql(ty.ptr),
+            .ptr => |ptr|
+                ptr.mut == ty.ptr.mut and ptr.many == ty.ptr.many
+                and ptr.to.eql(ty.ptr.to),
             .tuple => |tup| idsEql(tup, ty.tuple),
             .func => |func|
                 idsEql(func.takes, ty.func.takes)
@@ -369,7 +382,15 @@ pub const Type = union(enum) {
             },
             .array => |arr|
                 arr.size == self.array.size and arr.of.eql(self.array.of),
-            .ptr => |subty| subty.eql(self.ptr),
+            .ptr => |ptr| ptr: {
+                // if target is mut, must be mut
+                if (ptr.mut and !self.ptr.mut) {
+                    break :ptr false;
+                }
+
+                break :ptr ptr.many == self.ptr.many
+                       and ptr.to.eql(self.ptr.to);
+            },
             .func => func: {
                 // TODO I want functions to be able to coerce to functions with
                 // wider effect sets I think?
@@ -449,7 +470,7 @@ pub const Type = union(enum) {
             .unit, .atom, .@"bool", .builtin => .static,
             .number => |num| if (num.bits != null) .static else .dynamic,
             .array => |arr| typewelt.get(arr.of).classifyRuntime(typewelt),
-            .ptr => |subty| typewelt.get(subty).classifyRuntime(typewelt),
+            .ptr => |ptr| typewelt.get(ptr.to).classifyRuntime(typewelt),
             .tuple => |tup| classifyList(tup, typewelt),
             .func => |func| func: {
                 var reqs = [2]RuntimeClass{
@@ -471,6 +492,7 @@ pub const Type = union(enum) {
             .number => |num| (num.bits orelse 64) / 8,
             .@"bool" => 1,
             .ptr => 8,
+            .array => |arr| arr.size * tw.get(arr.of).sizeOf(tw),
             else => std.debug.panic("TODO sizeOf {s}", .{@tagName(self)})
         };
     }
@@ -544,9 +566,12 @@ pub const Type = union(enum) {
                     try writer.print("compiler-{s}", .{layout});
                 }
             },
-            .ptr => |subty| {
-                try writer.writeAll("(Ptr ");
-                try subty.write(ally, tw, writer);
+            .ptr => |ptr| {
+                try writer.writeByte('(');
+                if (ptr.mut) try writer.writeAll("Mut");
+                if (ptr.many) try writer.writeAll("Many");
+                try writer.writeAll("Ptr ");
+                try ptr.to.write(ally, tw, writer);
                 try writer.writeByte(')');
             },
             .array => |arr| {

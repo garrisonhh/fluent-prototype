@@ -192,7 +192,7 @@ fn analyzeArray(
     // step to ensure consistency across the array
 
     // create TExpr
-    const final_subty = if (texprs.len > 1) texprs[1].ty else elem_outward;
+    const final_subty = if (texprs.len > 0) texprs[0].ty else elem_outward;
     const ty = try env.identify(Type{
         .array = Type.Array{
             .size = texprs.len,
