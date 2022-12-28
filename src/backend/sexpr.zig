@@ -94,7 +94,7 @@ pub fn initString(
 
 pub fn deinit(self: Self, ally: Allocator) void {
     switch (self.data) {
-        .call => |children| {
+        .call, .array => |children| {
             for (children) |child| child.deinit(ally);
             ally.free(children);
         },

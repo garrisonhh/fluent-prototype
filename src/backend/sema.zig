@@ -18,13 +18,10 @@ const TExpr = @import("texpr.zig");
 const canon = @import("canon.zig");
 const Number = canon.Number;
 const Builtin = canon.Builtin;
-const evalTyped = @import("eval.zig").evalTyped;
+const eval = @import("eval.zig");
 const postprocess = @import("sema/postprocessing.zig").postprocess;
 
-pub const SemaError =
-    Allocator.Error
- || context.MessageError
- || context.FluentError;
+pub const SemaError = eval.Error;
 
 fn holeError(env: Env, loc: ?Loc, ty: TypeId) SemaError {
     const ty_text = try ty.writeAlloc(env.ally, env.tw);
@@ -102,7 +99,7 @@ fn analyzeAs(
 
     // compile type
     const tyty = try env.identify(Type{ .ty = {} });
-    const type_val = try evalTyped(env, scope, type_expr, tyty);
+    const type_val = try eval.evalTyped(env, scope, type_expr, tyty);
     defer type_val.deinit(env.ally);
 
     const anno = type_val.data.ty;
@@ -188,8 +185,8 @@ fn analyzeArray(
         texprs[i] = try analyzeExpr(env, scope, elem, elem_outward);
     }
 
-    // TODO array elements must be retyped again either here or as a verification
-    // step to ensure consistency across the array
+    // TODO array elements must be retyped again either here or as a
+    // verification step to ensure consistency across the array
 
     // create TExpr
     const final_subty = if (texprs.len > 0) texprs[0].ty else elem_outward;
@@ -254,7 +251,7 @@ fn firstDefPass(env: *Env, scope: Name, expr: SExpr) SemaError!DeferredDef {
 
     // eval type expr
     const tyty = try env.identify(Type{ .ty = {} });
-    const type_value = try evalTyped(env, scope, type_expr, tyty);
+    const type_value = try eval.evalTyped(env, scope, type_expr, tyty);
 
     // store first pass info for the def
     const ty = type_value.data.ty;
@@ -328,7 +325,7 @@ fn analyzeNamespace(
 
     // second pass, eval and redefine everything
     for (deferred) |dedef| {
-        const texpr = try evalTyped(env, dedef.name, dedef.body, dedef.ty);
+        const texpr = try eval.evalTyped(env, dedef.name, dedef.body, dedef.ty);
         env.redef(dedef.name, texpr) catch |e| {
             return filterDefError(dedef.body.loc, e);
         };

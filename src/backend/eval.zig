@@ -22,7 +22,8 @@ const Value = @import("value.zig");
 pub const Error =
     std.mem.Allocator.Error
  || context.MessageError
- || context.FluentError;
+ || context.FluentError
+ || Value.ResError;
 
 /// evaluate any dynamic value in the provided scope
 pub fn eval(env: *Env, scope: Name, sexpr: SExpr) Error!TExpr {
@@ -131,7 +132,19 @@ pub fn evalTyped(
         try env.vm.run(value.ptr, prog);
         try env.bc.removeFunc(env.ally, ssa.ref);
 
-        break :final try value.resurrect(env.*, env.vm.stack, ssa.returns);
+        const final = try value.resurrect(env.*, env.vm.stack, ssa.returns);
+
+        // when returning structured data, the vm may return a pointer to the
+        // data I actually wanted
+        const out_ty = env.tw.get(final.ty);
+        return if (out_ty.* == .ptr) deref: {
+            std.debug.assert(out_ty.ptr.to.eql(texpr.ty));
+
+            const child = final.data.ptr.*;
+            env.ally.destroy(final.data.ptr);
+
+            break :deref child;
+        } else final;
     };
 
     // render final value

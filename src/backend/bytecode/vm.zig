@@ -253,12 +253,8 @@ pub fn run(vm: *Self, ret: []u8, program: Program) RuntimeError!void {
     try vm.execute(program);
 
     // copy return value
-    const out: u64 = vm.scratch[RESERVED];
-    const data =
-        if (ret.len > 8)
-            @intToPtr([*]const u8, out)[0..ret.len]
-        else
-            canon.fromCanonical(&out);
+    const data = canon.fromCanonical(&vm.scratch[RESERVED]);
+    std.debug.assert(ret.len >= data.len);
 
     std.mem.set(u8, ret, 0);
     std.mem.copy(u8, ret, data);

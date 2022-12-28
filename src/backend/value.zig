@@ -90,6 +90,8 @@ fn toNumber(
     return .{ .number = .{ .bits = bits, .data = concrete } };
 }
 
+pub const ResError = Allocator.Error || error { Unresurrectable };
+
 /// take a bunch of bits, along with a type, and magically turn them back into
 /// a TExpr.
 ///
@@ -100,7 +102,7 @@ pub fn resurrect(
     env: Env,
     mem: []const u8,
     tid: TypeId
-) Allocator.Error!TExpr {
+) ResError!TExpr {
     const ally = env.ally;
     const ty = env.tw.get(tid);
     const data: TExpr.Data = switch (ty.*) {
@@ -125,16 +127,25 @@ pub fn resurrect(
 
             break :arr TExpr.Data{ .array = children };
         },
-        .ptr => |ptr| {
-            // pointers that come from the bytecode vm are indices into the vm's
-            // stack
+        .ptr => |ptr| ptr: {
+            if (ptr.many or !ptr.mut) {
+                // TODO support resurrecting many pointers and const pointers
+                return error.Unresurrectable;
+            }
+
+            // resurrect data being pointed to
             const size = env.sizeOf(ptr.to);
             const index = canon.toCanonical(self.ptr);
 
-            _ = size;
-            _ = index;
+            const buf = try ally.alignedAlloc(u8, 16, size);
+            defer ally.free(buf);
 
-            @panic("TODO resurrect pointers");
+            std.mem.copy(u8, buf, mem[index..index + size]);
+
+            // resurrect self from the child data
+            const val = Self{ .ptr = buf };
+            const child = try val.resurrect(env, mem, ptr.to);
+            break :ptr TExpr.Data{ .ptr = try util.placeOn(ally, child) };
         },
         else => {
             const text = tid.writeAlloc(ally, env.tw) catch {
