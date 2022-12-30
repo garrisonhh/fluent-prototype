@@ -152,9 +152,7 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     const bin_i64 = try fnType(&env, &.{@"i64", @"i64"}, @"i64");
     const un_ty = try fnType(&env, &.{@"type"}, @"type");
 
-    const type_slice_ty = try env.identify(Type{
-        .ptr = .{ .mut = false, .kind = .slice, .to = @"type" }
-    });
+    const type_slice_ty = try env.identify(Type.initPtr(.slice, @"type"));
     const fn_ty = try fnType(&env, &.{type_slice_ty, @"type"}, @"type");
 
     try defBuiltin(&env, "ns", flbuiltin, .ns);

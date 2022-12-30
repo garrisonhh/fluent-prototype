@@ -206,15 +206,10 @@ pub fn execute(
                     .bnot => ~arg,
                     .slice_ty => slice: {
                         const el_ty = TypeId{ .index = arg };
-                        const ty = try tw.identify(ally, Type{
-                            .ptr = Type.Pointer{
-                                .mut = false,
-                                .kind = .slice,
-                                .to = el_ty,
-                            }
-                        });
+                        const ty = Type.initPtr(.slice, el_ty);
+                        const tid = try tw.identify(ally, ty);
 
-                        break :slice ty.index;
+                        break :slice tid.index;
                     },
                     else => unreachable
                 };

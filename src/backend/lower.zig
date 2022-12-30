@@ -148,13 +148,7 @@ fn lowerArray(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
     }
 
     // alloca array
-    const arr_ptr_ty = try env.identify(Type{
-        .ptr = Type.Pointer{
-            .mut = true,
-            .kind = .single,
-            .to = expr.ty,
-        }
-    });
+    const arr_ptr_ty = try env.identify(Type.initPtr(.single, expr.ty));
     const arr_ptr = try func.addLocal(ally, arr_ptr_ty);
 
     try func.addOp(ally, block.*, Op{
@@ -169,13 +163,7 @@ fn lowerArray(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
 
     // get ptr to first element
     const el_ty = env.tw.get(expr.ty).array.of;
-    const el_ptr_ty = try env.identify(Type{
-        .ptr = Type.Pointer{
-            .mut = true,
-            .kind = .single,
-            .to = el_ty,
-        }
-    });
+    const el_ptr_ty = try env.identify(Type.initPtr(.single, el_ty));
 
     var cur_ptr = try func.addLocal(ally, el_ptr_ty);
     try func.addOp(ally, block.*, Op{

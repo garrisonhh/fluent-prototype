@@ -176,7 +176,6 @@ pub const Type = union(enum) {
         // pointers, but are actually a `struct { ptr: [*]to, len: usize  } `
         pub const Kind = enum { single, many, slice };
 
-        mut: bool,
         kind: Kind,
         to: TypeId,
     };
@@ -231,6 +230,10 @@ pub const Type = union(enum) {
         return Type{ .set = set };
     }
 
+    pub fn initPtr(kind: Pointer.Kind, to: TypeId) Self {
+        return Self{ .ptr = .{ .kind = kind, .to = to } };
+    }
+
     pub fn deinit(self: *Self, ally: Allocator) void {
         switch (self.*) {
             .unit, .hole, .namespace, .builtin, .symbol, .any, .ty, .number,
@@ -254,6 +257,8 @@ pub const Type = union(enum) {
                 // a way to hash this in constant space. for now I'm just
                 // throwing my hands up and allowing .eql() to handle the work
                 // of figuring out if two sets match.
+                // NOTE after some thought I think the easiest solution is just
+                // using an ordered set
             },
             .atom => |sym| wyhash.update(asBytes(&sym.hash)),
             .number => |num| {
@@ -265,7 +270,6 @@ pub const Type = union(enum) {
                 wyhash.update(asBytes(&arr.of));
             },
             .ptr => |ptr| {
-                wyhash.update(asBytes(&ptr.mut));
                 wyhash.update(asBytes(&ptr.kind));
                 wyhash.update(asBytes(&ptr.to));
             },
@@ -313,9 +317,7 @@ pub const Type = union(enum) {
                 num.layout == ty.number.layout and num.bits == ty.number.bits,
             .array => |arr|
                 arr.size == ty.array.size and arr.of.eql(ty.array.of),
-            .ptr => |ptr|
-                ptr.mut == ty.ptr.mut and ptr.kind == ty.ptr.kind
-                and ptr.to.eql(ty.ptr.to),
+            .ptr => |ptr| ptr.kind == ty.ptr.kind and ptr.to.eql(ty.ptr.to),
             .tuple => |tup| idsEql(tup, ty.tuple),
             .func => |func|
                 idsEql(func.takes, ty.func.takes)
@@ -385,15 +387,7 @@ pub const Type = union(enum) {
             },
             .array => |arr|
                 arr.size == self.array.size and arr.of.eql(self.array.of),
-            .ptr => |ptr| ptr: {
-                // if target is mut, must be mut
-                if (ptr.mut and !self.ptr.mut) {
-                    break :ptr false;
-                }
-
-                break :ptr ptr.kind == self.ptr.kind
-                       and ptr.to.eql(self.ptr.to);
-            },
+            .ptr => |ptr| ptr.kind == self.ptr.kind and ptr.to.eql(self.ptr.to),
             .func => func: {
                 // TODO I want functions to be able to coerce to functions with
                 // wider effect sets I think?
@@ -571,7 +565,6 @@ pub const Type = union(enum) {
             },
             .ptr => |ptr| {
                 try writer.writeByte('(');
-                if (ptr.mut) try writer.writeAll("Mut");
                 switch (ptr.kind) {
                     .single => try writer.writeAll("Ptr"),
                     .many => try writer.writeAll("ManyPtr"),
