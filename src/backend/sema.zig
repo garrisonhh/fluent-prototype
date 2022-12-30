@@ -109,6 +109,39 @@ fn analyzeAs(
     return try unifyTExpr(env, texpr, outward);
 }
 
+fn analyzeAddrOf(
+    env: *Env,
+    scope: Name,
+    expr: SExpr,
+    outward: TypeId
+) SemaError!TExpr {
+    const exprs = expr.data.call;
+
+    if (exprs.len != 2) {
+        const text = "`&` expression expects a single argument";
+        _ = try context.post(.err, expr.loc, text, .{});
+        return error.FluentError;
+    }
+
+    // analyze subexpr with any expectations I can pass through
+    const outer = env.tw.get(outward);
+    const expect =
+        if (outer.* == .ptr and outer.ptr.kind == .single)
+            outer.ptr.to
+        else
+            try env.identify(Type{ .any = {} });
+
+    const subexpr = try analyzeExpr(env, scope, exprs[1], expect);
+
+    // generate this texpr
+    const ptr_ty = try env.identify(Type.initPtr(.single, subexpr.ty));
+
+    const texpr = TExpr.init(expr.loc, ptr_ty, TExpr.Data{
+        .ptr = try util.placeOn(env.ally, subexpr)
+    });
+    return try unifyTExpr(env, texpr, outward);
+}
+
 fn analyzeDo(
     env: *Env,
     scope: Name,
@@ -355,6 +388,7 @@ fn analyzeBuiltin(
     return switch (b) {
         .pie_stone => unreachable,
         .cast => try analyzeAs(env, scope, expr, outward),
+        .addr_of => try analyzeAddrOf(env, scope, expr, outward),
         .def => def: {
             const text = "`def` declarations can only exist inside of a "
                       ++ "namespace.";

@@ -370,7 +370,7 @@ pub const Type = union(enum) {
             .any, .set, .hole => unreachable,
             .unit, .@"bool", .symbol, .ty, .namespace, .builtin => true,
             .atom => |sym| sym.eql(target.atom),
-            .tuple => self.eql(target),
+            .tuple, .array, .func => self.eql(target),
             .number => |num| num: {
                 // layout must match
                 if (num.layout != target.number.layout) {
@@ -385,13 +385,16 @@ pub const Type = union(enum) {
                 // must not lose bits in coercion
                 break :num num.bits.? <= target.number.bits.?;
             },
-            .array => |arr|
-                arr.size == self.array.size and arr.of.eql(self.array.of),
-            .ptr => |ptr| ptr.kind == self.ptr.kind and ptr.to.eql(self.ptr.to),
-            .func => func: {
-                // TODO I want functions to be able to coerce to functions with
-                // wider effect sets I think?
-                break :func self.eql(target);
+            .ptr => |ptr| ptr: {
+                // `*[_]T` should coerce to `[]T`
+                if (ptr.kind == .slice and self.ptr.kind == .single) {
+                    const to = tw.get(self.ptr.to);
+                    if (to.* == .array) {
+                        break :ptr to.array.of.eql(ptr.to);
+                    }
+                }
+
+                break :ptr self.eql(target);
             },
         };
     }
