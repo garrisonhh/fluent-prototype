@@ -195,7 +195,9 @@ pub fn execute(
                 const data = canon.fromCanonical(&value);
                 // write
                 const addr = self.get(dst);
-                std.mem.copy(u8, self.stack[addr..addr + nbytes], data);
+                const slice = self.stack[addr..addr + nbytes];
+                std.mem.set(u8, slice, 0);
+                std.mem.copy(u8, slice, data);
             },
             inline .lnot, .bnot, .slice_ty => |v| {
                 const arg = self.get(Register.of(args[0]));

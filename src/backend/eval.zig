@@ -118,8 +118,8 @@ pub fn evalTyped(
 
         // when returning structured data, the vm may return a pointer to the
         // data I actually wanted
-        const out_ty = env.tw.get(final.ty);
-        return if (out_ty.* == .ptr) deref: {
+        return if (!final.ty.eql(texpr.ty)) deref: {
+            const out_ty = env.tw.get(final.ty);
             std.debug.assert(out_ty.ptr.to.eql(texpr.ty));
 
             const child = final.data.ptr.*;

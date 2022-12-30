@@ -131,25 +131,38 @@ pub fn resurrect(
 
             break :arr TExpr.Data{ .array = children };
         },
-        .ptr => |ptr| ptr: {
-            if (ptr.kind != .single) {
-                // TODO support resurrecting other kinds of pointers
-                return error.Unresurrectable;
-            }
+        .ptr => |ptr| switch (ptr.kind) {
+            .many => return error.Unresurrectable,
+            .single => ptr: {
+                // resurrect data being pointed to
+                const size = env.sizeOf(ptr.to);
+                const index = canon.toCanonical(self.ptr);
 
-            // resurrect data being pointed to
-            const size = env.sizeOf(ptr.to);
-            const index = canon.toCanonical(self.ptr);
+                const buf = try ally.alignedAlloc(u8, 16, size);
+                defer ally.free(buf);
 
-            const buf = try ally.alignedAlloc(u8, 16, size);
-            defer ally.free(buf);
+                std.mem.copy(u8, buf, mem[index..index + size]);
 
-            std.mem.copy(u8, buf, mem[index..index + size]);
+                // resurrect self from the child data
+                const val = Self{ .ptr = buf };
+                const child = try val.resurrect(env, mem, ptr.to);
+                break :ptr TExpr.Data{ .ptr = try util.placeOn(ally, child) };
+            },
+            .slice => {
+                // get struct data
+                const struct_index = canon.toCanonical(self.ptr);
+                const struct_data = mem[struct_index..struct_index + 16];
 
-            // resurrect self from the child data
-            const val = Self{ .ptr = buf };
-            const child = try val.resurrect(env, mem, ptr.to);
-            break :ptr TExpr.Data{ .ptr = try util.placeOn(ally, child) };
+                // get ptr + len
+                const index = canon.toCanonical(struct_data[0..8]);
+                const len = canon.toCanonical(struct_data[8..16]);
+
+                // TODO the rest of the fucking owl
+                _ = index;
+                _ = len;
+
+                @panic("TODO resurrect the rest of slices");
+            },
         },
         else => {
             const text = tid.writeAlloc(ally, env.tw) catch {

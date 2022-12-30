@@ -503,6 +503,14 @@ fn unifyTExpr(env: *Env, texpr: TExpr, outward: TypeId) SemaError!TExpr {
     if (is_unified) return texpr;
 
     // types aren't unified, check whether an implicit cast is allowed
+    // TODO this is quickly revealing itself to be a source of complexity that
+    // gets shunted down to the lowering and compiling stages. basically this
+    // code inserts `cast` operations whenever type coercion is allowed. this
+    // works well in many cases, but sema should handle the responsibility of
+    // adapting to type information, and I should get rid of the idea of a
+    // generic `cast` operation in the lower-level ends of the fluent compiler
+    // and replace it with more accurate ideas like `bitcast` `sign-extend`
+    // `truncate` etc.
     if (try inner.coercesTo(env.ally, &env.tw, outer.*)) {
         // cast is possible
         const builtin_ty = try env.identify(Type{ .builtin = {} });
@@ -532,7 +540,7 @@ fn analyzeExpr(
                 .ty = switch (expr.data) {
                     .@"bool" => try env.identify(Type{ .@"bool" = {} }),
                     .number => |num| try typeOfNumber(env, num),
-                    // string literals are (List u8)
+                    // string literals are (Array N u8)
                     .string => |str| try env.identify(Type{
                         .array = Type.Array{
                             .size = str.str.len,

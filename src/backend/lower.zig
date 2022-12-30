@@ -203,6 +203,24 @@ fn lowerArray(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
     return arr_ptr;
 }
 
+/// lowers the operation of taking the stack address of a subexpr
+fn lowerAddrOf(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
+    // lower subexpr
+    const subexpr = expr.data.ptr.*;
+    const sub = try lowerExpr(env, func, block, subexpr);
+
+    // with structured data, lowering automatically places the data on the stack
+    const lty = env.tw.get(func.getLocal(sub));
+    if (lty.* == .ptr and lty.ptr.kind == .single
+    and lty.ptr.to.eql(subexpr.ty)) {
+        // super trivial!
+        return sub;
+    }
+
+    @panic("TODO lowering taking the address of something not automatically "
+        ++ "stack allocated");
+}
+
 /// functions get lowered as their own Func and then stored in the env. for
 /// the current block, their FuncRef can then get lowered in.
 fn lowerFn(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
@@ -266,6 +284,7 @@ fn lowerExpr(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
             const tyty = try env.identify(Type{ .ty = {} });
             break :ty lowerCanonical(env.ally, func, block.*, tyty, ty.index);
         },
+        .ptr => try lowerAddrOf(env, func, block, expr),
         else => {
             const tag = @tagName(expr.data);
             std.debug.panic("TODO lower {s} exprs\n", .{tag});

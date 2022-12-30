@@ -228,6 +228,7 @@ const RegisterMap = struct {
     // TODO will at some point need to handle the case where there are more than
     // 256 locals
     unused: u8,
+    temporaries: u8,
     map: []?Register,
 
     fn init(
@@ -238,6 +239,7 @@ const RegisterMap = struct {
         var self = Self{
             // r0 is used for large return parameters (see callconv)
             .unused = Vm.RESERVED + 1,
+            .temporaries = 0,
             .map = try ally.alloc(?Register, num_locals),
         };
 
@@ -260,6 +262,9 @@ const RegisterMap = struct {
     fn find(self: *Self, local: ssa.Local) Register {
         if (self.map[local.index]) |reg| return reg;
 
+        // invalidate temporaries
+        self.temporaries = 0;
+
         // alloc register
         const next = Register.of(self.unused);
         self.map[local.index] = next;
@@ -270,8 +275,10 @@ const RegisterMap = struct {
 
     /// retrieves an unused register for temporary usage. this register may be
     /// invalidated at the next `find` call.
-    fn temporary(self: Self, index: u8) Register {
-        return Register.of(self.unused + index);
+    fn temporary(self: *Self) Register {
+        const reg = Register.of(self.unused + self.temporaries);
+        self.temporaries += 1;
+        return reg;
     }
 };
 
@@ -316,6 +323,49 @@ fn compileLoadConst(env: *Env, reg: Register, value: Value) Error!void {
     }
 }
 
+/// load a u64 const
+fn compileU64(env: *Env, n: u64, dst: Register) Error!void {
+    var buf: [8]u8 align(16) = undefined;
+    const data = canon.fromCanonical(&n);
+    std.mem.copy(u8, &buf, data);
+
+    const value = Value{ .ptr = buf[0..data.len] };
+    try compileLoadConst(env, dst, value);
+}
+
+fn compileAlloca(env: *Env, size: Register, dst: Register) Error!void {
+    try env.bc.addInst(env.ally, Inst.of(.mov, Vm.SP.n, dst.n, 0));
+    try env.bc.addInst(env.ally, Inst.of(.iadd, Vm.SP.n, size.n, Vm.SP.n));
+}
+
+/// slices are a `struct { ptr: *T, len: usize }` which is stored in memory and
+/// manipulated through a pointer to the struct
+fn compileSliceOf(
+    env: *Env,
+    regmap: *RegisterMap,
+    ptr: Register,
+    len: Register,
+    dst: Register
+) Error!void {
+    const ally = env.ally;
+    const bc = &env.bc;
+
+    // need 16 (struct size) and 8 (offset of length field) to be compiled
+    const struct_size = regmap.temporary();
+    const len_offset = regmap.temporary();
+    const len_ptr = regmap.temporary();
+    try compileU64(env, 16, struct_size);
+    try compileU64(env, 8, len_offset);
+
+    // alloc struct
+    try compileAlloca(env, struct_size, dst);
+
+    // store len + ptr fields
+    try bc.addInst(ally, Inst.of(.store, 8, ptr.n, dst.n));
+    try bc.addInst(ally, Inst.of(.iadd, dst.n, len_offset.n, len_ptr.n));
+    try bc.addInst(ally, Inst.of(.store, 8, len.n, len_ptr.n));
+}
+
 fn todoCompileOp(op: ssa.Op) noreturn {
     std.debug.panic("TODO compile op {s}", .{@tagName(op)});
 }
@@ -323,7 +373,7 @@ fn todoCompileOp(op: ssa.Op) noreturn {
 fn compileOp(
     env: *Env,
     func: ssa.Func,
-    registers: *RegisterMap,
+    regmap: *RegisterMap,
     op: ssa.Op,
 ) Error!void {
     const ally = env.ally;
@@ -331,11 +381,11 @@ fn compileOp(
 
     switch (op.classify()) {
         .ldc => |ldc| {
-            const reg = registers.find(ldc.to);
+            const reg = regmap.find(ldc.to);
             try compileLoadConst(env, reg, func.getConst(ldc.a));
         },
         .branch => |br| {
-            const cond = registers.find(br.cond);
+            const cond = regmap.find(br.cond);
             try bc.addInst(ally, Inst.of(.jump_if, cond.n, 0, 0));
             try bc.addBranch(ally, SsaPos.of(func.ref, br.a));
             try bc.addInst(ally, Inst.of(.jump, 0, 0, 0));
@@ -349,24 +399,18 @@ fn compileOp(
             // 1. store sp in output
             // 2. load size constant
             // 3. add size to sp
-            const reg = registers.find(all.to);
+            const dst = regmap.find(all.to);
+            const size = regmap.temporary();
 
-            const size = @intCast(u64, all.size);
-            var buf: [8]u8 align(16) = undefined;
-            std.mem.copy(u8, &buf, canon.fromCanonical(&size));
-            const size_val = Value{ .ptr = &buf };
-            const size_reg = registers.temporary(0);
-
-            try bc.addInst(ally, Inst.of(.mov, Vm.SP.n, reg.n, 0));
-            try compileLoadConst(env, size_reg, size_val);
-            try bc.addInst(ally, Inst.of(.iadd, Vm.SP.n, size_reg.n, Vm.SP.n));
+            try compileU64(env, all.size, size);
+            try compileAlloca(env, size, dst);
         },
         .unary => |un| switch (op) {
             .load => {
                 const dst_ty = func.getLocal(un.a);
                 const dst_size = @intCast(u8, env.sizeOf(dst_ty));
-                const arg = registers.find(un.a);
-                const to = registers.find(un.to);
+                const arg = regmap.find(un.a);
+                const to = regmap.find(un.to);
                 try bc.addInst(ally, Inst.of(.load, dst_size, arg.n, to.n));
             },
             .not => {
@@ -380,23 +424,40 @@ fn compileOp(
                     else => unreachable
                 };
 
-                const arg = registers.find(un.a);
-                const to = registers.find(un.to);
+                const arg = regmap.find(un.a);
+                const to = regmap.find(un.to);
                 try bc.addInst(ally, Inst.of(opcode, arg.n, to.n, 0));
             },
+            // TODO use different ops for bitcast and other casts
             .cast => {
                 const dst = env.tw.get(func.getLocal(un.to));
+                const src = env.tw.get(func.getLocal(un.a));
 
-                const arg = registers.find(un.a);
-                const to = registers.find(un.to);
+                const arg = regmap.find(un.a);
+                const to = regmap.find(un.to);
 
                 switch (dst.*) {
-                    // bool and ptr can bitcast
-                    .@"bool", .ptr => {
+                    // bitcastable
+                    .@"bool" => {
+                        try bc.addInst(ally, Inst.of(.mov, arg.n, to.n, 0));
+                    },
+                    .ptr => |ptr| if (ptr.kind == .slice) {
+                        if (src.* == .ptr and src.ptr.kind == .single) {
+                            // cast `*[_]T` to `[]T`
+                            const arr_ty = env.tw.get(src.ptr.to);
+                            std.debug.assert(arr_ty.* == .array);
+
+                            const len_reg = regmap.temporary();
+                            try compileU64(env, arr_ty.array.size, len_reg);
+                            try compileSliceOf(env, regmap, arg, len_reg, to);
+                        } else {
+                            @panic("TODO");
+                        }
+                    } else {
+                        // single + many pointers can be bitcast
                         try bc.addInst(ally, Inst.of(.mov, arg.n, to.n, 0));
                     },
                     // numbers require more complex casting rules
-                    // TODO use different ops for bitcast and other casts
                     .number => |num| switch (num.layout) {
                         .uint => {
                             try bc.addInst(ally, Inst.of(.mov, arg.n, to.n, 0));
@@ -407,8 +468,8 @@ fn compileOp(
                 }
             },
             .slice_ty => {
-                const arg = registers.find(un.a);
-                const to = registers.find(un.to);
+                const arg = regmap.find(un.a);
+                const to = regmap.find(un.to);
                 try bc.addInst(ally, Inst.of(.slice_ty, arg.n, to.n, 0));
             },
             else => todoCompileOp(op)
@@ -445,14 +506,14 @@ fn compileOp(
                 else => todoCompileOp(op)
             };
 
-            const lhs = registers.find(bin.a);
-            const rhs = registers.find(bin.b);
-            const to = registers.find(bin.to);
+            const lhs = regmap.find(bin.a);
+            const rhs = regmap.find(bin.b);
+            const to = regmap.find(bin.to);
             try bc.addInst(ally, Inst.of(opcode, lhs.n, rhs.n, to.n));
         },
         .un_eff => |ue| switch (op) {
             .ret => {
-                const value = registers.find(ue.a);
+                const value = regmap.find(ue.a);
                 try bc.addInst(ally, Inst.of(.mov, value.n, Vm.RETURN.n, 0));
                 try bc.addInst(ally, Inst.of(.ret, 0, 0, 0));
             },
@@ -466,8 +527,8 @@ fn compileOp(
                     else => @panic("TODO store other sizes")
                 };
 
-                const src = registers.find(be.a);
-                const dst = registers.find(be.b);
+                const src = regmap.find(be.a);
+                const dst = regmap.find(be.b);
                 try bc.addInst(ally, Inst.of(.store, bytes, src.n, dst.n));
             },
             else => @panic("TODO")

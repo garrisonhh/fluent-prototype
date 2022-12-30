@@ -545,8 +545,7 @@ pub const Type = union(enum) {
                 // sort subtypes
                 const Closure = struct {
                     /// just makes std.sort.sort happy
-                    fn lessThan(ctx: void, a: []const u8, b: []const u8) bool {
-                        _ = ctx;
+                    fn lessThan(_: void, a: []const u8, b: []const u8) bool {
                         return std.ascii.lessThanIgnoreCase(a, b);
                     }
                 };
@@ -591,7 +590,7 @@ pub const Type = union(enum) {
                 try writer.writeByte(')');
             },
             .func => |func| {
-                try writer.writeAll("(Fn ");
+                try writer.writeAll("(Fn &");
                 try writeList(func.takes, ally, tw, writer);
                 try writer.writeByte(' ');
                 try func.returns.write(ally, tw, writer);
