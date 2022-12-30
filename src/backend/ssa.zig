@@ -111,6 +111,10 @@ pub const Op = union(enum) {
     @"and": Binary,
     not: Unary,
 
+    // types
+    slice_ty: Unary,
+    fn_ty: Binary,
+
     pub const Class = union(enum) {
         // unique logic
         ldc: LoadConst,
@@ -126,23 +130,24 @@ pub const Op = union(enum) {
         un_eff: UnaryEffect,
         bin_eff: BinaryEffect,
         tri_eff: TernaryEffect,
+
+        fn getFieldByType(comptime T: type) []const u8 {
+            const fields = @typeInfo(Class).Union.fields;
+            for (fields) |field| {
+                if (field.field_type == T) {
+                    return field.name;
+                }
+            }
+        }
     };
 
     /// makes switching on ops + writing generalized code significantly easier
     pub fn classify(self: Self) Class {
         return switch (self) {
-            .ldc => |ldc| Class{ .ldc = ldc },
-            .call => |call| Class{ .call = call },
-            .arg => |arg| Class{ .arg = arg },
-            .br => |br| Class{ .branch = br },
-            .jmp => |jmp| Class{ .jump = jmp },
-            .alloca => |all| Class{ .alloca = all },
-            .cast, .not, .load => |un| Class{ .unary = un },
-            .add, .sub, .mul, .div, .mod, .@"or", .@"and"
-                => |bin| Class{ .binary = bin },
-            .ret => |un_eff| Class{ .un_eff = un_eff },
-            .store => |bin_eff| Class{ .bin_eff = bin_eff },
-            .store_elem => |tri_eff| Class{ .tri_eff = tri_eff },
+            inline else => |data| class: {
+                const fieldname = comptime Class.getFieldByType(@TypeOf(data));
+                break :class @unionInit(Class, fieldname, data);
+            }
         };
     }
 };

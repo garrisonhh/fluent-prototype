@@ -18,6 +18,7 @@ const lower = @import("lower.zig").lower;
 const compile = @import("compile.zig").compile;
 const run = @import("bytecode/vm.zig").run;
 const Value = @import("value.zig");
+const canon = @import("canon.zig");
 
 pub const Error =
     std.mem.Allocator.Error
@@ -112,14 +113,8 @@ pub fn evalTyped(
         }
 
         // run compiled bytecode
-        const ret_size = env.sizeOf(ssa.returns);
-        const value = try Value.initEmpty(env.ally, ret_size);
-        defer value.deinit(env.ally);
-
-        try env.vm.run(value.ptr, prog);
+        const final = try env.run(prog, ssa.returns);
         try env.bc.removeFunc(env.ally, ssa.ref);
-
-        const final = try value.resurrect(env.*, env.vm.stack, ssa.returns);
 
         // when returning structured data, the vm may return a pointer to the
         // data I actually wanted

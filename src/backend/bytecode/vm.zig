@@ -4,6 +4,10 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Program = @import("bytecode.zig").Program;
+const types = @import("../types.zig");
+const TypeWelt = types.TypeWelt;
+const TypeId = types.TypeId;
+const Type = types.Type;
 const canon = @import("../canon.zig");
 
 const Self = @This();
@@ -81,9 +85,14 @@ fn now() f64 {
     return @intToFloat(f64, std.time.nanoTimestamp()) * 1e-6;
 }
 
-const RuntimeError = Allocator.Error;
+pub const RuntimeError = Allocator.Error;
 
-fn execute(self: *Self, program: Program) RuntimeError!void {
+pub fn execute(
+    self: *Self,
+    ally: Allocator,
+    tw: *TypeWelt,
+    program: Program
+) RuntimeError!void {
     const start = now();
 
     const insts = program.program;
@@ -188,13 +197,25 @@ fn execute(self: *Self, program: Program) RuntimeError!void {
                 const addr = self.get(dst);
                 std.mem.copy(u8, self.stack[addr..addr + nbytes], data);
             },
-            inline .lnot, .bnot => |v| {
+            inline .lnot, .bnot, .slice_ty => |v| {
                 const arg = self.get(Register.of(args[0]));
                 const to = Register.of(args[1]);
 
-                const value: u64 = comptime switch (v) {
+                const value: u64 = switch (v) {
                     .lnot => @boolToInt(arg == 0),
                     .bnot => ~arg,
+                    .slice_ty => slice: {
+                        const el_ty = TypeId{ .index = arg };
+                        const ty = try tw.identify(ally, Type{
+                            .ptr = Type.Pointer{
+                                .mut = false,
+                                .kind = .slice,
+                                .to = el_ty,
+                            }
+                        });
+
+                        break :slice ty.index;
+                    },
                     else => unreachable
                 };
 
@@ -244,18 +265,4 @@ fn execute(self: *Self, program: Program) RuntimeError!void {
     const stdout = std.io.getStdOut().writer();
     const t = now() - start;
     stdout.print("vm.run took {d:.6}ms\n", .{t}) catch {};
-}
-
-/// expects ret_buf to have a size equivalent to the program's return size.
-/// this can be determined by calling Env.sizeOf on the ssa func's return type
-pub fn run(vm: *Self, ret: []u8, program: Program) RuntimeError!void {
-    // run program
-    try vm.execute(program);
-
-    // copy return value
-    const data = canon.fromCanonical(&vm.scratch[RESERVED]);
-    std.debug.assert(ret.len >= data.len);
-
-    std.mem.set(u8, ret, 0);
-    std.mem.copy(u8, ret, data);
 }

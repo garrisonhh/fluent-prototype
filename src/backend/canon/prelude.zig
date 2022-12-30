@@ -100,7 +100,6 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     const flbuiltin = try defType(&env, "builtin", Type{ .builtin = {} });
 
     _ = any;
-    _ = @"type";
     _ = unit;
     _ = namespace;
 
@@ -151,10 +150,15 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     const bin_cond = try fnType(&env, &.{@"bool", @"bool"}, @"bool");
     const un_cond = try fnType(&env, &.{@"bool"}, @"bool");
     const bin_i64 = try fnType(&env, &.{@"i64", @"i64"}, @"i64");
+    const un_ty = try fnType(&env, &.{@"type"}, @"type");
+
+    const type_slice_ty = try env.identify(Type{
+        .ptr = .{ .mut = false, .kind = .slice, .to = @"type" }
+    });
+    const fn_ty = try fnType(&env, &.{type_slice_ty, @"type"}, @"type");
 
     try defBuiltin(&env, "ns", flbuiltin, .ns);
     try defBuiltin(&env, "def", flbuiltin, .def);
-    try defBuiltin(&env, "array", flbuiltin, .array);
 
     try defBuiltin(&env, "+", bin_i64, .add);
     try defBuiltin(&env, "-", bin_i64, .sub);
@@ -165,6 +169,9 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     try defBuiltin(&env, "and", bin_cond, .@"and");
     try defBuiltin(&env, "or", bin_cond, .@"or");
     try defBuiltin(&env, "not", un_cond, .not);
+
+    try defBuiltin(&env, "Slice", un_ty, .slice_ty);
+    try defBuiltin(&env, "Fn", fn_ty, .fn_ty);
 
     return env;
 }

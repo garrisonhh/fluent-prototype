@@ -13,7 +13,6 @@ pub const Builtin = enum {
     @"if",
 
     // value operators
-    array,
     cast,
 
     add,
@@ -27,5 +26,6 @@ pub const Builtin = enum {
     not,
 
     // type operators
-    fn_type,
+    slice_ty,
+    fn_ty,
 };

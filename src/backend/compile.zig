@@ -386,7 +386,6 @@ fn compileOp(
             },
             .cast => {
                 const dst = env.tw.get(func.getLocal(un.to));
-                // const src = env.tw.get(func.getLocal(un.a));
 
                 const arg = registers.find(un.a);
                 const to = registers.find(un.to);
@@ -406,6 +405,11 @@ fn compileOp(
                     },
                     else => unreachable
                 }
+            },
+            .slice_ty => {
+                const arg = registers.find(un.a);
+                const to = registers.find(un.to);
+                try bc.addInst(ally, Inst.of(.slice_ty, arg.n, to.n, 0));
             },
             else => todoCompileOp(op)
         },
@@ -432,6 +436,11 @@ fn compileOp(
                     .float => switch (op) {
                         else => todoCompileOp(op)
                     },
+                },
+                .ptr => switch (op) {
+                    .add => .iadd,
+                    .sub => .isub,
+                    else => unreachable
                 },
                 else => todoCompileOp(op)
             };

@@ -48,6 +48,9 @@ pub const Opcode = enum(u8) {
     shl,
     shr,
 
+    // type operations
+    slice_ty,
+
     // special
     debug, // debug %src ; prints a register for debugging
 };
@@ -209,7 +212,7 @@ pub const Program = struct {
                         try line.append(try renderReg(ctx, arg));
                     }
                 },
-                .lnot, .bnot => {
+                .lnot, .bnot, .slice_ty => {
                     for (args[0..2]) |arg| {
                         try line.append(try renderReg(ctx, arg));
                     }

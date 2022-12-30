@@ -29,6 +29,9 @@ const TExpr = @import("texpr.zig");
 const SsaProgram = @import("ssa.zig").Program;
 const BcBuilder = @import("compile.zig").Builder;
 const Vm = @import("bytecode/vm.zig");
+const Program = @import("bytecode/bytecode.zig").Program;
+const canon = @import("canon.zig");
+const Value = @import("value.zig");
 
 const Self = @This();
 
@@ -68,6 +71,25 @@ pub fn identify(self: *Self, ty: Type) Allocator.Error!TypeId {
 
 pub fn sizeOf(self: Self, ty: TypeId) usize {
     return self.tw.get(ty).sizeOf(self.tw);
+}
+
+// execution ===================================================================
+
+pub fn run(
+    self: *Self,
+    prog: Program,
+    ty: TypeId
+) (Vm.RuntimeError || Value.ResError)!TExpr {
+    try self.vm.execute(self.ally, &self.tw, prog);
+    const raw_val = self.vm.scratch[Vm.RETURN.n];
+
+    // convert to value
+    var buf: [8]u8 align(16) = undefined;
+    std.mem.set(u8, &buf, 0);
+    std.mem.copy(u8, &buf, canon.fromCanonical(&raw_val));
+
+    const value = Value{ .ptr = &buf };
+    return try value.resurrect(self.*, self.vm.stack, ty);
 }
 
 // accessors ===================================================================

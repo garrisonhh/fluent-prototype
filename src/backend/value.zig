@@ -132,7 +132,7 @@ pub fn resurrect(
             break :arr TExpr.Data{ .array = children };
         },
         .ptr => |ptr| ptr: {
-            if (ptr.many or !ptr.mut) {
+            if (ptr.kind != .single or !ptr.mut) {
                 // TODO support resurrecting many pointers and const pointers
                 return error.Unresurrectable;
             }

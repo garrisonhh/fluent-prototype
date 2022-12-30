@@ -118,7 +118,7 @@ fn lowerOperator(
             break :bin to;
         },
         // unary ops
-        inline .not, .cast => |tag| un: {
+        inline .not, .cast, .slice_ty => |tag| un: {
             // TODO make sure this is checked in sema
             std.debug.assert(args.len == 1);
 
@@ -151,7 +151,7 @@ fn lowerArray(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
     const arr_ptr_ty = try env.identify(Type{
         .ptr = Type.Pointer{
             .mut = true,
-            .many = false,
+            .kind = .single,
             .to = expr.ty,
         }
     });
@@ -172,7 +172,7 @@ fn lowerArray(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
     const el_ptr_ty = try env.identify(Type{
         .ptr = Type.Pointer{
             .mut = true,
-            .many = false,
+            .kind = .single,
             .to = el_ty,
         }
     });
@@ -248,7 +248,8 @@ fn lowerCall(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
     // delegate operators
     if (head.data == .builtin) {
         return switch (head.data.builtin) {
-            .add, .sub, .mul, .div, .mod, .@"and", .@"or", .not, .cast
+            .add, .sub, .mul, .div, .mod, .@"and", .@"or", .not, .cast,
+            .slice_ty
                 => |b| try lowerOperator(env, func, block, b, args, expr.ty),
             .@"fn" => try lowerFn(env, func, block, expr),
             else => |b| {

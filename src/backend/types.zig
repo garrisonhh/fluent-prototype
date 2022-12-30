@@ -171,10 +171,13 @@ pub const Type = union(enum) {
         of: TypeId,
     };
 
-    /// pointers
     pub const Pointer = struct {
+        // generally self explanatory. slices have very similar type rules to
+        // pointers, but are actually a `struct { ptr: [*]to, len: usize  } `
+        pub const Kind = enum { single, many, slice };
+
         mut: bool,
-        many: bool,
+        kind: Kind,
         to: TypeId,
     };
 
@@ -263,7 +266,7 @@ pub const Type = union(enum) {
             },
             .ptr => |ptr| {
                 wyhash.update(asBytes(&ptr.mut));
-                wyhash.update(asBytes(&ptr.many));
+                wyhash.update(asBytes(&ptr.kind));
                 wyhash.update(asBytes(&ptr.to));
             },
             .tuple => |tup| wyhash.update(asBytes(&tup)),
@@ -311,7 +314,7 @@ pub const Type = union(enum) {
             .array => |arr|
                 arr.size == ty.array.size and arr.of.eql(ty.array.of),
             .ptr => |ptr|
-                ptr.mut == ty.ptr.mut and ptr.many == ty.ptr.many
+                ptr.mut == ty.ptr.mut and ptr.kind == ty.ptr.kind
                 and ptr.to.eql(ty.ptr.to),
             .tuple => |tup| idsEql(tup, ty.tuple),
             .func => |func|
@@ -388,7 +391,7 @@ pub const Type = union(enum) {
                     break :ptr false;
                 }
 
-                break :ptr ptr.many == self.ptr.many
+                break :ptr ptr.kind == self.ptr.kind
                        and ptr.to.eql(self.ptr.to);
             },
             .func => func: {
@@ -509,7 +512,7 @@ pub const Type = union(enum) {
     ) WriteError!void {
         try writer.writeByte('[');
         for (list) |ty, i| {
-            if (i > 0) try writer.writeAll(", ");
+            if (i > 0) try writer.writeByte(' ');
             try ty.write(ally, tw, writer);
         }
         try writer.writeByte(']');
@@ -569,8 +572,12 @@ pub const Type = union(enum) {
             .ptr => |ptr| {
                 try writer.writeByte('(');
                 if (ptr.mut) try writer.writeAll("Mut");
-                if (ptr.many) try writer.writeAll("Many");
-                try writer.writeAll("Ptr ");
+                switch (ptr.kind) {
+                    .single => try writer.writeAll("Ptr"),
+                    .many => try writer.writeAll("ManyPtr"),
+                    .slice => try writer.writeAll("Slice"),
+                }
+                try writer.writeByte(' ');
                 try ptr.to.write(ally, tw, writer);
                 try writer.writeByte(')');
             },
