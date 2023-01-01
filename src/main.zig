@@ -10,6 +10,7 @@ const plumbing = @import("plumbing.zig");
 const backend = @import("backend.zig");
 const Env = backend.Env;
 
+// TODO get rid of this and use the zig linenoise port I contributed to
 const c = @cImport({
     @cInclude("linenoise.h");
 });
@@ -67,7 +68,18 @@ fn replRead(ally: Allocator) !context.FileHandle {
     return context.addExternalSource(filename, buf.items);
 }
 
+/// look for a `.fluentinit` script to run on repl startup
+fn runFluentInit(ally: Allocator, env: *Env) !void {
+    const PATH = ".fluentinit";
+    const dir = std.fs.cwd();
+
+    dir.access(PATH, .{ .mode = .read_only }) catch return;
+    try executeFile(ally, env, PATH);
+}
+
 fn repl(ally: Allocator, env: *Env) !void {
+    try runFluentInit(ally, env);
+
     loop: while (true) {
         const input = try replRead(ally);
 
@@ -165,10 +177,15 @@ fn executeFile(ally: Allocator, env: *Env, path: []const u8) !void {
     };
 
     // time execution
-    const value = plumbing.exec(env, handle, .file) catch |e| {
-        try stdout.print("execution failed: {}\n", .{e});
-        return;
+    const value = plumbing.exec(env, handle, .expr) catch |e| {
+        if (e == error.FluentError) {
+            try context.flushMessages();
+            return;
+        } else {
+            return e;
+        }
     };
+    defer value.deinit(ally);
 
     // render
     var ctx = kz.Context.init(ally);
