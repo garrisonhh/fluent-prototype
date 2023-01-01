@@ -148,7 +148,7 @@ pub fn resurrect(
                 const child = try val.resurrect(env, mem, ptr.to);
                 break :ptr TExpr.Data{ .ptr = try util.placeOn(ally, child) };
             },
-            .slice => {
+            .slice => slice: {
                 // get struct data
                 const struct_index = canon.toCanonical(self.ptr);
                 const struct_data = mem[struct_index..struct_index + 16];
@@ -157,11 +157,23 @@ pub fn resurrect(
                 const index = canon.toCanonical(struct_data[0..8]);
                 const len = canon.toCanonical(struct_data[8..16]);
 
-                // TODO the rest of the fucking owl
-                _ = index;
-                _ = len;
+                // resurrect each subvalue
+                const el_size = env.sizeOf(ptr.to);
+                const slice = try ally.alloc(TExpr, len);
 
-                @panic("TODO resurrect the rest of slices");
+                const buf = try ally.alignedAlloc(u8, 16, el_size);
+                defer ally.free(buf);
+                const el = Self{ .ptr = buf };
+
+                var i: usize = 0;
+                while (i < len) : (i += 1) {
+                    const start = index + i * el_size;
+                    std.mem.copy(u8, buf, mem[start..start + el_size]);
+
+                    slice[i] = try el.resurrect(env, mem, ptr.to);
+                }
+
+                break :slice TExpr.Data{ .slice = slice };
             },
         },
         else => {

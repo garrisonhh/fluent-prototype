@@ -552,7 +552,14 @@ fn analyzeExpr(
                     .call, .array, .symbol => unreachable,
                 },
                 .loc = expr.loc,
-                .data = try TExpr.Data.fromSExprData(env.ally, expr.data),
+                .data = switch (expr.data) {
+                    .@"bool" => |val| TExpr.Data{ .@"bool" = val },
+                    .number => |num| TExpr.Data{ .number = num },
+                    .string => |sym| TExpr.Data{
+                        .string = try sym.clone(env.ally)
+                    },
+                    else => unreachable
+                },
             };
 
             break :lit unifyTExpr(env, texpr, outward);

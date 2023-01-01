@@ -15,7 +15,6 @@ const Loc = context.Loc;
 const types = @import("types.zig");
 const TypeId = types.TypeId;
 const TypeWelt = types.TypeWelt;
-const SExpr = @import("sexpr.zig");
 const canon = @import("canon.zig");
 const Builtin = canon.Builtin;
 
@@ -35,6 +34,7 @@ pub const Data = union(enum) {
     // TODO should I allow anything but single, owned pointers as TExprs?
     ptr: *Self,
     array: []Self,
+    slice: []Self, // TODO should I just resurrect slices as a ptr to an array?
     call: []Self,
 
     // special syntax, often used as the head of a call texpr
@@ -44,20 +44,8 @@ pub const Data = union(enum) {
     // and a SExpr which is only analyzed when used. when a template is
     // monomorphized, it can then be stored back in the env as a fully
     // functional lambda.
+    // TODO get rid of the comment above when I've implemented it
     builtin: Builtin,
-
-    /// for easy literal analysis
-    pub fn fromSExprData(
-        ally: Allocator,
-        data: SExpr.Data
-    ) Allocator.Error!Data {
-        return switch (data) {
-            .@"bool" => |val| Data{ .@"bool" = val },
-            .number => |num| Data{ .number = num },
-            .string => |sym| Data{ .string = try sym.clone(ally) },
-            else => unreachable
-        };
-    }
 
     fn eqlChildren(a: []const Self, b: []const Self) bool {
         if (a.len != b.len) return false;
@@ -126,7 +114,7 @@ pub fn deinit(self: Self, ally: Allocator) void {
             ally.destroy(child);
         },
         .string => |str| ally.free(str.str),
-        .call, .array => |children| {
+        .call, .array, .slice => |children| {
             for (children) |child| child.deinit(ally);
             ally.free(children);
         }
@@ -151,6 +139,7 @@ pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         .string => |sym| Data{ .string = try sym.clone(ally) },
         .call => |children| Data{ .call = try cloneChildren(ally, children) },
         .array => |children| Data{ .array = try cloneChildren(ally, children) },
+        .slice => |children| Data{ .slice = try cloneChildren(ally, children) },
     };
 
     return Self{
@@ -173,7 +162,7 @@ pub fn eql(self: Self, other: Self) bool {
 /// useful for recursive operations on TExprs.
 pub fn getChildren(self: Self) []Self {
     return switch (self.data) {
-        .call, .array => |xs| xs,
+        .call, .array, .slice => |xs| xs,
         .ptr => |ptr| @ptrCast(*[1]Self, ptr),
         else => &.{}
     };
@@ -202,7 +191,7 @@ pub fn isValue(self: Self) bool {
     return switch (self.data) {
         .unit, .ty, .@"bool", .number, .string, .builtin => true,
         .ptr => |child| child.isValue(),
-        .array => |arr| isValueChildren(arr),
+        .array, .slice => |arr| isValueChildren(arr),
         .name, .call => false,
     };
 }
@@ -226,7 +215,7 @@ pub fn render(
 
     // other inline header stuff
     const data = switch (self.data) {
-        .call, .array, .ptr
+        .call, .array, .slice, .ptr
             => try ctx.print(.{}, "{s}", .{@tagName(self.data)}),
         .unit => try ctx.print(.{}, "()", .{}),
         .ty => |ty| ty: {
