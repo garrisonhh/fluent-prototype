@@ -103,7 +103,8 @@ fn lowerOperator(
     // generate operation
     return switch (b) {
         // binary ops
-        inline .add, .sub, .mul, .div, .mod, .@"and", .@"or" => |tag| bin: {
+        inline .add, .sub, .mul, .div, .mod, .@"and", .@"or", .fn_ty
+            => |tag| bin: {
             // TODO make sure this is checked in sema
             std.debug.assert(args.len == 2);
 
@@ -255,7 +256,7 @@ fn lowerCall(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
     if (head.data == .builtin) {
         return switch (head.data.builtin) {
             .add, .sub, .mul, .div, .mod, .@"and", .@"or", .not, .cast,
-            .slice_ty
+            .slice_ty, .fn_ty
                 => |b| try lowerOperator(env, func, block, b, args, expr.ty),
             .@"fn" => try lowerFn(env, func, block, expr),
             else => |b| {

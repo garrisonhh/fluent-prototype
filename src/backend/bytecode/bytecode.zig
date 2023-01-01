@@ -32,7 +32,9 @@ pub const Opcode = enum(u8) {
     store, // store $bytes %src %dst ; write value %src into pointer %dst
 
     // basic operations
-    // take form: op %a %b %dst
+    // take one of two forms:
+    // unary: op %a %dst
+    // binary: op %a %b %dst
     iadd,
     isub,
     imul,
@@ -49,7 +51,8 @@ pub const Opcode = enum(u8) {
     shr,
 
     // type operations
-    slice_ty,
+    fn_ty, // binary
+    slice_ty, // unary
 
     // special
     debug, // debug %src ; prints a register for debugging
@@ -207,7 +210,7 @@ pub const Program = struct {
                     try line.append(try renderReg(ctx, args[2]));
                 },
                 .iadd, .isub, .imul, .idiv, .imod, .lor, .land, .bor, .band,
-                .xor => {
+                .xor, .fn_ty => {
                     for (args) |arg| {
                         try line.append(try renderReg(ctx, arg));
                     }

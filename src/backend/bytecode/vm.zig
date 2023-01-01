@@ -81,6 +81,53 @@ fn pop(self: *Self, bytes: usize, dst: Register) void {
     std.mem.copy(u8, dst_bytes, src);
 }
 
+fn makeFnType(
+    self: *Self,
+    ally: Allocator,
+    tw: *TypeWelt,
+    param_slice: u64,
+    return_id: u64
+) Allocator.Error!TypeId {
+    const sl_ptr_data = self.stack[param_slice..param_slice + 8];
+    const sl_len_data = self.stack[param_slice + 8..param_slice + 16];
+    const sl_ptr = canon.toCanonical(sl_ptr_data);
+    const sl_len = canon.toCanonical(sl_len_data);
+
+
+    // construct fn type data
+    // TODO formalize limit to number of function parameters
+    var param_buf: [256]TypeId = undefined;
+    const params = param_buf[0..sl_len];
+
+    // extract typeid array
+    if (builtin.mode == .Debug) {
+        const tyty = Type{ .ty = {} };
+        std.debug.assert(tyty.sizeOf(tw.*) == 8);
+    }
+
+    var i: usize = 0;
+    while (i < sl_len) : (i += 1) {
+        // extract u64
+        var buf: [8]u8 align(8) = undefined;
+        const addr = sl_ptr + i * 8;
+        std.mem.copy(u8, &buf, self.stack[addr..addr + 8]);
+
+        // bitcast to u64 and coerce to a typeid
+        const tid = @ptrCast(*const u64, &buf).*;
+        params[i] = TypeId{ .index = tid };
+    }
+
+    const returns = TypeId{ .index = return_id };
+
+    // id type
+    return try tw.identify(ally, Type{
+        .func = Type.Func{
+            .takes = params,
+            .returns = returns,
+        }
+    });
+}
+
 fn now() f64 {
     return @intToFloat(f64, std.time.nanoTimestamp()) * 1e-6;
 }
@@ -203,7 +250,7 @@ pub fn execute(
                 const arg = self.get(Register.of(args[0]));
                 const to = Register.of(args[1]);
 
-                const value: u64 = switch (v) {
+                const value: u64 = switch (comptime v) {
                     .lnot => @boolToInt(arg == 0),
                     .bnot => ~arg,
                     .slice_ty => slice: {
@@ -219,12 +266,12 @@ pub fn execute(
                 self.set(to, value);
             },
             inline .iadd, .isub, .imul, .idiv, .imod, .lor, .land, .bor,
-            .band, .xor, .shl, .shr => |v| {
+            .band, .xor, .shl, .shr, .fn_ty => |v| {
                 const lhs = self.get(Register.of(args[0]));
                 const rhs = self.get(Register.of(args[1]));
                 const to = Register.of(args[2]);
 
-                const value: u64 = comptime switch (v) {
+                const value: u64 = switch (comptime v) {
                     .iadd => lhs +% rhs,
                     .isub => lhs -% rhs,
                     .imul => lhs * rhs,
@@ -237,6 +284,7 @@ pub fn execute(
                     .xor => lhs ^ rhs,
                     .shl => lhs << @intCast(u6, rhs),
                     .shr => lhs >> @intCast(u6, rhs),
+                    .fn_ty => (try self.makeFnType(ally, tw, lhs, rhs)).index,
                     else => unreachable
                 };
 

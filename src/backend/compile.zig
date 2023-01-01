@@ -290,13 +290,11 @@ fn compileLoadConst(env: *Env, reg: Register, value: Value) Error!void {
 
     if (value.ptr.len <= 8) {
         // convert value to uint
-        // TODO I should probably do this with a union, this is already a source
-        // of bugs
         const n = canon.toCanonical(value.ptr);
         const bytes = @ptrCast(*const [8]u8, &n);
 
         // minimize stored bytes
-        var to_store: usize = 8;
+        var to_store: usize = value.ptr.len;
         while (to_store > 0 and bytes[to_store - 1] == 0) {
             to_store -= 1;
         }
@@ -501,6 +499,10 @@ fn compileOp(
                 .ptr => switch (op) {
                     .add => .iadd,
                     .sub => .isub,
+                    else => unreachable
+                },
+                .ty => switch (op) {
+                    .fn_ty => .fn_ty,
                     else => unreachable
                 },
                 else => todoCompileOp(op)
