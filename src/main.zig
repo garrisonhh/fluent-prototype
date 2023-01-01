@@ -242,7 +242,7 @@ pub fn main() !void {
     }){};
     defer _ = gpa.deinit();
     const ally = gpa.allocator();
-    // const ally = std.heap.page_allocator;
+    // const ally = std.heap.raw_c_allocator;
 
     try context.init(ally);
     defer context.deinit();

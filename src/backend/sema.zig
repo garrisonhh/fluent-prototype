@@ -516,7 +516,7 @@ fn unifyTExpr(env: *Env, texpr: TExpr, outward: TypeId) SemaError!TExpr {
         const builtin_ty = try env.identify(Type{ .builtin = {} });
         const cast = TExpr.initBuiltin(texpr.loc, builtin_ty, .cast);
         const final = try TExpr.initCall(env.ally, texpr.loc, outward, cast, 1);
-        final.data.call[1] = try texpr.clone(env.ally);
+        final.data.call[1] = texpr;
 
         return final;
     }
