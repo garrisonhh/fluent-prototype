@@ -159,6 +159,7 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     try defBuiltin(&env, "def", flbuiltin, .def);
     try defBuiltin(&env, "as", flbuiltin, .cast);
     try defBuiltin(&env, "&", flbuiltin, .addr_of);
+    try defBuiltin(&env, "fn", flbuiltin, .@"fn");
 
     try defBuiltin(&env, "+", bin_i64, .add);
     try defBuiltin(&env, "-", bin_i64, .sub);

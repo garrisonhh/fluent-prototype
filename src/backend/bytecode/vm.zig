@@ -93,7 +93,6 @@ fn makeFnType(
     const sl_ptr = canon.toCanonical(sl_ptr_data);
     const sl_len = canon.toCanonical(sl_len_data);
 
-
     // construct fn type data
     // TODO formalize limit to number of function parameters
     var param_buf: [256]TypeId = undefined;

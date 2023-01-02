@@ -92,7 +92,7 @@ pub fn run(
     return try value.resurrect(self.*, self.vm.stack, ty);
 }
 
-// accessors ===================================================================
+// name accessors ==============================================================
 
 /// searches up through the namespace for a symbol
 pub fn seek(self: *Self, scope: Name, sym: Symbol, out_name: ?*Name) ?TExpr {

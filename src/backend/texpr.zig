@@ -17,6 +17,8 @@ const TypeId = types.TypeId;
 const TypeWelt = types.TypeWelt;
 const canon = @import("canon.zig");
 const Builtin = canon.Builtin;
+const ssa = @import("ssa.zig");
+const FuncRef = ssa.FuncRef;
 
 const Self = @This();
 
@@ -30,12 +32,13 @@ pub const Data = union(enum) {
     string: Symbol,
     ty: TypeId,
     name: Name,
-
-    // TODO should I allow anything but single, owned pointers as TExprs?
     ptr: *Self,
     array: []Self,
     slice: []Self, // TODO should I just resurrect slices as a ptr to an array?
     call: []Self,
+
+    // func contains the analyzed body of the function
+    func: *Self,
 
     // special syntax, often used as the head of a call texpr
     // TODO I should have a `lambda` builtin and then a `template` builtin which
@@ -109,7 +112,7 @@ pub fn initCall(
 pub fn deinit(self: Self, ally: Allocator) void {
     switch (self.data) {
         .unit, .ty, .@"bool", .number, .name, .builtin => {},
-        .ptr => |child| {
+        .ptr, .func => |child| {
             child.deinit(ally);
             ally.destroy(child);
         },
@@ -135,6 +138,9 @@ pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         .unit, .ty, .@"bool", .number, .name, .builtin => self.data,
         .ptr => |child| Data{
             .ptr = try util.placeOn(ally, try child.clone(ally))
+        },
+        .func => |child| Data{
+            .func = try util.placeOn(ally, try child.clone(ally))
         },
         .string => |sym| Data{ .string = try sym.clone(ally) },
         .call => |children| Data{ .call = try cloneChildren(ally, children) },
@@ -163,7 +169,7 @@ pub fn eql(self: Self, other: Self) bool {
 pub fn getChildren(self: Self) []Self {
     return switch (self.data) {
         .call, .array, .slice => |xs| xs,
-        .ptr => |ptr| @ptrCast(*[1]Self, ptr),
+        .ptr, .func => |child| @ptrCast(*[1]Self, child),
         else => &.{}
     };
 }
@@ -192,7 +198,7 @@ pub fn isValue(self: Self) bool {
         .unit, .ty, .@"bool", .number, .string, .builtin => true,
         .ptr => |child| child.isValue(),
         .array, .slice => |arr| isValueChildren(arr),
-        .name, .call => false,
+        .name, .call, .func => false,
     };
 }
 
@@ -215,7 +221,7 @@ pub fn render(
 
     // other inline header stuff
     const data = switch (self.data) {
-        .call, .array, .slice, .ptr
+        .call, .array, .slice, .ptr, .func
             => try ctx.print(.{}, "{s}", .{@tagName(self.data)}),
         .unit => try ctx.print(.{}, "()", .{}),
         .ty => |ty| ty: {

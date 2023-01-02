@@ -330,7 +330,7 @@ fn analyzeNamespace(
         return filterDefError(name_expr.loc, e);
     };
 
-    // first pass
+    // first pass, collect all decls, eval types, and def pie stones
     const deferred = try ally.alloc(DeferredDef, defs.len);
     defer ally.free(deferred);
 
@@ -397,10 +397,89 @@ fn analyzeBuiltin(
         },
         .do => try analyzeDo(env, scope, expr, outward),
         .ns => try analyzeNamespace(env, scope, expr, outward),
+        .@"fn" => try analyzeFn(env, scope, expr, outward),
         else => {
             std.debug.panic("TODO analyze builtin `{s}`", .{@tagName(b)});
         },
     };
+}
+
+/// `fn` is a lambda expression taking an array of a number of unbound symbols
+/// and a body expression.
+fn analyzeFn(
+    env: *Env,
+    scope: Name,
+    expr: SExpr,
+    outward: TypeId
+) SemaError!TExpr {
+    const outer = env.tw.get(outward);
+    if (outer.* != .func) {
+        @panic("TODO compile lambdas without expectations?");
+    }
+
+    const func = outer.func;
+
+    // check syntax form
+    const exprs = expr.data.call;
+
+    if (exprs.len != 3) {
+        const text = "`fn` requires parameters and a single body expression";
+        _ = try context.post(.err, expr.loc, text, .{});
+        return error.FluentError;
+    }
+
+    const params_expr = exprs[1];
+    if (params_expr.data != .array) {
+        const text = "`fn` parameters expects an array";
+        _ = try context.post(.err, params_expr.loc, text, .{});
+        return error.FluentError;
+    }
+
+    const params = params_expr.data.array;
+    if (params.len != func.takes.len) {
+        _ = try context.post(
+            .err,
+            params_expr.loc,
+            "found {d} parameters, expected {d}",
+            .{params.len, func.takes.len}
+        );
+        return error.FluentError;
+    }
+
+    // define function pie stone
+    const local = env.def(
+        scope,
+        comptime Symbol.init("lambda"),
+        TExpr.init(expr.loc, outward, .{ .builtin = .pie_stone })
+    ) catch |e| return filterDefError(expr.loc, e);
+
+    // declare params
+    for (params) |param, i| {
+        if (param.data != .symbol) {
+            const text = "`fn` parameters should be symbols";
+            _ = try context.post(.err, param.loc, text, .{});
+            return error.FluentError;
+        }
+
+        // define with pie stone to acquire name
+        const sym = param.data.symbol;
+        const ty = func.takes[i];
+        const stone = TExpr.init(param.loc, ty, .{ .builtin = .pie_stone });
+        const name = env.def(local, sym, stone) catch |e| {
+            return filterDefError(param.loc, e);
+        };
+
+        // redefine with name
+        const named = TExpr.init(param.loc, ty, .{ .name = name });
+        env.redef(name, named) catch |e| return filterDefError(param.loc, e);
+    }
+
+    // analyze body
+    const body = try analyzeExpr(env, local, exprs[2], func.returns);
+
+    return TExpr.init(expr.loc, outward, .{
+        .func = try util.placeOn(env.ally, body)
+    });
 }
 
 fn analyzeCall(
@@ -616,6 +695,8 @@ pub fn analyze(
     errdefer texpr.deinit(env.ally);
 
     try postprocess(env.*, &texpr);
+
+    // TODO verify texpr contains no pie stones as a postprocessing step
 
     return texpr;
 }
