@@ -241,8 +241,8 @@ pub fn main() !void {
         .stack_trace_frames = 1000,
     }){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    // const ally = std.heap.raw_c_allocator;
+    // const ally = gpa.allocator();
+    const ally = std.heap.raw_c_allocator;
 
     try context.init(ally);
     defer context.deinit();

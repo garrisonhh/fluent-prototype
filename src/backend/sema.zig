@@ -461,24 +461,25 @@ fn analyzeFn(
             return error.FluentError;
         }
 
-        // define with pie stone to acquire name
+        // define parameter
         const sym = param.data.symbol;
         const ty = func.takes[i];
-        const stone = TExpr.init(param.loc, ty, .{ .builtin = .pie_stone });
-        const name = env.def(local, sym, stone) catch |e| {
+        const pexpr = TExpr.init(param.loc, ty, .{
+            .param = TExpr.Param{ .func = local, .index = i }
+        });
+        _ = env.def(local, sym, pexpr) catch |e| {
             return filterDefError(param.loc, e);
         };
-
-        // redefine with name
-        const named = TExpr.init(param.loc, ty, .{ .name = name });
-        env.redef(name, named) catch |e| return filterDefError(param.loc, e);
     }
 
     // analyze body
     const body = try analyzeExpr(env, local, exprs[2], func.returns);
 
     return TExpr.init(expr.loc, outward, .{
-        .func = try util.placeOn(env.ally, body)
+        .func = TExpr.Func{
+            .name = local,
+            .body = try util.placeOn(env.ally, body),
+        }
     });
 }
 

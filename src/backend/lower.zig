@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const kz = @import("kritzler");
 const builtin = @import("builtin");
 const util = @import("util");
 const Symbol = util.Symbol;
@@ -37,16 +38,6 @@ fn lowerLoadConst(
     return out;
 }
 
-/// this does all of the boilerplate of loading a const u64. this is
-/// boilerplate I otherwise end up rewriting constantly.
-fn lowerU64(env: *Env, func: *Func, block: Label, n: u64) Error!Local {
-    const value = try Value.init(env.ally, canon.fromCanonical(&n));
-    const @"u64" = try env.identify(Type{
-        .number = .{ .bits = 64, .layout = .uint }
-    });
-    return try lowerLoadConst(env.ally, func, block, @"u64", value);
-}
-
 /// wrapper for loadConst which lowers a raw uint as some type
 fn lowerCanonical(
     ally: Allocator,
@@ -57,6 +48,15 @@ fn lowerCanonical(
 ) Error!Local {
     const value = try Value.init(ally, canon.fromCanonical(&n));
     return try lowerLoadConst(ally, func, block, ty, value);
+}
+
+/// this does all of the boilerplate of loading a const u64. this is
+/// boilerplate I otherwise end up rewriting constantly.
+fn lowerU64(env: *Env, func: *Func, block: Label, n: u64) Error!Local {
+    const @"u64" = try env.identify(Type{
+        .number = .{ .bits = 64, .layout = .uint }
+    });
+    return try lowerCanonical(env.ally, func, block, @"u64", n);
 }
 
 fn lowerBool(
@@ -224,61 +224,99 @@ fn lowerAddrOf(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
 
 /// functions get lowered as their own Func and then stored in the env. for
 /// the current block, their FuncRef can then get lowered in.
-fn lowerFn(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
-    _ = env;
-    _ = func;
-    _ = block;
-    _ = expr;
+fn lowerLambda(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
+    // lower function expr
+    const ty = env.tw.get(expr.ty);
+    std.debug.assert(ty.* == .func);
 
-    @panic("TODO lower `fn` expr");
+    const lambda = try lowerFunction(
+        env,
+        expr.data.func.name,
+        ty.func.takes,
+        ty.func.returns,
+        expr.data.func.body.*,
+    );
+
+    // TODO remove vvv
+    {
+        var ctx = kz.Context.init(env.ally);
+        defer ctx.deinit();
+
+        const ref = lambda.render(&ctx, env.*) catch unreachable;
+
+        const stdout = std.io.getStdOut().writer();
+        stdout.writeAll("[lowered lambda]\n") catch {};
+        ctx.write(ref, stdout) catch {};
+    }
+
+    // compile func ref
+    // TODO this is done here to ensure the bytecode ordering is correct, but
+    // that is pretty hacky ngl
+    _ = try env.compileSsa(lambda);
+
+    // load func ref as callable constant
+    const index = lambda.ref.index;
+    return try lowerCanonical(env.ally, func, block.*, expr.ty, index);
 }
 
 fn lowerCall(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
+    const ally = env.ally;
     const exprs = expr.data.call;
     std.debug.assert(exprs.len > 0);
 
-    const head_expr = exprs[0];
-    const args = exprs[1..];
-
-    // head may be a name or a builtin
-    const head = switch (head_expr.data) {
+    // get true head
+    const raw_head = exprs[0];
+    const head = switch (raw_head.data) {
         .name => |name| env.get(name),
-        .builtin => head_expr,
-        else => {
-            std.debug.panic(
-                "TODO lower calls to {s} texprs\n",
-                .{@tagName(head_expr.data)}
-            );
-        }
+        else => raw_head
     };
 
-    // delegate operators
+    const tail = exprs[1..];
+
+    // builtins have their own logic
     if (head.data == .builtin) {
         return switch (head.data.builtin) {
             .add, .sub, .mul, .div, .mod, .@"and", .@"or", .not, .cast,
             .slice_ty, .fn_ty
-                => |b| try lowerOperator(env, func, block, b, args, expr.ty),
-            .@"fn" => try lowerFn(env, func, block, expr),
+                => |b| try lowerOperator(env, func, block, b, tail, expr.ty),
+            .@"fn" => try lowerLambda(env, func, block, expr),
             else => |b| {
                 std.debug.panic("TODO lower builtin {s}", .{@tagName(b)});
             }
         };
     }
 
-    @panic("TODO lower function calls");
+    // lower all children
+    var locals_buf: [256]Local = undefined;
+    const locals = locals_buf[0..exprs.len];
+
+    for (exprs) |child, i| {
+        locals[i] = try lowerExpr(env, func, block, child);
+    }
+
+    // lower args
+    for (locals[1..]) |local, i| {
+        try func.addOp(ally, block.*, Op{
+            .arg = .{ .arg = i, .from = local }
+        });
+    }
+
+    // lower call and return value
+    const returns = env.tw.get(head.ty).func.returns;
+    const dst = try func.addLocal(ally, returns);
+    try func.addOp(ally, block.*, Op{ .call = .{ .a = locals[0], .to = dst } });
+
+    return dst;
 }
 
 fn lowerExpr(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
     return switch (expr.data) {
         .@"bool" => try lowerBool(env.ally, func, block.*, expr),
         .number => try lowerNumber(env.ally, func, block.*, expr),
-        .name => |name| name: {
-            const value = env.get(name);
-            // TODO how will this break?
-            std.debug.assert(value.isValue());
-
-            break :name try lowerExpr(env, func, block, value);
-        },
+        // TODO named values should be cacheable and lowered only once, really.
+        // afaik this will currently place the same named value multiple times
+        // in the code.
+        .name => |name| try lowerExpr(env, func, block, env.get(name)),
         .array => try lowerArray(env, func, block, expr),
         .call => try lowerCall(env, func, block, expr),
         .ty => |ty| ty: {
@@ -286,6 +324,21 @@ fn lowerExpr(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
             break :ty lowerCanonical(env.ally, func, block.*, tyty, ty.index);
         },
         .ptr => try lowerAddrOf(env, func, block, expr),
+        .func => try lowerLambda(env, func, block, expr),
+        .param => |p| param: {
+            // TODO analyze parameter references to ensure no closures are
+            // created
+            std.debug.assert(p.func.eql(func.name));
+            break :param Local.of(p.index);
+        },
+        .builtin => |b| {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "attempted to lower builtin `{s}` through lowerExpr",
+                    .{@tagName(b)}
+                );
+            } else unreachable;
+        },
         else => {
             const tag = @tagName(expr.data);
             std.debug.panic("TODO lower {s} exprs\n", .{tag});
@@ -293,16 +346,30 @@ fn lowerExpr(env: *Env, func: *Func, block: *Label, expr: TExpr) Error!Local {
     };
 }
 
-/// lowers expression as if it is the body of a function with no args
-pub fn lower(env: *Env, scope: Name, expr: TExpr) Error!Func {
-    // lower expr as the body of function with no args
-    var func = try env.prog.addFunc(env.ally, scope, &.{}, expr.ty);
+/// everything in fluent ssa exists in the context of a function, so this is the
+/// dispatcher of the rest of lowering
+fn lowerFunction(
+    env: *Env,
+    name: Name,
+    takes: []const TypeId,
+    returns: TypeId,
+    body: TExpr
+) Error!Func {
+    // create func and entry block
+    var func = try env.prog.addFunc(env.ally, name, takes, returns);
     var block = try func.addBlock(env.ally);
-    const final = try lowerExpr(env, &func, &block, expr);
 
-    // function returns the final value
+    // lowering expr will return the final value
+    const final = try lowerExpr(env, &func, &block, body);
     try func.addOp(env.ally, block, Op{ .ret = .{ .a = final } });
-    func.returns = func.getLocal(final);
+    // func.returns = func.getLocal(final); // TODO what was this for?
+
+    std.debug.assert(func.returns.eql(func.getLocal(final)));
 
     return func;
+}
+
+/// lowers expression as if it is the body of a function with no args
+pub fn lower(env: *Env, scope: Name, expr: TExpr) Error!Func {
+    return try lowerFunction(env, scope, &.{}, expr.ty, expr);
 }

@@ -191,7 +191,7 @@ pub const Program = struct {
                     try line.append(try renderReg(ctx, args[0]));
                     try line.append(try renderImm(ctx, n));
                 },
-                .jump, .call => {
+                .jump => {
                     const n = insts[i + 1].toInt();
                     i += 1;
 
@@ -220,7 +220,7 @@ pub const Program = struct {
                         try line.append(try renderReg(ctx, arg));
                     }
                 },
-                .debug => try line.append(try renderReg(ctx, args[0])),
+                .debug, .call => try line.append(try renderReg(ctx, args[0])),
                 else => std.debug.panic(
                     "cannot render op `{s}` yet\n",
                     .{@tagName(inst.op)}

@@ -94,7 +94,7 @@ pub fn evalTyped(
         }
 
         // compile to bytecode
-        try compile(env, ssa);
+        _ = try compile(env, ssa);
 
         const prog = env.bc.build(ssa);
 

@@ -26,8 +26,12 @@ const TypeWelt = types.TypeWelt;
 const TypeId = types.TypeId;
 const Type = types.Type;
 const TExpr = @import("texpr.zig");
-const SsaProgram = @import("ssa.zig").Program;
-const BcBuilder = @import("compile.zig").Builder;
+const ssa = @import("ssa.zig");
+const SsaProgram = ssa.Program;
+const SsaRef = ssa.FuncRef;
+const compile = @import("compile.zig");
+const BcBuilder = compile.Builder;
+const BcRef = compile.InstRef;
 const Vm = @import("bytecode/vm.zig");
 const Program = @import("bytecode/bytecode.zig").Program;
 const canon = @import("canon.zig");
@@ -47,6 +51,9 @@ nmap: NameMap(TExpr) = .{},
 prog: SsaProgram = .{},
 bc: BcBuilder = .{},
 vm: Vm,
+// mapping ssa to bytecode and back
+compiled: std.AutoHashMapUnmanaged(SsaRef, BcRef) = .{},
+lowered: std.AutoHashMapUnmanaged(BcRef, SsaRef) = .{},
 
 pub fn init(ally: Allocator) Allocator.Error!Self {
     return Self{
@@ -61,6 +68,8 @@ pub fn deinit(self: *Self) void {
     self.prog.deinit(self.ally);
     self.bc.deinit(self.ally);
     self.vm.deinit(self.ally);
+    self.compiled.deinit(self.ally);
+    self.lowered.deinit(self.ally);
 }
 
 // types =======================================================================
@@ -71,6 +80,28 @@ pub fn identify(self: *Self, ty: Type) Allocator.Error!TypeId {
 
 pub fn sizeOf(self: Self, ty: TypeId) usize {
     return self.tw.get(ty).sizeOf(self.tw);
+}
+
+// low-level IRs ===============================================================
+
+/// calls the compile pipeline for an ssa function and then ties them
+pub fn compileSsa(self: *Self, func: ssa.Func) Allocator.Error!BcRef {
+    std.debug.assert(!self.compiled.contains(func.ref));
+
+    const bc = try compile.compile(self, func);
+    try self.tieLLRefs(func.ref, bc);
+
+    return bc;
+}
+
+/// ties the ssa and bytecode IR forms together
+pub fn tieLLRefs(
+    self: *Self,
+    ssa_ref: SsaRef,
+    bc_ref: BcRef
+) Allocator.Error!void {
+    try self.compiled.put(self.ally, ssa_ref, bc_ref);
+    try self.lowered.put(self.ally, bc_ref, ssa_ref);
 }
 
 // execution ===================================================================

@@ -24,6 +24,16 @@ const Self = @This();
 
 pub const Number = canon.Number;
 
+pub const Func = struct {
+    name: Name,
+    body: *Self,
+};
+
+pub const Param = struct {
+    func: Name,
+    index: usize,
+};
+
 pub const Tag = std.meta.Tag(Data);
 pub const Data = union(enum) {
     unit,
@@ -33,12 +43,15 @@ pub const Data = union(enum) {
     ty: TypeId,
     name: Name,
     ptr: *Self,
+    // TODO should I collapse array/slice to one field?
     array: []Self,
-    slice: []Self, // TODO should I just resurrect slices as a ptr to an array?
+    slice: []Self,
     call: []Self,
 
-    // func contains the analyzed body of the function
-    func: *Self,
+    // function/functor stuff
+    func: Func,
+    func_ref: FuncRef,
+    param: Param,
 
     // special syntax, often used as the head of a call texpr
     // TODO I should have a `lambda` builtin and then a `template` builtin which
@@ -54,9 +67,7 @@ pub const Data = union(enum) {
         if (a.len != b.len) return false;
 
         for (a) |expr, i| {
-            if (!expr.eql(b[i])) {
-                return false;
-            }
+            if (!expr.eql(b[i])) return false;
         }
 
         return true;
@@ -111,10 +122,14 @@ pub fn initCall(
 
 pub fn deinit(self: Self, ally: Allocator) void {
     switch (self.data) {
-        .unit, .ty, .@"bool", .number, .name, .builtin => {},
-        .ptr, .func => |child| {
+        .unit, .ty, .@"bool", .number, .name, .builtin, .param, .func_ref => {},
+        .ptr => |child| {
             child.deinit(ally);
             ally.destroy(child);
+        },
+        .func => |func| {
+            func.body.deinit(ally);
+            ally.destroy(func.body);
         },
         .string => |str| ally.free(str.str),
         .call, .array, .slice => |children| {
@@ -135,12 +150,16 @@ fn cloneChildren(ally: Allocator, exprs: []Self) Allocator.Error![]Self {
 
 pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
     const data = switch (self.data) {
-        .unit, .ty, .@"bool", .number, .name, .builtin => self.data,
+        .unit, .ty, .@"bool", .number, .name, .builtin, .param, .func_ref
+            => self.data,
         .ptr => |child| Data{
             .ptr = try util.placeOn(ally, try child.clone(ally))
         },
-        .func => |child| Data{
-            .func = try util.placeOn(ally, try child.clone(ally))
+        .func => |func| Data{
+            .func = .{
+                .name = func.name,
+                .body = try util.placeOn(ally, try func.body.clone(ally))
+            }
         },
         .string => |sym| Data{ .string = try sym.clone(ally) },
         .call => |children| Data{ .call = try cloneChildren(ally, children) },
@@ -169,7 +188,8 @@ pub fn eql(self: Self, other: Self) bool {
 pub fn getChildren(self: Self) []Self {
     return switch (self.data) {
         .call, .array, .slice => |xs| xs,
-        .ptr, .func => |child| @ptrCast(*[1]Self, child),
+        .ptr => |child| @ptrCast(*[1]Self, child),
+        .func => |func| @ptrCast(*[1]Self, func.body),
         else => &.{}
     };
 }
@@ -195,10 +215,10 @@ fn isValueChildren(exprs: []const Self) bool {
 /// value TExpr, so I should cache `known_value: bool` and add it to `init`
 pub fn isValue(self: Self) bool {
     return switch (self.data) {
-        .unit, .ty, .@"bool", .number, .string, .builtin => true,
+        .unit, .ty, .@"bool", .number, .string, .builtin, .func_ref => true,
         .ptr => |child| child.isValue(),
         .array, .slice => |arr| isValueChildren(arr),
-        .name, .call, .func => false,
+        .name, .call, .func, .param => false,
     };
 }
 
@@ -224,6 +244,10 @@ pub fn render(
         .call, .array, .slice, .ptr, .func
             => try ctx.print(.{}, "{s}", .{@tagName(self.data)}),
         .unit => try ctx.print(.{}, "()", .{}),
+        .func_ref => |fr|
+            try ctx.print(.{}, "function {d}", .{fr.index}),
+        .param => |p|
+            try ctx.print(.{}, "parameter {d} of {}", .{p.index, p.func}),
         .ty => |ty| ty: {
             const str = try tw.get(ty).writeAlloc(ctx.ally, tw);
             defer ctx.ally.free(str);

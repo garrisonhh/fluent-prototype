@@ -30,10 +30,6 @@ pub const Op = union(enum) {
         to: Local,
     };
 
-    pub const Call = struct {
-        dest: FuncRef,
-    };
-
     pub const Arg = struct {
         arg: usize,
         from: Local,
@@ -86,7 +82,7 @@ pub const Op = union(enum) {
     ret: UnaryEffect,
 
     // calls
-    call: Call,
+    call: Unary,
     arg: Arg,
 
     // control flow
@@ -118,7 +114,6 @@ pub const Op = union(enum) {
     pub const Class = union(enum) {
         // unique logic
         ldc: LoadConst,
-        call: Call,
         arg: Arg,
         branch: Branch,
         jump: Jump,
@@ -331,6 +326,12 @@ pub const Func = struct {
                     try expr.render(ctx, env.tw),
                 });
             },
+            .arg => |arg| {
+                try line.appendSlice(&.{
+                    try ctx.print(.{}, "p{d} = ", .{arg.arg}),
+                    try self.renderLocal(ctx, env, arg.from),
+                });
+            },
             .branch => |br| {
                 try line.appendSlice(&.{
                     try ctx.print(.{}, "{s} ", .{tag}),
@@ -393,10 +394,10 @@ pub const Func = struct {
                     try self.renderLocal(ctx, env, tri.c),
                 });
             },
-            else => std.debug.panic(
-                "TODO render op class {s}",
-                .{@tagName(class)}
-            )
+            // else => std.debug.panic(
+                // "TODO render op class {s}",
+                // .{@tagName(class)}
+            // )
         }
 
         // stack and return

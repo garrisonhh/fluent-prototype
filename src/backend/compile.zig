@@ -15,9 +15,17 @@ const Vm = @import("bytecode/vm.zig");
 const Register = Vm.Register;
 const canon = @import("canon.zig");
 
+// TODO the way I'm constructing ops is very loosely typed and it's easy to
+// create bugs here
+
+// TODO compile each ssa function to its own Inst array and then appendSlice to
+// the program, this will prevent ordering errors when it comes to compiling
+// functions and allow me to compile functions here without any changes to
+// the simple flat walk I'm doing here to lower SSA
+
 // TODO give builder its own file
 
-const InstRef = packed struct {
+pub const InstRef = packed struct {
     const Self = @This();
 
     index: u32,
@@ -248,7 +256,7 @@ const RegisterMap = struct {
         // map params
         var i: usize = 0;
         while (i < takes) : (i += 1) {
-            self.map[i] = Register.of(@intCast(u8, i));
+            self.map[i] = Register.of(@intCast(u8, i + Vm.RESERVED + 1));
         }
 
         return self;
@@ -380,7 +388,32 @@ fn compileOp(
     switch (op.classify()) {
         .ldc => |ldc| {
             const reg = regmap.find(ldc.to);
-            try compileLoadConst(env, reg, func.getConst(ldc.a));
+            const value = func.getConst(ldc.a);
+
+            // acquire referenced function bytecode
+            const ty = env.tw.get(func.getLocal(ldc.to));
+            if (ty.* == .func) {
+                // function value
+                const ssa_ref = ssa.FuncRef.of(canon.toCanonical(value.ptr));
+                const bc_ref = env.compiled.get(ssa_ref).?;
+                const index: u64 = bc_ref.index;
+
+                // back to value
+                var buf: [8]u8 align(16) = undefined;
+                const data = canon.fromCanonical(&index);
+                std.mem.copy(u8, &buf, data);
+
+                const processed = Value{ .ptr = buf[0..data.len] };
+                try compileLoadConst(env, reg, processed);
+            } else {
+                // raw value
+                try compileLoadConst(env, reg, value);
+            }
+        },
+        .arg => |arg| {
+            const src = regmap.find(arg.from);
+            const dst = Register.of(@intCast(u8, Vm.RESERVED + 1 + arg.arg));
+            try bc.addInst(ally, Inst.of(.mov, src.n, dst.n, 0));
         },
         .branch => |br| {
             const cond = regmap.find(br.cond);
@@ -404,6 +437,13 @@ fn compileOp(
             try compileAlloca(env, size, dst);
         },
         .unary => |un| switch (op) {
+            .call => {
+                const fn_reg = regmap.find(un.a);
+                try bc.addInst(ally, Inst.of(.call, fn_reg.n, 0, 0));
+                // move return value from RETURN to expected register
+                const ret = regmap.find(un.to);
+                try bc.addInst(ally, Inst.of(.mov, Vm.RETURN.n, ret.n, 0));
+            },
             .load => {
                 const dst_ty = func.getLocal(un.a);
                 const dst_size = @intCast(u8, env.sizeOf(dst_ty));
@@ -539,10 +579,12 @@ fn compileOp(
     }
 }
 
-fn compileFunc(env: *Env, func: ssa.Func) Error!void {
+/// returns entry point of function
+fn compileFunc(env: *Env, func: ssa.Func) Error!InstRef {
     const ally = env.ally;
     const bc = &env.bc;
 
+    // mark start of region
     const start = env.bc.here();
 
     // register allocation for ssa vars
@@ -558,17 +600,31 @@ fn compileFunc(env: *Env, func: ssa.Func) Error!void {
         for (block.ops.items) |op| {
             try compileOp(env, func, &rmap, op);
         }
+
+        std.debug.print("compiled {d} ops for block {d}\n", .{block.ops.items.len, i});
     }
 
-    // add region
+    std.debug.print("compiled {d} blocks\n", .{func.blocks.items.len});
+
+    // mark end of region
     const stop = env.bc.here();
+
+    std.debug.print(
+        "compiling func {}; region {d} to {d}\n",
+        .{func.name, start.index, stop.index}
+    );
+
     try env.bc.addRegion(ally, func.ref, start, stop);
+
+    return start;
 }
 
-pub fn compile(env: *Env, func: ssa.Func) Error!void {
-    if (env.sizeOf(func.returns) > 8) {
-        @panic("TODO allocate for program return value");
-    }
+/// compiles func to bytecode and returns instruction address of the function's
+/// entry point.
+pub fn compile(env: *Env, func: ssa.Func) Error!InstRef {
+    std.debug.assert(env.sizeOf(func.returns) <= 8);
 
-    try compileFunc(env, func);
+    // TODO add ssa postprocessing here
+
+    return try compileFunc(env, func);
 }

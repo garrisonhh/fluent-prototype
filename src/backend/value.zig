@@ -13,6 +13,7 @@ const types = @import("types.zig");
 const TypeId = types.TypeId;
 const Type = types.Type;
 const TExpr = @import("texpr.zig");
+const FuncRef = @import("ssa.zig").FuncRef;
 const canon = @import("canon.zig");
 
 const Self = @This();
@@ -176,6 +177,8 @@ pub fn resurrect(
                 break :slice TExpr.Data{ .slice = slice };
             },
         },
+        // functions are lowered as FuncRef indices
+        .func => .{ .func_ref = FuncRef.of(canon.toCanonical(self.ptr)) },
         else => {
             const text = tid.writeAlloc(ally, env.tw) catch {
                 @panic("writeAlloc failed.");
