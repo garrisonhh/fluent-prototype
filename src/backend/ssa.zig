@@ -31,9 +31,10 @@ pub const Op = union(enum) {
         to: Local,
     };
 
-    pub const Arg = struct {
-        arg: usize,
-        from: Local,
+    pub const Call = struct {
+        func: Local,
+        params: []Local,
+        to: Local,
     };
 
     pub const Branch = struct {
@@ -51,40 +52,20 @@ pub const Op = union(enum) {
         to: Local,
     };
 
-    pub const Unary = struct {
-        a: Local,
+    pub const Pure = struct {
+        params: []Local,
         to: Local,
     };
 
-    pub const Binary = struct {
-        a: Local,
-        b: Local,
-        to: Local,
-    };
-
-    pub const UnaryEffect = struct {
-        a: Local,
-    };
-
-    pub const BinaryEffect = struct {
-        a: Local,
-        b: Local,
-    };
-
-    pub const TernaryEffect = struct {
-        a: Local,
-        b: Local,
-        c: Local,
+    pub const Impure = struct {
+        params: []Local,
     };
 
     // unique
     ldc: LoadConst,
-    cast: Unary,
-    ret: UnaryEffect,
-
-    // calls
-    call: Unary,
-    arg: Arg,
+    cast: Pure,
+    ret: Impure,
+    call: Call,
 
     // control flow
     br: Branch,
@@ -92,40 +73,80 @@ pub const Op = union(enum) {
 
     // memory
     alloca: Alloca, // allocates a number of bytes and returns pointer
-    store: BinaryEffect, // store a at addr b
-    store_elem: TernaryEffect, // store a at addr b with offset c
-    load: Unary, // loads data from ptr a
+    store: Impure, // store a at addr b
+    store_elem: Impure, // store a at addr b with offset c
+    load: Pure, // loads data from ptr a
 
     // math
-    add: Binary,
-    sub: Binary,
-    mul: Binary,
-    div: Binary,
-    mod: Binary,
+    add: Pure,
+    sub: Pure,
+    mul: Pure,
+    div: Pure,
+    mod: Pure,
 
     // conditional
-    @"or": Binary,
-    @"and": Binary,
-    not: Unary,
+    @"or": Pure,
+    @"and": Pure,
+    not: Pure,
 
     // types
-    slice_ty: Unary,
-    fn_ty: Binary,
+    slice_ty: Pure,
+    fn_ty: Pure,
+
+    pub fn initCall(
+        ally: Allocator,
+        to: Local,
+        func: Local,
+        params: []const Local
+    ) Allocator.Error!Self {
+        return Self{
+            .call = .{
+                .to = to,
+                .func = func,
+                .params = try ally.dupe(Local, params),
+            }
+        };
+    }
+
+    pub fn initPure(
+        ally: Allocator,
+        comptime tag: std.meta.Tag(Self),
+        to: Local,
+        params: []const Local
+    ) Allocator.Error!Self {
+        return @unionInit(Self, @tagName(tag), Pure{
+            .to = to,
+            .params = try ally.dupe(Local, params)
+        });
+    }
+
+    pub fn initImpure(
+        ally: Allocator,
+        comptime tag: std.meta.Tag(Self),
+        params: []const Local
+    ) Allocator.Error!Self {
+        return @unionInit(Self, @tagName(tag), Impure{
+            .params = try ally.dupe(Local, params)
+        });
+    }
+
+    pub fn deinit(self: *Self, ally: Allocator) void {
+        switch (self.classify()) {
+            .call => |call| ally.free(call.params),
+            .pure => |pure| ally.free(pure.params),
+            .impure => |impure| ally.free(impure.params),
+            else => {}
+        }
+    }
 
     pub const Class = union(enum) {
-        // unique logic
         ldc: LoadConst,
-        arg: Arg,
+        call: Call,
         branch: Branch,
         jump: Jump,
         alloca: Alloca,
-
-        // generalizable logic
-        unary: Unary,
-        binary: Binary,
-        un_eff: UnaryEffect,
-        bin_eff: BinaryEffect,
-        tri_eff: TernaryEffect,
+        pure: Pure,
+        impure: Impure,
 
         fn getFieldByType(comptime T: type) []const u8 {
             const fields = @typeInfo(Class).Union.fields;
@@ -203,6 +224,7 @@ pub const Block = struct {
     ops: std.ArrayListUnmanaged(Op) = .{},
 
     pub fn deinit(self: *Self, ally: Allocator) void {
+        for (self.ops.items) |*op| op.deinit(ally);
         self.ops.deinit(ally);
     }
 };
@@ -228,15 +250,17 @@ pub const FuncRef = packed struct {
         return env.getFuncConst(self).locals.items[l.index];
     }
 
-    /// expects value to already be owned
+    /// clones expr and stores in func
     pub fn addConst(
         self: Self,
         env: *Env,
-        value: Value
+        expr: TExpr
     ) Allocator.Error!Const {
+        std.debug.assert(expr.known_const);
+
         const func = env.getFunc(self);
         const @"const" = Const.of(func.consts.items.len);
-        try func.consts.append(env.ally, value);
+        try func.consts.append(env.ally, try expr.clone(env.ally));
 
         return @"const";
     }
@@ -281,7 +305,7 @@ pub const Func = struct {
     returns: TypeId,
     ref: FuncRef,
 
-    consts: std.ArrayListUnmanaged(Value) = .{},
+    consts: std.ArrayListUnmanaged(TExpr) = .{},
     locals: std.ArrayListUnmanaged(TypeId) = .{},
     blocks: std.ArrayListUnmanaged(Block) = .{},
 
@@ -309,6 +333,22 @@ pub const Func = struct {
         return try ctx.slap(ty_tex, var_tex, .right, .{ .space = 1 });
     }
 
+    fn renderParams(
+        self: Self,
+        ctx: *kz.Context,
+        env: Env,
+        list: *std.ArrayList(kz.Ref),
+        params: []const Local
+    ) !void {
+        const comma = try ctx.print(.{}, ", ", .{});
+        defer ctx.drop(comma);
+
+        for (params) |param, i| {
+            if (i > 0) try list.append(try ctx.clone(comma));
+            try list.append(try self.renderLocal(ctx, env, param));
+        }
+    }
+
     fn renderOp(
         self: Self,
         ctx: *kz.Context,
@@ -324,23 +364,22 @@ pub const Func = struct {
         const class = op.classify();
         switch (class) {
             .ldc => |ldc| {
-                const ty = self.locals.items[ldc.to.index];
-                const value = self.consts.items[ldc.a.index];
-                const expr =
-                    try canon.resurrect(env, value, env.vm.stack, null, ty);
-                defer expr.deinit(ctx.ally);
-
+                const expr = self.consts.items[ldc.a.index];
                 try line.appendSlice(&.{
                     try self.renderLocal(ctx, env, ldc.to),
                     try ctx.print(.{}, " = ", .{}),
                     try expr.render(ctx, env.tw),
                 });
             },
-            .arg => |arg| {
+            .call => |call| {
                 try line.appendSlice(&.{
-                    try ctx.print(.{}, "p{d} = ", .{arg.arg}),
-                    try self.renderLocal(ctx, env, arg.from),
+                    try self.renderLocal(ctx, env, call.to),
+                    try ctx.print(.{}, " = {s} ", .{tag}),
+                    try self.renderLocal(ctx, env, call.func),
+                    try ctx.print(.{}, " ", .{}),
                 });
+
+                try self.renderParams(ctx, env, &line, call.params);
             },
             .branch => |br| {
                 try line.appendSlice(&.{
@@ -364,45 +403,17 @@ pub const Func = struct {
                     try ctx.print(.{}, " = {s} {d}", .{tag, all.size}),
                 });
             },
-            .unary => |un| {
+            .pure => |pure| {
                 try line.appendSlice(&.{
-                    try self.renderLocal(ctx, env, un.to),
+                    try self.renderLocal(ctx, env, pure.to),
                     try ctx.print(.{}, " = {s} ", .{tag}),
-                    try self.renderLocal(ctx, env, un.a),
                 });
+
+                try self.renderParams(ctx, env, &line, pure.params);
             },
-            .binary => |bin| {
-                try line.appendSlice(&.{
-                    try self.renderLocal(ctx, env, bin.to),
-                    try ctx.print(.{}, " = {s} ", .{tag}),
-                    try self.renderLocal(ctx, env, bin.a),
-                    try ctx.clone(comma),
-                    try self.renderLocal(ctx, env, bin.b),
-                });
-            },
-            .un_eff => |un| {
-                try line.appendSlice(&.{
-                    try ctx.print(.{}, "{s} ", .{tag}),
-                    try self.renderLocal(ctx, env, un.a),
-                });
-            },
-            .bin_eff => |bin| {
-                try line.appendSlice(&.{
-                    try ctx.print(.{}, "{s} ", .{tag}),
-                    try self.renderLocal(ctx, env, bin.a),
-                    try ctx.clone(comma),
-                    try self.renderLocal(ctx, env, bin.b),
-                });
-            },
-            .tri_eff => |tri| {
-                try line.appendSlice(&.{
-                    try ctx.print(.{}, "{s} ", .{tag}),
-                    try self.renderLocal(ctx, env, tri.a),
-                    try ctx.clone(comma),
-                    try self.renderLocal(ctx, env, tri.b),
-                    try ctx.clone(comma),
-                    try self.renderLocal(ctx, env, tri.c),
-                });
+            .impure => |impure| {
+                try line.append(try ctx.print(.{}, "{s} ", .{tag}));
+                try self.renderParams(ctx, env, &line, impure.params);
             },
             // else => std.debug.panic(
                 // "TODO render op class {s}",

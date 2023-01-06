@@ -19,7 +19,6 @@ const TypeId = types.TypeId;
 const Type = types.Type;
 const Env = @import("env.zig");
 const TExpr = @import("texpr.zig");
-const Value = @import("value.zig");
 const canon = @import("canon.zig");
 const Builtin = canon.Builtin;
 
@@ -29,26 +28,15 @@ fn lowerLoadConst(
     env: *Env,
     ref: FuncRef,
     block: Label,
-    ty: TypeId,
-    value: Value
+    expr: TExpr
 ) Error!Local {
-    const @"const" = try ref.addConst(env, value);
-    const out = try ref.addLocal(env, ty);
+    std.debug.assert(expr.known_const);
+
+    const @"const" = try ref.addConst(env, expr);
+    const out = try ref.addLocal(env, expr.ty);
     try ref.addOp(env, block, Op{ .ldc = .{ .a = @"const", .to = out } });
 
     return out;
-}
-
-/// wrapper for loadConst which lowers a raw uint as some type
-fn lowerCanonical(
-    env: *Env,
-    ref: FuncRef,
-    block: Label,
-    ty: TypeId,
-    n: u64
-) Error!Local {
-    const value = try Value.init(env.ally, canon.fromCanonical(&n));
-    return try lowerLoadConst(env, ref, block, ty, value);
 }
 
 /// this does all of the boilerplate of loading a const u64. this is
@@ -57,18 +45,13 @@ fn lowerU64(env: *Env, ref: FuncRef, block: Label, n: u64) Error!Local {
     const @"u64" = try env.identify(Type{
         .number = .{ .bits = 64, .layout = .uint }
     });
-    return try lowerCanonical(env, ref, block, @"u64", n);
-}
-
-fn lowerBool(env: *Env, ref: FuncRef, block: Label, expr: TExpr) Error!Local {
-    const byte: u8 = if (expr.data.@"bool") 1 else 0;
-    const value = try Value.init(env.ally, std.mem.asBytes(&byte));
-    return lowerLoadConst(env, ref, block, expr.ty, value);
-}
-
-fn lowerNumber(env: *Env, ref: FuncRef, block: Label, expr: TExpr) Error!Local {
-    const value = try expr.data.number.asValue(env.ally);
-    return lowerLoadConst(env, ref, block, expr.ty, value);
+    const expr = TExpr.init(null, true, @"u64", .{
+        .number = TExpr.Number{
+            .bits = 64,
+            .data = .{ .uint = n },
+        },
+    });
+    return try lowerLoadConst(env, ref, block, expr);
 }
 
 /// lower builtins that connect directly to ssa IR ops
@@ -84,8 +67,6 @@ fn lowerOperator(
 
     // lower args
     const locals = try ally.alloc(Local, args.len);
-    defer ally.free(locals);
-
     for (args) |arg, i| {
         locals[i] = try lowerExpr(env, ref, block, arg);
     }
@@ -93,34 +74,18 @@ fn lowerOperator(
     // generate operation
     return switch (b) {
         // binary ops
-        inline .add, .sub, .mul, .div, .mod, .@"and", .@"or", .fn_ty
-            => |tag| bin: {
+        inline .add, .sub, .mul, .div, .mod, .@"and", .@"or", .fn_ty, .not,
+        .cast, .slice_ty
+            => |tag| op: {
             // TODO make sure this is checked in sema
-            std.debug.assert(args.len == 2);
-
             const to = try ref.addLocal(env, returns);
-            const op = @unionInit(Op, @tagName(tag), Op.Binary{
-                .a = locals[0],
-                .b = locals[1],
-                .to = to
+            const op = @unionInit(Op, @tagName(tag), Op.Pure{
+                .to = to,
+                .params = locals,
             });
             try ref.addOp(env, block.*, op);
 
-            break :bin to;
-        },
-        // unary ops
-        inline .not, .cast, .slice_ty => |tag| un: {
-            // TODO make sure this is checked in sema
-            std.debug.assert(args.len == 1);
-
-            const to = try ref.addLocal(env, returns);
-            const op = @unionInit(Op, @tagName(tag), Op.Unary{
-                .a = locals[0],
-                .to = to
-            });
-            try ref.addOp(env, block.*, op);
-
-            break :un to;
+            break :op to;
         },
         else => unreachable
     };
@@ -157,15 +122,13 @@ fn lowerArray(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     const el_ptr_ty = try env.identify(Type.initPtr(.single, el_ty));
 
     var cur_ptr = try ref.addLocal(env, el_ptr_ty);
-    try ref.addOp(env, block.*, Op{
-        .cast = .{ .a = arr_ptr, .to = cur_ptr }
-    });
+    const cast_op = try Op.initPure(ally, .cast, cur_ptr, &.{arr_ptr});
+    try ref.addOp(env, block.*, cast_op);
 
     if (elements.len == 1) {
         // single element arrays only need 1 store operation
-        try ref.addOp(env, block.*, Op{
-            .store = .{ .a = elements[0], .b = cur_ptr }
-        });
+        const sto = try Op.initImpure(ally, .store, &.{elements[0], cur_ptr});
+        try ref.addOp(env, block.*, sto);
 
         return arr_ptr;
     }
@@ -176,16 +139,15 @@ fn lowerArray(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     // store each element
     for (elements) |elem, i| {
         // store this element at the current array ptr
-        try ref.addOp(env, block.*, Op{
-            .store = .{ .a = elem, .b = cur_ptr }
-        });
+        const sto = try Op.initImpure(ally, .store, &.{elem, cur_ptr});
+        try ref.addOp(env, block.*, sto);
 
         // increment the current ptr, unless this is the last element
         if (i < elements.len - 1) {
             const next_ptr = try ref.addLocal(env, el_ptr_ty);
-            try ref.addOp(env, block.*, Op{
-                .add = .{ .a = cur_ptr, .b = el_size, .to = next_ptr }
-            });
+            const add =
+                try Op.initPure(ally, .add, next_ptr, &.{cur_ptr, el_size});
+            try ref.addOp(env, block.*, add);
 
             cur_ptr = next_ptr;
         }
@@ -237,7 +199,8 @@ fn lowerLambda(
     _ = try env.compileSsa(lambda);
 
     // load func ref as callable constant
-    return try lowerCanonical(env, ref, block.*, expr.ty, lambda.index);
+    const final = TExpr.init(expr.loc, true, expr.ty, .{ .func_ref = lambda });
+    return try lowerLoadConst(env, ref, block.*, final);
 }
 
 fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
@@ -274,35 +237,29 @@ fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
         locals[i] = try lowerExpr(env, ref, block, child);
     }
 
-    // lower args
-    for (locals[1..]) |local, i| {
-        try ref.addOp(env, block.*, Op{
-            .arg = .{ .arg = i, .from = local }
-        });
-    }
-
     // lower call and return value
     const returns = env.tw.get(head.ty).func.returns;
     const dst = try ref.addLocal(env, returns);
-    try ref.addOp(env, block.*, Op{ .call = .{ .a = locals[0], .to = dst } });
+    const call = try Op.initCall(env.ally, dst, locals[0], locals[1..]);
+    try ref.addOp(env, block.*, call);
 
     return dst;
 }
 
 fn lowerExpr(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
+    if (expr.known_const) {
+        return try lowerLoadConst(env, ref, block.*, expr);
+    }
+
     return switch (expr.data) {
-        .@"bool" => try lowerBool(env, ref, block.*, expr),
-        .number => try lowerNumber(env, ref, block.*, expr),
+        // always consts
+        .@"bool", .number, .ty => unreachable,
         // TODO named values should be cacheable and lowered only once, really.
         // afaik this will currently place the same named value multiple times
         // in the code.
         .name => |name| try lowerExpr(env, ref, block, env.get(name)),
         .array => try lowerArray(env, ref, block, expr),
         .call => try lowerCall(env, ref, block, expr),
-        .ty => |ty| ty: {
-            const tyty = try env.identify(Type{ .ty = {} });
-            break :ty lowerCanonical(env, ref, block.*, tyty, ty.index);
-        },
         .ptr => try lowerAddrOf(env, ref, block, expr),
         .func => try lowerLambda(env, ref, block, expr),
         .param => |p| param: {
@@ -340,15 +297,10 @@ fn lowerFunction(
 
     // lowering expr will return the final value
     const final = try lowerExpr(env, ref, &block, body);
-    try ref.addOp(env, block, Op{ .ret = .{ .a = final } });
+    try ref.addOp(env, block, try Op.initImpure(env.ally, .ret, &.{final}));
 
-    // return value won't be known until lowering figures it out
+    // return value is unknown until this point
     env.getFunc(ref).returns = ref.getLocal(env.*, final);
-
-    if (builtin.mode == .Debug) {
-        const func = env.getFunc(ref);
-        std.debug.assert(func.returns.eql(ref.getLocal(env.*, final)));
-    }
 
     return ref;
 }
