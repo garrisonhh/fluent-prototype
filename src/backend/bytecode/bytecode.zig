@@ -90,6 +90,16 @@ pub const Inst = packed struct(u32) {
     }
 };
 
+pub const InstRef = packed struct {
+    const Self = @This();
+
+    index: u32,
+
+    pub fn of(index: u32) Self {
+        return Self{ .index = index };
+    }
+};
+
 /// program is an executable 'view' into the env's bytecode builder.
 ///
 /// in order to execute, the vm can call the entry point and then observe the

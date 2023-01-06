@@ -7,15 +7,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
-const util = @import("util");
-const Env = @import("env.zig");
-const types = @import("types.zig");
-const TypeId = types.TypeId;
-const Type = types.Type;
-const TExpr = @import("texpr.zig");
-const FuncRef = @import("ssa.zig").FuncRef;
-const canon = @import("canon.zig");
-const context = @import("../context.zig");
 
 const Self = @This();
 
