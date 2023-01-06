@@ -24,7 +24,7 @@ pub const Error =
     std.mem.Allocator.Error
  || context.MessageError
  || context.FluentError
- || Value.ResError;
+ || canon.ResError;
 
 /// evaluate any dynamic value in the provided scope
 pub fn eval(env: *Env, scope: Name, sexpr: SExpr) Error!TExpr {
@@ -76,15 +76,14 @@ pub fn evalTyped(
         }
 
         // lower to ssa ir
-        var ssa = try lower(env, scope, texpr);
-        defer ssa.deinit(env.ally);
+        const ssa = try lower(env, scope, texpr);
 
         if (builtin.mode == .Debug) {
             const t = now();
             var ctx = kz.Context.init(env.ally);
             defer ctx.deinit();
 
-            const tex = try ssa.render(&ctx, env.*);
+            const tex = try env.prog.render(&ctx, env.*);
 
             try stdout.writeAll("[SSA Program]\n");
             try ctx.write(tex, stdout);
@@ -113,8 +112,10 @@ pub fn evalTyped(
         }
 
         // run compiled bytecode
-        const final = try env.run(prog, texpr.loc, ssa.returns);
-        try env.bc.removeFunc(env.ally, ssa.ref);
+        const final = try env.run(prog, texpr.loc, env.getFunc(ssa).returns);
+
+        // remove ssa expr
+        try env.removeFunc(ssa);
 
         // when returning structured data, the vm may return a pointer to the
         // data I actually wanted

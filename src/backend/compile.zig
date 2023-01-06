@@ -3,6 +3,9 @@ const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const Env = @import("env.zig");
 const ssa = @import("ssa.zig");
+const FuncRef = ssa.FuncRef;
+const Label = ssa.Label;
+const Local = ssa.Local;
 const types = @import("types.zig");
 const TypeId = types.TypeId;
 const TypeWelt = types.TypeWelt;
@@ -39,10 +42,10 @@ pub const InstRef = packed struct {
 const SsaPos = struct {
     const Self = @This();
 
-    func: ssa.FuncRef,
-    label: ssa.Label,
+    func: FuncRef,
+    label: Label,
 
-    fn of(func: ssa.FuncRef, label: ssa.Label) Self {
+    fn of(func: FuncRef, label: Label) Self {
         return Self{
             .func = func,
             .label = label,
@@ -50,8 +53,8 @@ const SsaPos = struct {
     }
 
     /// gets ssa pos for a function's entry point
-    fn ofFunc(func_ref: ssa.FuncRef) Self {
-        return Self.of(func_ref, ssa.Label.of(0));
+    fn ofFunc(func_ref: FuncRef) Self {
+        return Self.of(func_ref, Label.of(0));
     }
 };
 
@@ -74,7 +77,7 @@ pub const Builder = struct {
     // tracks backreferences while compiling
     refs: std.AutoHashMapUnmanaged(SsaPos, BackRef) = .{},
     // tracks slices of the program
-    regions: std.AutoHashMapUnmanaged(ssa.FuncRef, Region) = .{},
+    regions: std.AutoHashMapUnmanaged(FuncRef, Region) = .{},
 
     pub fn deinit(self: *Self, ally: Allocator) void {
         self.program.deinit(ally);
@@ -82,7 +85,7 @@ pub const Builder = struct {
         self.regions.deinit(ally);
     }
 
-    pub fn build(self: *Self, func: ssa.Func) Program {
+    pub fn build(self: *Self, func: FuncRef) Program {
         if (builtin.mode == .Debug) {
             // validate backrefs are completed
             var entries = self.refs.iterator();
@@ -93,14 +96,14 @@ pub const Builder = struct {
 
                     std.debug.panic(
                         "bytecode compilation failed to resolve {}@{}",
-                        .{func.name, label}
+                        .{func.index, label}
                     );
                 }
             }
         }
 
         // get function backref
-        const backref = self.refs.get(SsaPos.ofFunc(func.ref)).?;
+        const backref = self.refs.get(SsaPos.ofFunc(func)).?;
 
         return Program{
             .entry = backref.resolved.index,
@@ -173,7 +176,7 @@ pub const Builder = struct {
     fn addRegion(
         self: *Self,
         ally: Allocator,
-        func: ssa.FuncRef,
+        func: FuncRef,
         start: InstRef,
         stop: InstRef
     ) Allocator.Error!void {
@@ -186,16 +189,35 @@ pub const Builder = struct {
 
     /// removes instructions associated with a function. this is very useful
     /// for `eval` to not clutter the env's builder.
+    ///
+    /// this operation is relatively slow, O(n) several times. performance here
+    /// is probably a useful addition
     pub fn removeFunc(
         self: *Self,
         ally: Allocator,
-        func: ssa.FuncRef
+        ref: FuncRef
     ) Allocator.Error!void {
-        const region = self.regions.get(func).?;
+        // remove the function's associated region
+        const region = self.regions.get(ref).?;
         const start = region.start.index;
         const len = region.stop.index - start;
 
         try self.program.replaceRange(ally, start, len, &.{});
+
+        // collect + remove ssa positions with the funcref
+        var positions = std.ArrayList(SsaPos).init(ally);
+        defer positions.deinit();
+
+        var keys = self.refs.keyIterator();
+        while (keys.next()) |key| {
+            if (key.func.eql(ref)) {
+                try positions.append(key.*);
+            }
+        }
+
+        for (positions.items) |pos| {
+            _ = self.refs.remove(pos);
+        }
     }
 };
 
@@ -254,7 +276,7 @@ const RegisterMap = struct {
     }
 
     /// retrieves a new or old register for this local
-    fn find(self: *Self, local: ssa.Local) Register {
+    fn find(self: *Self, local: Local) Register {
         if (self.map[local.index]) |reg| return reg;
 
         // invalidate temporaries
@@ -365,7 +387,7 @@ fn todoCompileOp(op: ssa.Op) noreturn {
 
 fn compileOp(
     env: *Env,
-    func: ssa.Func,
+    ref: FuncRef,
     regmap: *RegisterMap,
     op: ssa.Op,
 ) Error!void {
@@ -375,10 +397,10 @@ fn compileOp(
     switch (op.classify()) {
         .ldc => |ldc| {
             const reg = regmap.find(ldc.to);
-            const value = func.getConst(ldc.a);
+            const value = ref.getConst(env.*, ldc.a);
 
             // acquire referenced function bytecode
-            const ty = env.tw.get(func.getLocal(ldc.to));
+            const ty = env.tw.get(ref.getLocal(env.*, ldc.to));
             if (ty.* == .func) {
                 // function value
                 const ssa_ref = ssa.FuncRef.of(canon.toCanonical(value.ptr));
@@ -405,13 +427,13 @@ fn compileOp(
         .branch => |br| {
             const cond = regmap.find(br.cond);
             try bc.addInst(ally, Inst.of(.jump_if, cond.n, 0, 0));
-            try bc.addBranch(ally, SsaPos.of(func.ref, br.a));
+            try bc.addBranch(ally, SsaPos.of(ref, br.a));
             try bc.addInst(ally, Inst.of(.jump, 0, 0, 0));
-            try bc.addBranch(ally, SsaPos.of(func.ref, br.b));
+            try bc.addBranch(ally, SsaPos.of(ref, br.b));
         },
         .jump => |jmp| {
             try bc.addInst(ally, Inst.of(.jump, 0, 0, 0));
-            try bc.addBranch(ally, SsaPos.of(func.ref, jmp.dst));
+            try bc.addBranch(ally, SsaPos.of(ref, jmp.dst));
         },
         .alloca => |all| {
             // 1. store sp in output
@@ -432,14 +454,14 @@ fn compileOp(
                 try bc.addInst(ally, Inst.of(.mov, Vm.RETURN.n, ret.n, 0));
             },
             .load => {
-                const dst_ty = func.getLocal(un.a);
+                const dst_ty = ref.getLocal(env.*, un.a);
                 const dst_size = @intCast(u8, env.sizeOf(dst_ty));
                 const arg = regmap.find(un.a);
                 const to = regmap.find(un.to);
                 try bc.addInst(ally, Inst.of(.load, dst_size, arg.n, to.n));
             },
             .not => {
-                const ty = env.tw.get(func.getLocal(un.to));
+                const ty = env.tw.get(ref.getLocal(env.*, un.to));
                 const opcode: Opcode = switch (ty.*) {
                     .@"bool" => .lnot,
                     .number => |num| switch (num.layout) {
@@ -455,8 +477,8 @@ fn compileOp(
             },
             // TODO use different ops for bitcast and other casts
             .cast => {
-                const dst = env.tw.get(func.getLocal(un.to));
-                const src = env.tw.get(func.getLocal(un.a));
+                const dst = env.tw.get(ref.getLocal(env.*, un.to));
+                const src = env.tw.get(ref.getLocal(env.*, un.a));
 
                 const arg = regmap.find(un.a);
                 const to = regmap.find(un.to);
@@ -500,7 +522,7 @@ fn compileOp(
             else => todoCompileOp(op)
         },
         .binary => |bin| {
-            const ty = env.tw.get(func.getLocal(bin.to));
+            const ty = env.tw.get(ref.getLocal(env.*, bin.to));
             const opcode: Opcode = switch (ty.*) {
                 .@"bool" => switch (op) {
                     .@"or" => .lor,
@@ -550,7 +572,7 @@ fn compileOp(
         },
         .bin_eff => |be| switch (op) {
             .store => {
-                const src_ty = func.getLocal(be.a);
+                const src_ty = ref.getLocal(env.*, be.a);
                 const bytes = switch (env.sizeOf(src_ty)) {
                     1, 2, 4, 8 => |n| @intCast(u8, n),
                     else => @panic("TODO store other sizes")
@@ -567,9 +589,10 @@ fn compileOp(
 }
 
 /// returns entry point of function
-fn compileFunc(env: *Env, func: ssa.Func) Error!InstRef {
+fn compileFunc(env: *Env, ref: FuncRef) Error!InstRef {
     const ally = env.ally;
     const bc = &env.bc;
+    const func = env.getFunc(ref);
 
     // mark start of region
     const start = env.bc.here();
@@ -581,37 +604,27 @@ fn compileFunc(env: *Env, func: ssa.Func) Error!InstRef {
     for (func.blocks.items) |block, i| {
         // resolve block label
         const label = ssa.Label.of(i);
-        try bc.resolve(ally, SsaPos.of(func.ref, label), bc.here());
+        try bc.resolve(ally, SsaPos.of(ref, label), bc.here());
 
         // compile block ops
         for (block.ops.items) |op| {
-            try compileOp(env, func, &rmap, op);
+            try compileOp(env, ref, &rmap, op);
         }
-
-        std.debug.print("compiled {d} ops for block {d}\n", .{block.ops.items.len, i});
     }
-
-    std.debug.print("compiled {d} blocks\n", .{func.blocks.items.len});
 
     // mark end of region
     const stop = env.bc.here();
-
-    std.debug.print(
-        "compiling func {}; region {d} to {d}\n",
-        .{func.name, start.index, stop.index}
-    );
-
-    try env.bc.addRegion(ally, func.ref, start, stop);
+    try env.bc.addRegion(ally, ref, start, stop);
 
     return start;
 }
 
 /// compiles func to bytecode and returns instruction address of the function's
 /// entry point.
-pub fn compile(env: *Env, func: ssa.Func) Error!InstRef {
-    std.debug.assert(env.sizeOf(func.returns) <= 8);
+pub fn compile(env: *Env, ref: FuncRef) Error!InstRef {
+    std.debug.assert(env.sizeOf(env.getFunc(ref).returns) <= 8);
 
     // TODO add ssa postprocessing here
 
-    return try compileFunc(env, func);
+    return try compileFunc(env, ref);
 }

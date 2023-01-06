@@ -18,6 +18,7 @@ const TypeId = types.TypeId;
 const Env = @import("env.zig");
 const Value = @import("value.zig");
 const TExpr = @import("texpr.zig");
+const canon = @import("canon.zig");
 
 /// symbolic representation of operations. since blocks store type info,
 /// there is no need for operations to be type or size specific; this can be
@@ -196,6 +197,16 @@ pub const Label = packed struct {
     }
 };
 
+pub const Block = struct {
+    const Self = @This();
+
+    ops: std.ArrayListUnmanaged(Op) = .{},
+
+    pub fn deinit(self: *Self, ally: Allocator) void {
+        self.ops.deinit(ally);
+    }
+};
+
 pub const FuncRef = packed struct {
     const Self = @This();
 
@@ -204,15 +215,61 @@ pub const FuncRef = packed struct {
     pub fn of(index: usize) Self {
         return Self{ .index = index };
     }
-};
 
-pub const Block = struct {
-    const Self = @This();
+    pub fn eql(self: Self, other: Self) bool {
+        return self.index == other.index;
+    }
 
-    ops: std.ArrayListUnmanaged(Op) = .{},
+    pub fn getConst(self: Self, env: Env, c: Const) Value {
+        return env.getFuncConst(self).consts.items[c.index];
+    }
 
-    pub fn deinit(self: *Self, ally: Allocator) void {
-        self.ops.deinit(ally);
+    pub fn getLocal(self: Self, env: Env, l: Local) TypeId {
+        return env.getFuncConst(self).locals.items[l.index];
+    }
+
+    /// expects value to already be owned
+    pub fn addConst(
+        self: Self,
+        env: *Env,
+        value: Value
+    ) Allocator.Error!Const {
+        const func = env.getFunc(self);
+        const @"const" = Const.of(func.consts.items.len);
+        try func.consts.append(env.ally, value);
+
+        return @"const";
+    }
+
+    pub fn addLocal(
+        self: Self,
+        env: *Env,
+        ty: TypeId
+    ) Allocator.Error!Local {
+        const func = env.getFunc(self);
+        const local = Local.of(func.locals.items.len);
+        try func.locals.append(env.ally, ty);
+
+        return local;
+    }
+
+    pub fn addBlock(self: Self, env: *Env) Allocator.Error!Label {
+        const func = env.getFunc(self);
+        const label = Label.of(func.blocks.items.len);
+        try func.blocks.append(env.ally, .{});
+
+        return label;
+    }
+
+    pub fn addOp(
+        self: Self,
+        env: *Env,
+        label: Label,
+        op: Op
+    ) Allocator.Error!void {
+        const func = env.getFunc(self);
+        const block = &func.blocks.items[label.index];
+        try block.ops.append(env.ally, op);
     }
 };
 
@@ -228,60 +285,12 @@ pub const Func = struct {
     locals: std.ArrayListUnmanaged(TypeId) = .{},
     blocks: std.ArrayListUnmanaged(Block) = .{},
 
-    pub fn deinit(self: *Self, ally: Allocator) void {
+    fn deinit(self: *Self, ally: Allocator) void {
         for (self.consts.items) |*value| value.deinit(ally);
         self.consts.deinit(ally);
         self.locals.deinit(ally);
         for (self.blocks.items) |*block| block.deinit(ally);
         self.blocks.deinit(ally);
-    }
-
-    pub fn getConst(self: Self, c: Const) Value {
-        return self.consts.items[c.index];
-    }
-
-    pub fn getLocal(self: Self, l: Local) TypeId {
-        return self.locals.items[l.index];
-    }
-
-    /// expects value to already be owned
-    pub fn addConst(
-        self: *Self,
-        ally: Allocator,
-        value: Value
-    ) Allocator.Error!Const {
-        const @"const" = Const.of(self.consts.items.len);
-        try self.consts.append(ally, value);
-
-        return @"const";
-    }
-
-    pub fn addLocal(
-        self: *Self,
-        ally: Allocator,
-        ty: TypeId
-    ) Allocator.Error!Local {
-        const local = Local.of(self.locals.items.len);
-        try self.locals.append(ally, ty);
-
-        return local;
-    }
-
-    pub fn addBlock(self: *Self, ally: Allocator) Allocator.Error!Label {
-        const label = Label.of(self.blocks.items.len);
-        try self.blocks.append(ally, .{});
-
-        return label;
-    }
-
-    pub fn addOp(
-        self: Self,
-        ally: Allocator,
-        label: Label,
-        op: Op
-    ) Allocator.Error!void {
-        const block = &self.blocks.items[label.index];
-        try block.ops.append(ally, op);
     }
 
     fn renderLocal(
@@ -317,7 +326,8 @@ pub const Func = struct {
             .ldc => |ldc| {
                 const ty = self.locals.items[ldc.to.index];
                 const value = self.consts.items[ldc.a.index];
-                const expr = try value.resurrect(env, env.vm.stack, null, ty);
+                const expr =
+                    try canon.resurrect(env, value, env.vm.stack, null, ty);
                 defer expr.deinit(ctx.ally);
 
                 try line.appendSlice(&.{
@@ -430,23 +440,36 @@ pub const Func = struct {
         return try ctx.slap(body_tex, label_tex, .top, .{});
     }
 
-    pub fn render(self: Self, ctx: *kz.Context, env: Env) !kz.Ref {
-        // function header
+    fn render(self: Self, ctx: *kz.Context, env: Env) !kz.Ref {
+        const red = kz.Style{ .fg = .red };
+
+        // name
         var header_texs = std.ArrayList(kz.Ref).init(ctx.ally);
         defer header_texs.deinit();
 
         if (self.name.syms.len > 0) {
-            try header_texs.append(try ctx.print(.{}, "{} ", .{self.name}));
+            try header_texs.append(try ctx.print(red, "{}", .{self.name}));
         } else {
-            try header_texs.append(try ctx.print(.{}, "<expr> ", .{}));
+            try header_texs.append(try ctx.print(red, "<expr>", .{}));
         }
+
+        // parameters
+        try header_texs.append(try ctx.print(.{}, " :: ", .{}));
 
         var param = Local.of(0);
         while (param.index < self.takes) : (param.index += 1) {
+            if (param.index > 0) {
+                try header_texs.append(try ctx.print(.{}, ", ", .{}));
+            }
+
             try header_texs.append(try self.renderLocal(ctx, env, param));
+        }
+
+        if (self.takes > 0) {
             try header_texs.append(try ctx.print(.{}, " -> ", .{}));
         }
 
+        // return type
         const returns = try self.returns.writeAlloc(ctx.ally, env.tw);
         defer ctx.ally.free(returns);
 
@@ -456,7 +479,7 @@ pub const Func = struct {
 
         const header = try ctx.stack(header_texs.items, .right, .{});
 
-        // add body
+        // body
         var block_texs = std.ArrayList(kz.Ref).init(ctx.ally);
         defer block_texs.deinit();
 
@@ -467,7 +490,6 @@ pub const Func = struct {
         }
 
         const body = try ctx.stack(block_texs.items, .bottom, .{});
-
         return ctx.slap(header, body, .bottom, .{});
     }
 };
@@ -475,38 +497,77 @@ pub const Func = struct {
 pub const Program = struct {
     const Self = @This();
 
+    // TODO go merge refmap and use it here so I don't reimplement this pattern
+    // a million times
+    unused: std.ArrayListUnmanaged(FuncRef) = .{},
     funcs: std.ArrayListUnmanaged(Func) = .{},
 
     pub fn deinit(self: *Self, ally: Allocator) void {
+        self.unused.deinit(ally);
         self.funcs.deinit(ally);
     }
 
-    pub fn addFunc(
+    fn nextRef(self: *Self, ally: Allocator) Allocator.Error!FuncRef {
+        if (self.unused.items.len == 0) {
+            const ref = FuncRef.of(self.funcs.items.len);
+            _ = try self.funcs.addOne(ally);
+            return ref;
+        }
+
+        return self.unused.pop();
+    }
+
+    pub fn add(
         self: *Self,
         ally: Allocator,
         name: Name,
         params: []const TypeId,
-        returns: TypeId
-    ) Allocator.Error!Func {
+    ) Allocator.Error!FuncRef {
+        const ref = try self.nextRef(ally);
         var func = Func{
             .name = name,
             .takes = params.len,
-            .returns = returns,
-            .ref = FuncRef.of(self.funcs.items.len),
+            .returns = undefined,
+            .ref = ref,
         };
 
         try func.locals.appendSlice(ally, params);
-        try self.funcs.append(ally, func);
+        self.funcs.items[ref.index] = func;
 
-        return func;
+        return ref;
+    }
+
+    /// invalidated on next `add` call
+    pub fn get(self: *Self, ref: FuncRef) *Func {
+        return &self.funcs.items[ref.index];
+    }
+
+    pub fn remove(self: *Self, ally: Allocator, ref: FuncRef) void {
+        var func = self.funcs.swapRemove(ref.index);
+        func.deinit(ally);
     }
 
     pub fn render(self: Self, ctx: *kz.Context, env: Env) !kz.Ref {
-        var tex = try ctx.stub();
-        for (self.funcs.items) |func| {
-            tex = try ctx.slap(tex, try func.render(ctx, env), .bottom, .{});
+        const ally = ctx.ally;
+
+        // construct set of unused refs
+        var unused = std.AutoHashMap(FuncRef, void).init(ctx.ally);
+        defer unused.deinit();
+
+        for (self.unused.items) |ref| {
+            try unused.put(ref, {});
         }
 
-        return tex;
+        // render each ref if it's not unused
+        const refs = try ally.alloc(kz.Ref, self.funcs.items.len);
+        defer ally.free(refs);
+
+        for (self.funcs.items) |func, i| {
+            if (!unused.contains(FuncRef.of(i))) {
+                refs[i] = try func.render(ctx, env);
+            }
+        }
+
+        return ctx.stack(refs, .bottom, .{ .space = 1 });
     }
 };

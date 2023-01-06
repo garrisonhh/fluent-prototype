@@ -7,13 +7,15 @@ const builtin = @import("builtin");
 const util = @import("util");
 const Value = @import("../value.zig");
 
+pub const Layout = util.Number.Layout;
+
 const Self = @This();
 
 const Int = i64;
 const UInt = u64;
 const Float = f64;
 
-pub const Concrete = union(util.Number.Layout) {
+pub const Concrete = union(Layout) {
     int: Int,
     uint: UInt,
     float: Float,
@@ -76,7 +78,6 @@ pub fn asValue(self: @This(), ally: Allocator) Allocator.Error!Value {
 
 pub fn eql(self: @This(), other: @This()) bool {
     // compare type
-    const Layout = util.Number.Layout;
     if (self.bits != other.bits
      or @as(Layout, self.data) != @as(Layout, other.data)) {
         return false;

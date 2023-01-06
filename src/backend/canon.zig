@@ -6,6 +6,7 @@ const builtin = @import("builtin");
 pub const Number = @import("canon/number.zig");
 pub const Builtin = @import("canon/builtins.zig").Builtin;
 pub usingnamespace @import("canon/prelude.zig");
+pub usingnamespace @import("canon/fluency.zig");
 
 /// given up to 8 bytes, return canonical u64 representation for vm
 pub fn toCanonical(bytes: []const u8) u64 {

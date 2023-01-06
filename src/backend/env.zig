@@ -85,12 +85,26 @@ pub fn sizeOf(self: Self, ty: TypeId) usize {
 
 // low-level IRs ===============================================================
 
-/// calls the compile pipeline for an ssa function and then ties them
-pub fn compileSsa(self: *Self, func: ssa.Func) Allocator.Error!BcRef {
-    std.debug.assert(!self.compiled.contains(func.ref));
+/// invalidated by adding a new function to ssa
+pub fn getFunc(self: *Self, ref: SsaRef) *ssa.Func {
+    return self.prog.get(ref);
+}
 
-    const bc = try compile.compile(self, func);
-    try self.tieLLRefs(func.ref, bc);
+pub fn getFuncConst(self: Self, ref: SsaRef) ssa.Func {
+    return self.prog.funcs.items[ref.index];
+}
+
+pub fn removeFunc(self: *Self, ref: SsaRef) Allocator.Error!void {
+    try self.bc.removeFunc(self.ally, ref);
+    self.prog.remove(self.ally, ref);
+}
+
+/// calls the compile pipeline for an ssa function and then ties them
+pub fn compileSsa(self: *Self, ref: SsaRef) Allocator.Error!BcRef {
+    std.debug.assert(!self.compiled.contains(ref));
+
+    const bc = try compile.compile(self, ref);
+    try self.tieLLRefs(ref, bc);
 
     return bc;
 }
@@ -112,7 +126,7 @@ pub fn run(
     prog: Program,
     loc: ?context.Loc,
     ty: TypeId
-) (Vm.RuntimeError || Value.ResError)!TExpr {
+) (Vm.RuntimeError || canon.ResError)!TExpr {
     try self.vm.execute(self.ally, &self.tw, prog);
     const raw_val = self.vm.scratch[Vm.RETURN.n];
 
@@ -122,7 +136,7 @@ pub fn run(
     std.mem.copy(u8, &buf, canon.fromCanonical(&raw_val));
 
     const value = Value{ .ptr = &buf };
-    return try value.resurrect(self.*, self.vm.stack, loc, ty);
+    return try canon.resurrect(self.*, value, self.vm.stack, loc, ty);
 }
 
 // name accessors ==============================================================
