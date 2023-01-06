@@ -229,6 +229,125 @@ pub const Block = struct {
     }
 };
 
+pub const Lifetime = struct {
+    const Self = @This();
+
+    pub const Pos = struct {
+        block: Label,
+        index: usize,
+
+        fn of(block: Label, index: usize) Pos {
+            return Pos{
+                .block = block,
+                .index = index,
+            };
+        }
+    };
+
+    start: Pos,
+    stop: Pos,
+
+    fn of(start: Pos, stop: Pos) Self {
+        return Self{
+            .start = start,
+            .stop = stop,
+        };
+    }
+};
+
+/// map of the lifetime of each local
+pub const Prophecy = struct {
+    const Self = @This();
+
+    ref: FuncRef,
+    map: []Lifetime,
+
+    const OpMeta = struct {
+        to: ?Local,
+        uses: []const Local,
+    };
+
+    /// creates OpMeta using buffer memory
+    fn getMeta(buf: []Local, op: Op) OpMeta {
+        const to: ?Local = switch (op.classify()) {
+            inline else => |data|
+                if (@hasField(@TypeOf(data), "to")) data.to else null
+        };
+
+        // usage
+        var len: usize = 0;
+        switch (op.classify()) {
+            .ldc, .alloca, .jump => {},
+            .call => |call| {
+                buf[0] = call.func;
+                std.mem.copy(Local, buf[1..], call.params);
+                len = 1 + call.params.len;
+            },
+            .branch => |br| {
+                buf[0] = br.cond;
+                len = 1;
+            },
+            inline .pure, .impure => |data| {
+                std.mem.copy(Local, buf, data.params);
+                len = data.params.len;
+            },
+        }
+
+        return OpMeta{
+            .to = to,
+            .uses = buf[0..len],
+        };
+    }
+
+    pub fn init(ally: Allocator, func: Func) Allocator.Error!Self {
+        // init map
+        const map = try ally.alloc(Lifetime, func.locals.items.len);
+
+        const entry = Lifetime.Pos.of(Label.of(0), 0);
+        std.mem.set(Lifetime, map, Lifetime.of(entry, entry));
+
+        // values created from computation
+        for (func.blocks.items) |block, i| {
+            const label = Label.of(i);
+            for (block.ops.items) |op, j| {
+                var buf: [256]Local = undefined;
+                const meta = getMeta(&buf, op);
+                const here = Lifetime.Pos.of(label, j);
+
+                // new ops
+                if (meta.to) |to| {
+                    map[to.index].start = here;
+                }
+
+                // refreshed ops
+                for (meta.uses) |refresh| {
+                    map[refresh.index].stop = here;
+                }
+            }
+        }
+
+        return Self{
+            .ref = func.ref,
+            .map = map,
+        };
+    }
+
+    pub fn deinit(self: *Self, ally: Allocator) void {
+        ally.free(self.map);
+    }
+
+    pub fn get(self: Self, local: Local) Lifetime {
+        return self.map.items[local.index];
+    }
+
+    pub fn render(self: Self, ctx: *kz.Context) !kz.Ref {
+        _ = self;
+        _ = ctx;
+
+        @panic("TODO");
+    }
+};
+
 pub const FuncRef = packed struct {
     const Self = @This();
 
