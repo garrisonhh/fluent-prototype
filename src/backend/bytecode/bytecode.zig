@@ -98,7 +98,6 @@ pub const Program = struct {
     const Self = @This();
 
     entry: u64,
-    static: []const u8,
     program: []const align(16) Inst,
 
     fn renderOpcode(ctx: *kz.Context, opcode: Opcode) !kz.Ref {

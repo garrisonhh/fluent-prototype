@@ -70,7 +70,6 @@ pub const Builder = struct {
         stop: InstRef,
     };
 
-    static: std.ArrayListUnmanaged(u8) = .{},
     program: std.ArrayListAlignedUnmanaged(Inst, 16) = .{},
     // tracks backreferences while compiling
     refs: std.AutoHashMapUnmanaged(SsaPos, BackRef) = .{},
@@ -78,7 +77,6 @@ pub const Builder = struct {
     regions: std.AutoHashMapUnmanaged(ssa.FuncRef, Region) = .{},
 
     pub fn deinit(self: *Self, ally: Allocator) void {
-        self.static.deinit(ally);
         self.program.deinit(ally);
         self.refs.deinit(ally);
         self.regions.deinit(ally);
@@ -106,7 +104,6 @@ pub const Builder = struct {
 
         return Program{
             .entry = backref.resolved.index,
-            .static = self.static.items,
             .program = self.program.items,
         };
     }
@@ -171,16 +168,6 @@ pub const Builder = struct {
 
     fn addInst(self: *Self, ally: Allocator, inst: Inst) Allocator.Error!void {
         try self.program.append(ally, inst);
-    }
-
-    fn addStatic(
-        self: *Self,
-        ally: Allocator,
-        data: []const u8
-    ) Allocator.Error!usize {
-        const index = self.static.items.len;
-        try self.static.appendSlice(ally, data);
-        return index;
     }
 
     fn addRegion(
