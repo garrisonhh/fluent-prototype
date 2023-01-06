@@ -71,12 +71,7 @@ fn analyzeSymbol(
         return error.FluentError;
     };
 
-    const inner_expr = TExpr{
-        .ty = ty,
-        .loc = expr.loc,
-        .data = .{ .name = name }
-    };
-
+    const inner_expr = TExpr.init(expr.loc, false, ty, .{ .name = name });
     return try unifyTExpr(env, inner_expr, outward);
 }
 
@@ -136,7 +131,7 @@ fn analyzeAddrOf(
     // generate this texpr
     const ptr_ty = try env.identify(Type.initPtr(.single, subexpr.ty));
 
-    const texpr = TExpr.init(expr.loc, ptr_ty, TExpr.Data{
+    const texpr = TExpr.init(expr.loc, false, ptr_ty, TExpr.Data{
         .ptr = try util.placeOn(env.ally, subexpr)
     });
     return try unifyTExpr(env, texpr, outward);
@@ -185,11 +180,7 @@ fn analyzeDo(
     ret_expr.* = try analyzeExpr(env, scope, final, outward);
 
     // create TExpr
-    const texpr = TExpr{
-        .ty = ret_expr.ty,
-        .loc = expr.loc,
-        .data = .{ .call = texprs }
-    };
+    const texpr = TExpr.init(expr.loc, false, ret_expr.ty, .{ .call = texprs });
     return try unifyTExpr(env, texpr, outward);
 }
 
@@ -229,11 +220,7 @@ fn analyzeArray(
             .of = final_subty,
         }
     });
-    const texpr = TExpr{
-        .ty = ty,
-        .loc = expr.loc,
-        .data = .{ .array = texprs },
-    };
+    const texpr = TExpr.init(expr.loc, false, ty, .{ .array = texprs });
     return unifyTExpr(env, texpr, outward);
 }
 
@@ -288,7 +275,7 @@ fn firstDefPass(env: *Env, scope: Name, expr: SExpr) SemaError!DeferredDef {
 
     // store first pass info for the def
     const ty = type_value.data.ty;
-    const pie_stone = TExpr.init(expr.loc, ty, .{ .builtin = .pie_stone });
+    const pie_stone = TExpr.initBuiltin(expr.loc, ty, .pie_stone);
     const name = env.def(scope, symbol, pie_stone) catch |e| {
         return filterDefError(expr.loc, e);
     };
@@ -374,7 +361,7 @@ fn analyzeNamespace(
 
     // evaluate to unit
     const unit = try env.identify(Type{ .unit = {} });
-    const texpr = TExpr.init(expr.loc, unit, .{ .unit = {} });
+    const texpr = TExpr.init(expr.loc, true, unit, .{ .unit = {} });
     return try unifyTExpr(env, texpr, outward);
 }
 
@@ -450,7 +437,7 @@ fn analyzeFn(
     const local = env.def(
         scope,
         comptime Symbol.init("lambda"),
-        TExpr.init(expr.loc, outward, .{ .builtin = .pie_stone })
+        TExpr.init(expr.loc, false, outward, .{ .builtin = .pie_stone })
     ) catch |e| return filterDefError(expr.loc, e);
 
     // declare params
@@ -464,7 +451,7 @@ fn analyzeFn(
         // define parameter
         const sym = param.data.symbol;
         const ty = func.takes[i];
-        const pexpr = TExpr.init(param.loc, ty, .{
+        const pexpr = TExpr.init(param.loc, false, ty, .{
             .param = TExpr.Param{ .func = local, .index = i }
         });
         _ = env.def(local, sym, pexpr) catch |e| {
@@ -475,7 +462,7 @@ fn analyzeFn(
     // analyze body
     const body = try analyzeExpr(env, local, exprs[2], func.returns);
 
-    return TExpr.init(expr.loc, outward, .{
+    return TExpr.init(expr.loc, false, outward, .{
         .func = TExpr.Func{
             .name = local,
             .body = try util.placeOn(env.ally, body),
@@ -495,7 +482,7 @@ fn analyzeCall(
     // check for unit expr `()`
     if (exprs.len == 0) {
         const unit = try env.identify(Type{ .unit = {} });
-        const texpr = TExpr.init(expr.loc, unit, .{ .unit = {} });
+        const texpr = TExpr.init(expr.loc, true, unit, .{ .unit = {} });
         return try unifyTExpr(env, texpr, outward);
     }
 
@@ -553,11 +540,8 @@ fn analyzeCall(
     }
 
     // create TExpr
-    const texpr = TExpr{
-        .ty = fn_ty.func.returns,
-        .loc = expr.loc,
-        .data = TExpr.Data{ .call = texprs },
-    };
+    const ty = fn_ty.func.returns;
+    const texpr = TExpr.init(expr.loc, false, ty, .{ .call = texprs });
     return try unifyTExpr(env, texpr, outward);
 }
 
@@ -595,8 +579,12 @@ fn unifyTExpr(env: *Env, texpr: TExpr, outward: TypeId) SemaError!TExpr {
         // cast is possible
         const builtin_ty = try env.identify(Type{ .builtin = {} });
         const cast = TExpr.initBuiltin(texpr.loc, builtin_ty, .cast);
-        const final = try TExpr.initCall(env.ally, texpr.loc, outward, cast, 1);
-        final.data.call[1] = texpr;
+        const final = try TExpr.initCall(
+            env.ally,
+            texpr.loc,
+            outward,
+            &[2]TExpr{cast, texpr}
+        );
 
         return final;
     }
@@ -616,32 +604,31 @@ fn analyzeExpr(
         .array => try analyzeArray(env, scope, expr, outward),
         .symbol => try analyzeSymbol(env, scope, expr, outward),
         else => lit: {
-            const texpr = TExpr{
-                .ty = switch (expr.data) {
-                    .@"bool" => try env.identify(Type{ .@"bool" = {} }),
-                    .number => |num| try typeOfNumber(env, num),
-                    // string literals are (Array N u8)
-                    .string => |str| try env.identify(Type{
-                        .array = Type.Array{
-                            .size = str.str.len,
-                            .of = try env.identify(Type{
-                                .number = .{ .layout = .uint, .bits = 8 }
-                            }),
-                        }
-                    }),
-                    .call, .array, .symbol => unreachable,
+            // construct equivalent literal TExpr
+            const ty = switch (expr.data) {
+                .@"bool" => try env.identify(Type{ .@"bool" = {} }),
+                .number => |num| try typeOfNumber(env, num),
+                // string literals are (Array N u8)
+                .string => |str| try env.identify(Type{
+                    .array = Type.Array{
+                        .size = str.str.len,
+                        .of = try env.identify(Type{
+                            .number = .{ .layout = .uint, .bits = 8 }
+                        }),
+                    }
+                }),
+                .call, .array, .symbol => unreachable,
+            };
+            const data = switch (expr.data) {
+                .@"bool" => |val| TExpr.Data{ .@"bool" = val },
+                .number => |num| TExpr.Data{ .number = num },
+                .string => |sym| TExpr.Data{
+                    .string = try sym.clone(env.ally)
                 },
-                .loc = expr.loc,
-                .data = switch (expr.data) {
-                    .@"bool" => |val| TExpr.Data{ .@"bool" = val },
-                    .number => |num| TExpr.Data{ .number = num },
-                    .string => |sym| TExpr.Data{
-                        .string = try sym.clone(env.ally)
-                    },
-                    else => unreachable
-                },
+                else => unreachable
             };
 
+            const texpr = TExpr.init(expr.loc, true, ty, data);
             break :lit unifyTExpr(env, texpr, outward);
         }
     };

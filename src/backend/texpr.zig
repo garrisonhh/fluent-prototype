@@ -91,33 +91,57 @@ pub const Data = union(enum) {
     }
 };
 
+ty: TypeId,
 data: Data,
 loc: ?Loc,
-ty: TypeId,
+// if I know for sure this TExpr is a value, I can mark it
+known_const: bool,
 
-pub fn init(loc: ?Loc, ty: TypeId, data: Data) Self {
-    return Self{
+pub fn init(loc: ?Loc, known_const: bool, ty: TypeId, data: Data) Self {
+    var self = Self{
         .data = data,
         .loc = loc,
         .ty = ty,
+        .known_const = known_const,
     };
+
+    // check for known const-ness if not provided
+    self.known_const = self.known_const or con: {
+        // children must be const
+        for (self.getChildren()) |child| {
+            if (!child.known_const) {
+                break :con false;
+            }
+        }
+
+        // stored data must not require some kind of execution
+        break :con switch (self.data) {
+            .unit, .ty, .@"bool", .number, .string, .builtin, .func_ref, .ptr,
+            .array, .slice => true,
+            .name, .call, .func, .param => false,
+        };
+    };
+
+    return self;
 }
 
 pub fn initBuiltin(loc: ?Loc, ty: TypeId, b: Builtin) Self {
-    return Self.init(loc, ty, Data{ .builtin = b });
+    return Self.init(loc, true, ty, Data{ .builtin = b });
 }
 
+/// clones exprs and creates call
 pub fn initCall(
     ally: Allocator,
     loc: ?Loc,
     ty: TypeId,
-    head: Self,
-    nargs: usize
+    exprs: []const Self
 ) Allocator.Error!Self {
-    const exprs = try ally.alloc(Self, nargs + 1);
-    exprs[0] = head;
+    const cloned = try ally.alloc(Self, exprs.len);
+    for (exprs) |expr, i| {
+        cloned[i] = try expr.clone(ally);
+    }
 
-    return Self.init(loc, ty, Data{ .call = exprs });
+    return Self.init(loc, false, ty, .{ .call = cloned });
 }
 
 pub fn deinit(self: Self, ally: Allocator) void {
@@ -171,15 +195,12 @@ pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         .data = data,
         .loc = self.loc,
         .ty = self.ty,
+        .known_const = self.known_const,
     };
 }
 
 pub fn eql(self: Self, other: Self) bool {
-    if (!self.ty.eql(other.ty)) {
-        return false;
-    }
-
-    return self.data.eql(other.data);
+    return self.ty.eql(other.ty) and self.data.eql(other.data);
 }
 
 /// gets children of any TExpr if they exist.
@@ -196,30 +217,6 @@ pub fn getChildren(self: Self) []Self {
 
 pub fn isBuiltin(self: Self, tag: Builtin) bool {
     return self.data == .builtin and self.data.builtin == tag;
-}
-
-fn isValueChildren(exprs: []const Self) bool {
-    for (exprs) |expr| {
-        if (!expr.isValue()) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-/// finds whether the TExpr represents a value, meaning that it requires no
-/// further execution
-///
-/// TODO in many cases when I create a value TExpr I already know that it is a
-/// value TExpr, so I should cache `known_value: bool` and add it to `init`
-pub fn isValue(self: Self) bool {
-    return switch (self.data) {
-        .unit, .ty, .@"bool", .number, .string, .builtin, .func_ref => true,
-        .ptr => |child| child.isValue(),
-        .array, .slice => |arr| isValueChildren(arr),
-        .name, .call, .func, .param => false,
-    };
 }
 
 pub fn render(

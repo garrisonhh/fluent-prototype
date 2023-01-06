@@ -58,6 +58,9 @@ pub const TypeId = packed struct {
 /// but hashing and storing an arraylist of pointers allows the handle system
 /// to function, and the memory/speed tradeoff is worth it given the vast amount
 /// of these objects I'm creating and messing around with.
+///
+/// TODO I should cache all of the prelude types somehow so I can make fewer
+/// calls to identify!
 pub const TypeWelt = struct {
     const Self = @This();
 

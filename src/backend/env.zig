@@ -36,6 +36,7 @@ const Vm = @import("bytecode/vm.zig");
 const Program = @import("bytecode/bytecode.zig").Program;
 const canon = @import("canon.zig");
 const Value = @import("value.zig");
+const context = @import("../context.zig");
 
 const Self = @This();
 
@@ -109,6 +110,7 @@ pub fn tieLLRefs(
 pub fn run(
     self: *Self,
     prog: Program,
+    loc: ?context.Loc,
     ty: TypeId
 ) (Vm.RuntimeError || Value.ResError)!TExpr {
     try self.vm.execute(self.ally, &self.tw, prog);
@@ -120,7 +122,7 @@ pub fn run(
     std.mem.copy(u8, &buf, canon.fromCanonical(&raw_val));
 
     const value = Value{ .ptr = &buf };
-    return try value.resurrect(self.*, self.vm.stack, ty);
+    return try value.resurrect(self.*, self.vm.stack, loc, ty);
 }
 
 // name accessors ==============================================================
@@ -153,7 +155,7 @@ pub fn redef(self: *Self, name: Name, value: TExpr) DefError!void {
 pub fn defNamespace(self: *Self, scope: Name, sym: Symbol) DefError!Name {
     const nsty = try self.identify(Type{ .namespace = {} });
     // TODO what the fuck is stored in the namespace's value?
-    const expr = TExpr.init(null, nsty, .{ .unit = {} });
+    const expr = TExpr.init(null, false, nsty, .{ .unit = {} });
     return self.def(scope, sym, expr);
 }
 
@@ -165,7 +167,7 @@ pub fn defType(
     value: TypeId
 ) DefError!Name {
     const tyty = try self.identify(Type{ .ty = {} });
-    const expr = TExpr.init(null, tyty, .{ .ty = value });
+    const expr = TExpr.init(null, true, tyty, .{ .ty = value });
     const name = try self.def(scope, sym, expr);
     try self.tw.setName(self.ally, value, name);
 

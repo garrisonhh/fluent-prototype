@@ -75,7 +75,9 @@ fn removeTrivialCasts(env: Env, texpr: *TExpr) void {
         const original = texpr.*;
         defer original.deinit(env.ally);
 
-        texpr.* = TExpr.init(original.loc, original.ty, .{ .number = casted });
+        texpr.* = TExpr.init(original.loc, false, original.ty, .{
+            .number = casted
+        });
     }
 
     for (texpr.getChildren()) |*child| {

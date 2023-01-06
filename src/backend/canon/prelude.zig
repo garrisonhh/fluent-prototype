@@ -143,8 +143,10 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     _ = number;
 
     // the bool consts
-    try def(&env, "true", TExpr.init(null, @"bool", .{ .@"bool" = true }));
-    try def(&env, "false", TExpr.init(null, @"bool", .{ .@"bool" = false }));
+    const true_expr = TExpr.init(null, true, @"bool", .{ .@"bool" = true });
+    const false_expr = TExpr.init(null, true, @"bool", .{ .@"bool" = false });
+    try def(&env, "true", true_expr);
+    try def(&env, "false", false_expr);
 
     // define builtins
     const bin_cond = try fnType(&env, &.{@"bool", @"bool"}, @"bool");

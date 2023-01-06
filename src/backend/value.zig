@@ -15,6 +15,7 @@ const Type = types.Type;
 const TExpr = @import("texpr.zig");
 const FuncRef = @import("ssa.zig").FuncRef;
 const canon = @import("canon.zig");
+const context = @import("../context.zig");
 
 const Self = @This();
 
@@ -102,6 +103,7 @@ pub fn resurrect(
     self: Self,
     env: Env,
     mem: []const u8,
+    loc: ?context.Loc,
     tid: TypeId
 ) ResError!TExpr {
     const ally = env.ally;
@@ -127,7 +129,7 @@ pub fn resurrect(
                 const src = self.ptr[i * el_size..(i + 1) * el_size];
                 std.mem.copy(u8, el_val.ptr, src);
 
-                children[i] = try el_val.resurrect(env, mem, arr.of);
+                children[i] = try el_val.resurrect(env, mem, loc, arr.of);
             }
 
             break :arr TExpr.Data{ .array = children };
@@ -146,7 +148,7 @@ pub fn resurrect(
 
                 // resurrect self from the child data
                 const val = Self{ .ptr = buf };
-                const child = try val.resurrect(env, mem, ptr.to);
+                const child = try val.resurrect(env, mem, loc, ptr.to);
                 break :ptr TExpr.Data{ .ptr = try util.placeOn(ally, child) };
             },
             .slice => slice: {
@@ -171,7 +173,7 @@ pub fn resurrect(
                     const start = index + i * el_size;
                     std.mem.copy(u8, buf, mem[start..start + el_size]);
 
-                    slice[i] = try el.resurrect(env, mem, ptr.to);
+                    slice[i] = try el.resurrect(env, mem, loc, ptr.to);
                 }
 
                 break :slice TExpr.Data{ .slice = slice };
@@ -189,5 +191,5 @@ pub fn resurrect(
         }
     };
 
-    return TExpr.init(null, tid, data);
+    return TExpr.init(loc, true, tid, data);
 }

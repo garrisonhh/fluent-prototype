@@ -317,7 +317,7 @@ pub const Func = struct {
             .ldc => |ldc| {
                 const ty = self.locals.items[ldc.to.index];
                 const value = self.consts.items[ldc.a.index];
-                const expr = try value.resurrect(env, env.vm.stack, ty);
+                const expr = try value.resurrect(env, env.vm.stack, null, ty);
                 defer expr.deinit(ctx.ally);
 
                 try line.appendSlice(&.{

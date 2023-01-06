@@ -65,7 +65,7 @@ pub fn evalTyped(
     // compiled, and executed on the virtual machine
     const final = final: {
         // values don't need further execution
-        if (texpr.isValue()) {
+        if (texpr.known_const) {
             if (builtin.mode == .Debug) {
                 const msg_start = now();
                 try stdout.writeAll("analyzed a constant.\n");
@@ -113,7 +113,7 @@ pub fn evalTyped(
         }
 
         // run compiled bytecode
-        const final = try env.run(prog, ssa.returns);
+        const final = try env.run(prog, texpr.loc, ssa.returns);
         try env.bc.removeFunc(env.ally, ssa.ref);
 
         // when returning structured data, the vm may return a pointer to the
