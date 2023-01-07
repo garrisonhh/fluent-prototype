@@ -90,27 +90,6 @@ pub fn evalTyped(
             try stdout.writeByte('\n');
 
             render_time += now() - t;
-
-            // TODO use a render function
-            const Prophecy = @import("ssa.zig").Prophecy;
-
-            for (env.prog.funcs.items) |func| {
-                const proph = try Prophecy.init(env.ally, func);
-
-                std.debug.print("[lifetimes for '{}']\n", .{func.name});
-                for (proph.map) |lt, j| {
-                    std.debug.print(
-                        "%{d}: @{d}:{d} - @{d}:{d}\n",
-                        .{
-                            j,
-                            lt.start.block.index,
-                            lt.start.index,
-                            lt.stop.block.index,
-                            lt.stop.index
-                        }
-                    );
-                }
-            }
         }
 
         // compile to bytecode

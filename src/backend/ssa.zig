@@ -340,11 +340,45 @@ pub const Prophecy = struct {
         return self.map.items[local.index];
     }
 
-    pub fn render(self: Self, ctx: *kz.Context) !kz.Ref {
-        _ = self;
-        _ = ctx;
+    pub fn render(self: Self, ctx: *kz.Context, env: Env) !kz.Ref {
+        const ally = ctx.ally;
+        const func = env.getFuncConst(self.ref);
 
-        @panic("TODO");
+        // map positions to y values
+        var map = std.AutoHashMap(Lifetime.Pos, usize).init(ally);
+        defer map.deinit();
+
+        var y: usize = 0;
+        for (func.blocks.items) |block, i| {
+            const label = Label.of(i);
+            y += 1;
+            for (block.ops.items) |_, j| {
+                try map.put(Lifetime.Pos.of(label, j), y);
+                y += 1;
+            }
+        }
+
+        // generate lifetime graph
+        const bars = try ally.alloc(kz.Ref, self.map.len);
+        defer ally.free(bars);
+
+        for (self.map) |lt, i| {
+            const index = map.get(lt.start).?;
+            const len = map.get(lt.stop).? - index + 1;
+
+            // generate bar
+            const stub = try ctx.block(.{1, y}, .{ .fg = .dark_gray }, '.');
+            const color: kz.Color = if (i % 5 == 0) .blue else .green;
+            const bar = try ctx.block(.{1, len}, .{ .bg = color }, ' ');
+
+            bars[i] = try ctx.unify(stub, bar, .{0, @intCast(isize, index)});
+        }
+
+        const graph = try ctx.stack(bars, .right, .{});
+
+        // label the graph
+        const title = try ctx.print(.{ .fg = .cyan }, "lifetimes", .{});
+        return try ctx.slap(graph, title, .top, .{});
     }
 };
 
@@ -620,7 +654,16 @@ pub const Func = struct {
         }
 
         const body = try ctx.stack(block_texs.items, .bottom, .{});
-        return ctx.slap(header, body, .bottom, .{});
+
+        // lifetime graph
+        var proph = try Prophecy.init(ctx.ally, self);
+        defer proph.deinit(ctx.ally);
+
+        const proph_tex = try proph.render(ctx, env);
+
+        // slap it together
+        const code = try ctx.slap(header, body, .bottom, .{});
+        return try ctx.slap(code, proph_tex, .right, .{ .space = 1 });
     }
 };
 
