@@ -128,7 +128,7 @@ pub fn run(
     loc: ?context.Loc,
     ty: TypeId
 ) (Vm.RuntimeError || canon.ResError)!TExpr {
-    try self.vm.execute(self.ally, &self.tw, prog);
+    try self.vm.execute(self, prog);
 
     // resurrect return value
     const value = canon.intoValue(&self.vm.scratch[Vm.RETURN.n]);

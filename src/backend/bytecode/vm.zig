@@ -8,6 +8,7 @@ const types = @import("../types.zig");
 const TypeWelt = types.TypeWelt;
 const TypeId = types.TypeId;
 const Type = types.Type;
+const Env = @import("../env.zig");
 const canon = @import("../canon.zig");
 
 const Self = @This();
@@ -51,6 +52,8 @@ pub fn deinit(self: Self, ally: Allocator) void {
     ally.free(self.stack);
 }
 
+pub const RuntimeError = Allocator.Error || canon.ResError;
+
 fn get(self: Self, reg: Register) u64 {
     return self.scratch[reg.n];
 }
@@ -64,14 +67,7 @@ fn mov(self: *Self, src: Register, dst: Register) void {
 }
 
 fn mov_imm(self: *Self, src: []const u8, dst: Register) void {
-    std.debug.assert(src.len <= 8);
-    comptime if (builtin.cpu.arch.endian() != .Little) {
-        @compileError("this code is optimized by space for little-endian arch");
-    };
-
-    const reg = @ptrCast(*[8]u8, &self.scratch[dst.n]);
-    self.set(dst, 0);
-    std.mem.copy(u8, reg, src);
+    self.set(dst, canon.to(src));
 }
 
 fn push(self: *Self, bytes: usize, src: Register) void {
@@ -91,46 +87,46 @@ fn pop(self: *Self, bytes: usize, dst: Register) void {
 
 fn makeFnType(
     self: *Self,
-    ally: Allocator,
-    tw: *TypeWelt,
+    env: *Env,
     param_slice: u64,
     return_id: u64
-) Allocator.Error!TypeId {
-    const sl_ptr_data = self.stack[param_slice..param_slice + 8];
-    const sl_len_data = self.stack[param_slice + 8..param_slice + 16];
-    const sl_ptr = canon.to(sl_ptr_data);
-    const sl_len = canon.to(sl_len_data);
+) RuntimeError!TypeId {
+    const ally = env.ally;
+    const tw = &env.tw;
 
-    // construct fn type data
-    // TODO formalize limit to number of function parameters
-    var param_buf: [256]TypeId = undefined;
-    const params = param_buf[0..sl_len];
+    // resurrect parameters (*[2]TypeId)
+    var slice_ptr = param_slice;
+    const params_val = canon.intoValue(&slice_ptr);
 
-    // extract typeid array
-    if (builtin.mode == .Debug) {
-        const tyty = Type{ .ty = {} };
-        std.debug.assert(tyty.sizeOf(tw.*) == 8);
+    const tyty = try tw.identify(ally, Type{ .ty = {} });
+    const ty_arr_ty = try tw.identify(ally, Type{
+        .array = .{ .size = 2, .of = tyty }
+    });
+    const expr = try canon.resurrect(
+        env.*,
+        params_val,
+        self.stack,
+        null,
+        try tw.identify(ally, Type.initPtr(.single, ty_arr_ty))
+    );
+    defer expr.deinit(ally);
+
+    const children = expr.data.ptr.data.array;
+
+    // manipulate parameters into type slice
+    var params_buf: [256]TypeId = undefined;
+    const params = params_buf[0..children.len];
+
+    for (children) |child, i| {
+        std.debug.print("resurrected param {} : {}\n", .{i, child.data.ty.index});
+        params[i] = child.data.ty;
     }
-
-    var i: usize = 0;
-    while (i < sl_len) : (i += 1) {
-        // extract u64
-        var buf: [8]u8 align(8) = undefined;
-        const addr = sl_ptr + i * 8;
-        std.mem.copy(u8, &buf, self.stack[addr..addr + 8]);
-
-        // bitcast to u64 and coerce to a typeid
-        const tid = @ptrCast(*const u64, &buf).*;
-        params[i] = TypeId{ .index = tid };
-    }
-
-    const returns = TypeId{ .index = return_id };
 
     // id type
     return try tw.identify(ally, Type{
         .func = Type.Func{
             .takes = params,
-            .returns = returns,
+            .returns = TypeId{ .index = return_id },
         }
     });
 }
@@ -139,12 +135,23 @@ fn now() f64 {
     return @intToFloat(f64, std.time.nanoTimestamp()) * 1e-6;
 }
 
-pub const RuntimeError = Allocator.Error;
+/// debug prints state of vm
+fn debug(self: Self, program: Program) void {
+    const ip = self.get(IP);
+    const inst = program.program[ip];
+    std.debug.print("[sp: {} fp: {}]\n", .{self.get(SP), self.get(FP)});
+    std.debug.print("{d:4}: {s} {X} {X} {X}\n", .{
+        ip,
+        @tagName(inst.op),
+        inst.a,
+        inst.b,
+        inst.c,
+    });
+}
 
 pub fn execute(
     self: *Self,
-    ally: Allocator,
-    tw: *TypeWelt,
+    env: *Env,
     program: Program
 ) RuntimeError!void {
     const start = now();
@@ -161,6 +168,8 @@ pub fn execute(
         const inst = insts[ip.*];
         const op = inst.op;
         const args = inst.getArgs();
+
+        // self.debug(program);
 
         switch (op) {
             .mov => {
@@ -204,14 +213,15 @@ pub fn execute(
                 }
 
                 self.mov(FP, SP);
+                self.pop(8, FP);
                 self.pop(8, IP);
             },
             .call => {
-                const n = insts[ip.* + 1].toInt();
-                ip.* += 1;
+                const dst = Register.of(args[0]);
                 self.push(8, IP);
+                self.push(8, FP);
                 self.mov(SP, FP);
-                self.set(IP, n);
+                self.set(IP, self.get(dst));
                 continue;
             },
             .pop => {
@@ -263,7 +273,7 @@ pub fn execute(
                     .slice_ty => slice: {
                         const el_ty = TypeId{ .index = arg };
                         const ty = Type.initPtr(.slice, el_ty);
-                        const tid = try tw.identify(ally, ty);
+                        const tid = try env.identify(ty);
 
                         break :slice tid.index;
                     },
@@ -291,7 +301,7 @@ pub fn execute(
                     .xor => lhs ^ rhs,
                     .shl => lhs << @intCast(u6, rhs),
                     .shr => lhs >> @intCast(u6, rhs),
-                    .fn_ty => (try self.makeFnType(ally, tw, lhs, rhs)).index,
+                    .fn_ty => (try self.makeFnType(env, lhs, rhs)).index,
                     else => unreachable
                 };
 

@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const kz = @import("kritzler");
 const builtin = @import("builtin");
 const Env = @import("env.zig");
 const ssa = @import("ssa/ssa.zig");
@@ -17,6 +18,7 @@ const building = @import("bytecode/building.zig");
 const canon = @import("canon.zig");
 const Value = canon.Value;
 const RegisterMap = @import("bytecode/register_map.zig");
+const TExpr = @import("texpr.zig");
 
 pub const Builder = building.Builder;
 pub const InstRef = bytecode.InstRef;
@@ -39,28 +41,126 @@ pub const Program = bytecode.Program;
 // - value pointers are stored as indices into the stack, and function pointers
 //   are stored as instruction indices
 
-pub const Error = Allocator.Error;
+pub const Error = Allocator.Error || canon.CrucifyError;
 
 fn compileOp(
-    env: *Env,
+    env: Env,
     b: *Builder,
     rmap: *RegisterMap,
     ref: FuncRef,
     op: Op,
 ) Error!void {
-    _ = env;
-    _ = b;
-    _ = rmap;
-    _ = ref;
-    _ = op;
+    const ally = env.ally;
 
-    @panic("TODO reimplement compileOp");
+    switch (op) {
+        .ldc => |ldc| {
+            // crucify and load a constant
+            const dst = rmap.get(ldc.to);
+            const texpr = ref.getConst(env, ldc.a);
+
+            const value = try canon.crucify(env, texpr);
+            defer value.deinit(env.ally);
+
+            try Bc.imm(b, ally, dst, value.buf);
+        },
+        .cast => |pure| {
+            const src = rmap.get(pure.params[0]);
+            const dst = rmap.get(pure.to);
+
+            // TODO cast requires more than bitcast in many cases
+            try b.addInst(ally, Bc.mov(src, dst));
+        },
+        .alloca => |all| {
+            // store stack pointer in a register and
+            const dst = rmap.get(all.to);
+            const size = rmap.getTemp();
+            defer rmap.dropTemp(size);
+
+            try b.addInst(ally, Bc.mov(Vm.SP, dst));
+            try Bc.imm(b, ally, size, canon.from(&all.size));
+            try b.addInst(ally, Bc.iadd(Vm.SP, size, Vm.SP));
+        },
+        .store => |imp| {
+            const src = rmap.get(imp.params[0]);
+            const dst = rmap.get(imp.params[1]);
+            const size = env.sizeOf(ref.getLocal(env, imp.params[0]));
+            const nbytes = @intCast(u8, size);
+
+            try b.addInst(ally, Bc.store(nbytes, src, dst));
+        },
+        .ret => |imp| {
+            const src = rmap.get(imp.params[0]);
+
+            try b.addInst(ally, Bc.mov(src, Vm.RETURN));
+            try b.addInst(ally, Bc.ret);
+        },
+        .call => |call| {
+            // map params
+            for (call.params) |param, i| {
+                const reg = Register.param(@intCast(Register.Index, i));
+                try rmap.mapExact(ally, b, param, reg);
+            }
+
+            // call func
+            const func = rmap.get(call.func);
+            const dst = rmap.get(call.to);
+
+            try b.addInst(ally, Bc.call(func));
+            try b.addInst(ally, Bc.mov(Vm.RETURN, dst));
+        },
+        inline .mod, .fn_ty => |pure, tag| {
+            // binary ops
+            const lhs = rmap.get(pure.params[0]);
+            const rhs = rmap.get(pure.params[1]);
+            const to = rmap.get(pure.to);
+
+            const con = switch (comptime tag) {
+                .mod => Bc.imod,
+                .fn_ty => Bc.fn_ty,
+                else => unreachable
+            };
+
+            try b.addInst(ally, con(lhs, rhs, to));
+        },
+        inline .add, .sub, .mul, .div => |pure, tag| {
+            // binary ops with type awareness
+            const lhs = rmap.get(pure.params[0]);
+            const rhs = rmap.get(pure.params[1]);
+            const to = rmap.get(pure.to);
+
+            const ty = env.tw.get(ref.getLocal(env, pure.to));
+
+            if (ty.* == .ptr
+             or ty.* == .number and ty.number.layout != .float) {
+                // integral math
+                const con = switch (comptime tag) {
+                    .add => Bc.iadd,
+                    .sub => Bc.isub,
+                    .mul => Bc.imul,
+                    .div => Bc.idiv,
+                    .mod => Bc.imod,
+                    else => unreachable
+                };
+
+                try b.addInst(ally, con(lhs, rhs, to));
+            } else if (ty.* == .number and ty.number.layout == .float) {
+                // floats
+                @panic("TODO compile float arithmetic");
+            } else {
+                unreachable;
+            }
+        },
+        else => |tag| std.debug.panic("TODO compile op {}", .{tag})
+    }
 }
 
 /// returns entry point of function
-fn compileFunc(env: *Env, b: *Builder, ref: FuncRef) Error!void {
+fn compileFunc(env: *Env, super: *Builder, ref: FuncRef) Error!void {
     const ally = env.ally;
     const func = env.getFunc(ref);
+
+    var b = Builder{};
+    defer b.deinit(env.ally);
 
     // mark start of region
     const start = b.here();
@@ -76,13 +176,14 @@ fn compileFunc(env: *Env, b: *Builder, ref: FuncRef) Error!void {
 
         // compile block ops
         for (block.ops.items) |op| {
-            try compileOp(env, b, &rmap, ref, op);
-            try rmap.next();
+            try compileOp(env.*, &b, &rmap, ref, op);
+            rmap.next();
         }
     }
 
     // mark end of region
     try b.addRegion(ally, ref, start, b.here());
+    try super.append(env.ally, b);
 }
 
 /// compiles func to bytecode and returns instruction address of the function's
@@ -90,12 +191,8 @@ fn compileFunc(env: *Env, b: *Builder, ref: FuncRef) Error!void {
 pub fn compile(env: *Env, ref: FuncRef) Error!InstRef {
     std.debug.assert(env.sizeOf(env.getFunc(ref).returns) <= 8);
 
-    var b = Builder{};
-    defer b.deinit(env.ally);
+    try compileFunc(env, &env.bc, ref);
 
-    try compileFunc(env, &b, ref);
-
-    // TODO try env.bc.append(env.ally, b);
-
-    @panic("TODO compile; append builder and get final entry point");
+    // get backref'd function location
+    return env.bc.refs.get(Pos.ofEntry(ref)).?.resolved;
 }

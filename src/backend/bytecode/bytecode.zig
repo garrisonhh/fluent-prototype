@@ -1,17 +1,17 @@
 //! bytecode program representation
 
 const std = @import("std");
-const kz = @import("kritzler");
 const Allocator = std.mem.Allocator;
+const kz = @import("kritzler");
 const canon = @import("../canon.zig");
 const Vm = @import("vm.zig");
+const Builder = @import("building.zig").Builder;
 
 /// a single operation
 pub const Opcode = enum(u8) {
     // NOTE '$bytes' here expects 1, 2, 4, or 8
 
     mov, // mov %src %dst
-    // static, // (? unsure) get pointer to static at an offset
 
     imm2, // imm %dst $hi $lo
     imm4, // imm %dst ; load next opcode as u32
@@ -251,6 +251,14 @@ pub const Construct = struct {
         };
     }
 
+    fn conR(comptime op: Opcode) fn(Reg) Inst {
+        return struct {
+            fn f(a: Reg) Inst {
+                return make(op, a.n, 0, 0);
+            }
+        }.f;
+    }
+
     fn conRR(comptime op: Opcode) fn(Reg, Reg) Inst {
         return struct {
             fn f(a: Reg, b: Reg) Inst {
@@ -283,7 +291,43 @@ pub const Construct = struct {
         }.f;
     }
 
+    /// constructs one of the immediate ops to load these bytes into a register
+    pub fn imm(
+        b: *Builder,
+        ally: Allocator,
+        dst: Reg,
+        bytes: []const u8
+    ) Allocator.Error!void {
+        std.debug.assert(bytes.len <= 8);
+
+        var buf: [8]u8 align(8) = [1]u8{0} ** 8;
+        std.mem.copy(u8, &buf, bytes);
+
+        // find nbytes
+        var nbytes: usize = 8;
+        while (nbytes > 0) : (nbytes -= 1) {
+            if (buf[nbytes - 1] != 0) {
+                break;
+            }
+        }
+
+        if (nbytes < 2) {
+            try b.addInst(ally, make(.imm2, dst.n, buf[0], buf[1]));
+        } else if (nbytes < 4) {
+            const n = @ptrCast(*const u32, &buf).*;
+            try b.addInst(ally, make(.imm4, dst.n, 0, 0));
+            try b.addInst(ally, Inst.fromInt(n));
+        } else {
+            const ns = @ptrCast(*const [2]u32, &buf);
+            try b.addInst(ally, make(.imm8, dst.n, 0, 0));
+            try b.addInst(ally, Inst.fromInt(ns[0]));
+            try b.addInst(ally, Inst.fromInt(ns[1]));
+        }
+    }
+
     pub const mov = conRR(.mov);
+    pub const ret = make(.ret, 0, 0, 0);
+    pub const call = conR(.call);
 
     pub const pop = conBR(.pop);
     pub const push = conBR(.push);

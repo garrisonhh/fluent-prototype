@@ -440,7 +440,7 @@ pub const FuncRef = packed struct {
         return self.index == other.index;
     }
 
-    pub fn getConst(self: Self, env: Env, c: Const) Value {
+    pub fn getConst(self: Self, env: Env, c: Const) TExpr {
         return env.getFuncConst(self).consts.items[c.index];
     }
 

@@ -25,17 +25,30 @@ fn writeCanon(dst: []u8, n: u64) void {
     std.mem.copy(u8, dst, canon.from(&n));
 }
 
-fn rawCrucify(buf: []u8, texpr: TExpr) CrucifyError!void {
+fn rawCrucify(env: Env, buf: []u8, texpr: TExpr) CrucifyError!void {
     switch (texpr.data) {
         .unit => {},
         .@"bool" => |b| buf[0] = if (b) 1 else 0,
         .ty => |ty| writeCanon(buf, ty.index),
+        .number => |num| {
+            var fba_buf: [16]u8 = undefined;
+            var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
+
+            const val = num.asValue(fba.allocator()) catch unreachable;
+            std.debug.assert(buf.len == val.buf.len);
+            std.mem.copy(u8, buf, val.buf);
+        },
         .array => |children| {
             const seg = @divExact(buf.len, children.len);
             for (children) |child, i| {
                 const index = i * seg;
-                rawCrucify(buf[index..index + seg], child);
+                try rawCrucify(env, buf[index..index + seg], child);
             }
+        },
+        .func_ref => |ref| {
+            // translate to bytecode ref for the vm
+            const bc_ref = env.compiled.get(ref).?;
+            writeCanon(buf, bc_ref.index);
         },
         else => |tag| std.debug.panic("TODO crucify {}\n", .{tag})
     }
@@ -48,7 +61,7 @@ pub fn crucify(env: Env, texpr: TExpr) CrucifyError!Value {
     const size = env.sizeOf(texpr.ty);
     const value = Value.of(try env.ally.alloc(u8, size));
 
-    try rawCrucify(value.buf, texpr);
+    try rawCrucify(env, value.buf, texpr);
 
     return value;
 }

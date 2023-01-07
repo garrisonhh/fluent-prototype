@@ -71,15 +71,36 @@ pub const Builder = struct {
     }
 
     pub fn append(
-        self: Self,
+        self: *Self,
         ally: Allocator,
         other: Self
     ) Allocator.Error!void {
-        _ = self;
-        _ = ally;
-        _ = other;
+        const offset = @intCast(u32, self.program.items.len);
 
-        @compileError("TODO append builders");
+        // add insts
+        // TODO modify call, jump, branch ops
+        try self.program.appendSlice(ally, other.program.items);
+
+        // add refs
+        var backrefs = other.refs.iterator();
+        while (backrefs.next()) |entry| {
+            std.debug.assert(entry.value_ptr.* == .resolved);
+            const ref = entry.value_ptr.resolved;
+
+            try self.refs.put(ally, entry.key_ptr.*, BackRef{
+                .resolved = InstRef.of(ref.index + offset)
+            });
+        }
+
+        // add regions
+        var regions = other.regions.iterator();
+        while (regions.next()) |entry| {
+            const region = entry.value_ptr;
+            try self.regions.put(ally, entry.key_ptr.*, Region{
+                .start = InstRef.of(region.start.index + offset),
+                .stop = InstRef.of(region.stop.index + offset),
+            });
+        }
     }
 
     /// branching instructions expect a position to branch to. this effectively
