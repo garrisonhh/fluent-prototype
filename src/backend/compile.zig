@@ -10,12 +10,12 @@ const Vm = @import("bytecode/vm.zig");
 const Register = Vm.Register;
 const bytecode = @import("bytecode/bytecode.zig");
 const Inst = bytecode.Inst;
-const build = @import("bytecode/build.zig");
-const SsaPos = build.SsaPos;
+const building = @import("bytecode/builder.zig");
+const SsaPos = building.SsaPos;
 const canon = @import("canon.zig");
 const Value = @import("value.zig");
 
-pub const Builder = build.Builder;
+pub const Builder = building.Builder;
 pub const InstRef = bytecode.InstRef;
 pub const Program = bytecode.Program;
 
