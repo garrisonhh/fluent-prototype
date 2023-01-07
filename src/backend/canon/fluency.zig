@@ -30,6 +30,7 @@ fn rawCrucify(env: Env, buf: []u8, texpr: TExpr) CrucifyError!void {
         .unit => {},
         .@"bool" => |b| buf[0] = if (b) 1 else 0,
         .ty => |ty| writeCanon(buf, ty.index),
+        .builtin => |b| writeCanon(buf, @enumToInt(b)),
         .number => |num| {
             var fba_buf: [16]u8 = undefined;
             var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
@@ -131,6 +132,10 @@ pub fn resurrect(
         .ty => ty: {
             const index = canon.to(value.buf);
             break :ty TExpr.Data{ .ty = TypeId{ .index = index } };
+        },
+        .builtin => b: {
+            const b = @intToEnum(canon.Builtin, canon.to(value.buf));
+            break :b TExpr.Data{ .builtin = b };
         },
         .array => |arr| arr: {
             const children = try ally.alloc(TExpr, arr.size);

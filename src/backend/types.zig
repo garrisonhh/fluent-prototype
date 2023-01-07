@@ -493,9 +493,9 @@ pub const Type = union(enum) {
         return switch (self) {
             .any, .set, .hole, .namespace => unreachable,
             .unit => 0,
-            .number => |num| (num.bits orelse 64) / 8,
             .@"bool" => 1,
-            .ty, .ptr, .func => 8,
+            .number => |num| (num.bits orelse 64) / 8,
+            .ty, .builtin, .ptr, .func => 8,
             .array => |arr| arr.size * tw.get(arr.of).sizeOf(tw),
             else => std.debug.panic("TODO sizeOf {s}", .{@tagName(self)})
         };

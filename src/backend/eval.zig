@@ -55,6 +55,7 @@ pub fn evalTyped(
         const tex = try texpr.render(&ctx, env.tw);
 
         try stdout.writeAll("[Analyzed AST]\n");
+        std.debug.print("known const? {}\n", .{texpr.known_const});
         try ctx.write(tex, stdout);
         try stdout.writeByte('\n');
 
