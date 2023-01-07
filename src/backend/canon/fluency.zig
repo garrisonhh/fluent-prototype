@@ -15,7 +15,49 @@ const Number = canon.Number;
 const Value = canon.Value;
 const FuncRef = @import("../ssa/ssa.zig").FuncRef;
 
-pub fn valueToNumber(value: Value, bits: u8, layout: Number.Layout) Number {
+// crucifixion =================================================================
+
+pub const CrucifyError = Allocator.Error;
+
+/// fills dst with zeroes and then copies canonical data
+fn writeCanon(dst: []u8, n: u64) void {
+    std.mem.set(u8, dst, 0);
+    std.mem.copy(u8, dst, canon.from(&n));
+}
+
+fn rawCrucify(buf: []u8, texpr: TExpr) CrucifyError!void {
+    switch (texpr.data) {
+        .unit => {},
+        .@"bool" => |b| buf[0] = if (b) 1 else 0,
+        .ty => |ty| writeCanon(buf, ty.index),
+        .array => |children| {
+            const seg = @divExact(buf.len, children.len);
+            for (children) |child, i| {
+                const index = i * seg;
+                rawCrucify(buf[index..index + seg], child);
+            }
+        },
+        else => |tag| std.debug.panic("TODO crucify {}\n", .{tag})
+    }
+}
+
+/// takes a texpr and converts it to bits allocated on the Env ally
+pub fn crucify(env: Env, texpr: TExpr) CrucifyError!Value {
+    std.debug.assert(texpr.known_const);
+
+    const size = env.sizeOf(texpr.ty);
+    const value = Value.of(try env.ally.alloc(u8, size));
+
+    try rawCrucify(value.buf, texpr);
+
+    return value;
+}
+
+// resurrection ================================================================
+
+pub const ResError = Allocator.Error || error { Unresurrectable };
+
+fn valueToNumber(value: Value, bits: u8, layout: Number.Layout) Number {
     // TODO could I make this more maintanable with inline else?
     const concrete: Number.Concrete = switch (layout) {
         .int => .{
@@ -50,8 +92,6 @@ pub fn valueToNumber(value: Value, bits: u8, layout: Number.Layout) Number {
         .data = concrete,
     };
 }
-
-pub const ResError = Allocator.Error || error { Unresurrectable };
 
 /// take a bunch of bits, along with a type, and magically turn them back into
 /// a TExpr.

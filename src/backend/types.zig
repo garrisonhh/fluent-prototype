@@ -492,6 +492,7 @@ pub const Type = union(enum) {
 
         return switch (self) {
             .any, .set, .hole, .namespace => unreachable,
+            .unit => 0,
             .number => |num| (num.bits orelse 64) / 8,
             .@"bool" => 1,
             .ptr, .ty => 8,
