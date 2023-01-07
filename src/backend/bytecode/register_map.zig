@@ -83,7 +83,7 @@ fn tie(self: *Self, local: Local, reg: Register) void {
 /// allocates a register for a local
 fn animate(self: *Self, local: Local) Error!void {
     std.debug.assert(!self.isAlive(local));
-    if (self.free.popOrNull) |reg| {
+    if (self.free.popOrNull()) |reg| {
         self.tie(local, reg);
     } else {
         @panic("TODO out of animatable registers; store data on stack");
@@ -94,7 +94,7 @@ fn animate(self: *Self, local: Local) Error!void {
 fn murder(self: *Self, local: Local) void {
     const reg = self.get(local);
     self.map[local.index] = null;
-    self.back[reg.index] = null;
+    self.back[reg.n] = null;
     self.free.appendAssumeCapacity(reg);
 }
 
@@ -109,7 +109,10 @@ fn isAlive(self: Self, local: Local) bool {
 
 /// iterate the lifetimes to the next ssa position
 pub fn next(self: *Self) Error!void {
-    self.pos = self.pos.next(self.func).?;
+    self.pos = self.pos.next(self.func) orelse {
+        // if next is called at the end of the function, do nothing
+        return;
+    };
 
     for (self.proph.map) |lt, i| {
         const local = Local.of(i);

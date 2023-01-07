@@ -278,7 +278,7 @@ pub const Pos = struct {
     pub fn order(self: Self, other: Self) std.math.Order {
         const xs = [_]usize{self.ref.index, self.block.index, self.index};
         const ys = [_]usize{other.ref.index, other.block.index, other.index};
-        return std.mem.order(usize, xs, ys);
+        return std.mem.order(usize, &xs, &ys);
     }
 
     pub fn eql(self: Self, other: Self) bool {

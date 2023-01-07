@@ -77,6 +77,7 @@ fn compileFunc(env: *Env, b: *Builder, ref: FuncRef) Error!void {
         // compile block ops
         for (block.ops.items) |op| {
             try compileOp(env, b, &rmap, ref, op);
+            try rmap.next();
         }
     }
 

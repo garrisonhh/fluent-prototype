@@ -307,5 +307,17 @@ fn lowerFunction(
 
 /// lowers expression as if it is the body of a function with no args
 pub fn lower(env: *Env, scope: Name, expr: TExpr) Error!FuncRef {
-    return try lowerFunction(env, scope, &.{}, expr);
+    const ref = try lowerFunction(env, scope, &.{}, expr);
+
+    if (builtin.mode == .Debug) {
+        const verify = @import("ssa/verify.zig").verify;
+
+        verify(env.*, env.getFuncConst(ref)) catch |e| {
+            std.debug.panic("SSA verify failed: {}", .{e});
+        };
+
+        std.debug.print("SSA successfully verified.\n", .{});
+    }
+
+    return ref;
 }
