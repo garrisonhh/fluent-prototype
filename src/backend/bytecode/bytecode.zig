@@ -68,15 +68,6 @@ pub const Inst = packed struct(u32) {
     b: u8,
     c: u8,
 
-    pub fn of(op: Opcode, a: u8, b: u8, c: u8) Self {
-        return Self{
-            .op = op,
-            .a = a,
-            .b = b,
-            .c = c,
-        };
-    }
-
     pub fn fromInt(n: u32) Self {
         return @bitCast(Self, n);
     }
@@ -86,6 +77,7 @@ pub const Inst = packed struct(u32) {
     }
 
     pub fn getArgs(self: *const Self) *const [3]u8 {
+        comptime std.debug.assert(@sizeOf(Self) == 4);
         return @ptrCast(*const [3]u8, &@ptrCast(*const [4]u8, self)[1]);
     }
 };
@@ -244,4 +236,67 @@ pub const Program = struct {
         // stack the lines
         return try ctx.stack(lines.items, .bottom, .{});
     }
+};
+
+/// constructors for Insts
+pub const Construct = struct {
+    const Reg = Vm.Register;
+
+    fn make(op: Opcode, a: u8, b: u8, c: u8) Inst {
+        return Inst{
+            .op = op,
+            .a = a,
+            .b = b,
+            .c = c,
+        };
+    }
+
+    fn conRR(comptime op: Opcode) fn(Reg, Reg) Inst {
+        return struct {
+            fn f(a: Reg, b: Reg) Inst {
+                return make(op, a.n, b.n, 0);
+            }
+        }.f;
+    }
+
+    fn conBR(comptime op: Opcode) fn(u8, Reg) Inst {
+        return struct {
+            fn f(a: u8, b: Reg) Inst {
+                return make(op, a, b.n, 0);
+            }
+        }.f;
+    }
+
+    fn conRRR(comptime op: Opcode) fn(Reg, Reg, Reg) Inst {
+        return struct {
+            fn f(a: Reg, b: Reg, c: Reg) Inst {
+                return make(op, a.n, b.n, c.n);
+            }
+        }.f;
+    }
+
+    fn conBRR(comptime op: Opcode) fn(u8, Reg, Reg) Inst {
+        return struct {
+            fn f(a: u8, b: Reg, c: Reg) Inst {
+                return make(op, a, b.n, c.n);
+            }
+        }.f;
+    }
+
+    pub const mov = conRR(.mov);
+
+    pub const pop = conBR(.pop);
+    pub const push = conBR(.push);
+
+    pub const load = conBRR(.load);
+    pub const store = conBRR(.store);
+
+    pub const iadd = conRRR(.iadd);
+    pub const isub = conRRR(.isub);
+    pub const imul = conRRR(.imul);
+    pub const idiv = conRRR(.idiv);
+    pub const imod = conRRR(.imod);
+
+    pub const fn_ty = conRRR(.fn_ty);
+    pub const slice_ty = conRR(.slice_ty);
 };

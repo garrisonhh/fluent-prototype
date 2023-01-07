@@ -90,8 +90,9 @@ pub fn getFunc(self: *Self, ref: SsaRef) *ssa.Func {
     return self.prog.get(ref);
 }
 
-pub fn getFuncConst(self: Self, ref: SsaRef) ssa.Func {
-    return self.prog.funcs.items[ref.index];
+/// invalidated by adding a new function to ssa
+pub fn getFuncConst(self: Self, ref: SsaRef) *const ssa.Func {
+    return &self.prog.funcs.items[ref.index];
 }
 
 pub fn removeFunc(self: *Self, ref: SsaRef) Allocator.Error!void {

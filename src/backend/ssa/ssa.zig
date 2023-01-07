@@ -229,20 +229,65 @@ pub const Block = struct {
     }
 };
 
-pub const Lifetime = struct {
+/// a hashable, unique location in an ssa program.
+pub const Pos = struct {
     const Self = @This();
 
-    pub const Pos = struct {
-        block: Label,
-        index: usize,
+    // ensure autohashability
+    comptime {
+        std.debug.assert(std.meta.trait.hasUniqueRepresentation(Self));
+    }
 
-        fn of(block: Label, index: usize) Pos {
-            return Pos{
-                .block = block,
-                .index = index,
-            };
+    ref: FuncRef,
+    block: Label,
+    index: usize,
+
+    pub fn of(ref: FuncRef, block: Label, index: usize) Self {
+        return Pos{
+            .ref = ref,
+            .block = block,
+            .index = index,
+        };
+    }
+
+    pub fn ofEntry(ref: FuncRef) Self {
+        return Pos{
+            .ref = ref,
+            .block = Label.of(0),
+            .index = 0,
+        };
+    }
+
+    /// attempts to iterate this pos to the next ssa op in the func; returns
+    /// null if this is the end of the function
+    pub fn next(self: Self, func: *const Func) ?Self {
+        // iterate index
+        if (self.index < func.blocks.items[self.block.index].ops.items.len) {
+            return Self.of(self.ref, self.block, self.index + 1);
         }
-    };
+
+        // iterate block
+        if (self.block.index < func.blocks.items.len) {
+            return Self.of(self.ref, Label.of(self.block.index + 1), 0);
+        }
+
+        // can't iterate
+        return null;
+    }
+
+    pub fn order(self: Self, other: Self) std.math.Order {
+        const xs = [_]usize{self.ref.index, self.block.index, self.index};
+        const ys = [_]usize{other.ref.index, other.block.index, other.index};
+        return std.mem.order(usize, xs, ys);
+    }
+
+    pub fn eql(self: Self, other: Self) bool {
+        return self.order(other) == .eq;
+    }
+};
+
+pub const Lifetime = struct {
+    const Self = @This();
 
     start: Pos,
     stop: Pos,
@@ -299,11 +344,11 @@ pub const Prophecy = struct {
         };
     }
 
-    pub fn init(ally: Allocator, func: Func) Allocator.Error!Self {
+    pub fn init(ally: Allocator, func: *const Func) Allocator.Error!Self {
         // init map
         const map = try ally.alloc(Lifetime, func.locals.items.len);
 
-        const entry = Lifetime.Pos.of(Label.of(0), 0);
+        const entry = Pos.ofEntry(func.ref);
         std.mem.set(Lifetime, map, Lifetime.of(entry, entry));
 
         // values created from computation
@@ -312,7 +357,7 @@ pub const Prophecy = struct {
             for (block.ops.items) |op, j| {
                 var buf: [256]Local = undefined;
                 const meta = getMeta(&buf, op);
-                const here = Lifetime.Pos.of(label, j);
+                const here = Pos.of(func.ref, label, j);
 
                 // new ops
                 if (meta.to) |to| {
@@ -345,7 +390,7 @@ pub const Prophecy = struct {
         const func = env.getFuncConst(self.ref);
 
         // map positions to y values
-        var map = std.AutoHashMap(Lifetime.Pos, usize).init(ally);
+        var map = std.AutoHashMap(Pos, usize).init(ally);
         defer map.deinit();
 
         var y: usize = 0;
@@ -353,7 +398,7 @@ pub const Prophecy = struct {
             const label = Label.of(i);
             y += 1;
             for (block.ops.items) |_, j| {
-                try map.put(Lifetime.Pos.of(label, j), y);
+                try map.put(Pos.of(self.ref, label, j), y);
                 y += 1;
             }
         }
@@ -656,7 +701,7 @@ pub const Func = struct {
         const body = try ctx.stack(block_texs.items, .bottom, .{});
 
         // lifetime graph
-        var proph = try Prophecy.init(ctx.ally, self);
+        var proph = try Prophecy.init(ctx.ally, &self);
         defer proph.deinit(ctx.ally);
 
         const proph_tex = try proph.render(ctx, env);

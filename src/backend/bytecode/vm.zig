@@ -13,10 +13,18 @@ const canon = @import("../canon.zig");
 const Self = @This();
 
 pub const Register = packed struct {
-    n: u8,
+    pub const Index = u8;
+    pub const COUNT = std.math.maxInt(Index);
 
-    pub fn of(n: u8) Register {
+    n: Index,
+
+    pub fn of(n: Index) Register {
         return Register{ .n = n };
+    }
+
+    /// parameter register by callconv
+    pub fn param(n: Index) Register {
+        return Register.of(n + RESERVED + 1);
     }
 };
 
@@ -29,7 +37,7 @@ pub const RESERVED = 8; // number of reserved registers
 pub const RETURN = Register.of(RESERVED); // the return register by callconv
 
 // registers for instructions to use
-scratch: [256]u64 = undefined,
+scratch: [Register.COUNT]u64 = undefined,
 // the call stack, used for temporary storage and function memory
 stack: []align(16) u8,
 
