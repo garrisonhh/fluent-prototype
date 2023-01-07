@@ -5,7 +5,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const util = @import("util");
-const Value = @import("../value.zig");
+const Value = @import("value.zig");
 
 pub const Layout = util.Number.Layout;
 

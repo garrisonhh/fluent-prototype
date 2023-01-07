@@ -35,7 +35,7 @@ const BcRef = compile.InstRef;
 const Vm = @import("bytecode/vm.zig");
 const Program = @import("bytecode/bytecode.zig").Program;
 const canon = @import("canon.zig");
-const Value = @import("value.zig");
+const Value = canon.Value;
 const context = @import("../context.zig");
 
 const Self = @This();
@@ -129,14 +129,9 @@ pub fn run(
     ty: TypeId
 ) (Vm.RuntimeError || canon.ResError)!TExpr {
     try self.vm.execute(self.ally, &self.tw, prog);
-    const raw_val = self.vm.scratch[Vm.RETURN.n];
 
-    // convert to value
-    var buf: [8]u8 align(16) = undefined;
-    std.mem.set(u8, &buf, 0);
-    std.mem.copy(u8, &buf, canon.fromCanonical(&raw_val));
-
-    const value = Value{ .ptr = &buf };
+    // resurrect return value
+    const value = canon.intoValue(&self.vm.scratch[Vm.RETURN.n]);
     return try canon.resurrect(self.*, value, self.vm.stack, loc, ty);
 }
 

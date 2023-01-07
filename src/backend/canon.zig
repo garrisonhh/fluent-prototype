@@ -5,11 +5,12 @@ const builtin = @import("builtin");
 
 pub const Number = @import("canon/number.zig");
 pub const Builtin = @import("canon/builtins.zig").Builtin;
+pub const Value = @import("canon/value.zig");
 pub usingnamespace @import("canon/prelude.zig");
 pub usingnamespace @import("canon/fluency.zig");
 
 /// given up to 8 bytes, return canonical u64 representation for vm
-pub fn toCanonical(bytes: []const u8) u64 {
+pub fn to(bytes: []const u8) u64 {
     std.debug.assert(bytes.len <= 8);
     std.debug.assert(builtin.cpu.arch.endian() == .Little);
 
@@ -20,9 +21,14 @@ pub fn toCanonical(bytes: []const u8) u64 {
     return @ptrCast(*const u64, &dst).*;
 }
 
-pub fn fromCanonical(n: *const u64) []const u8 {
-    std.debug.assert(builtin.cpu.arch.endian() == .Little);
-
+pub fn from(n: *const u64) []const u8 {
     const nbytes = 8 - (@ctz(n.*) / 8);
     return @ptrCast(*const [8]u8, n)[0..nbytes];
+}
+
+pub fn intoValue(n: *u64) Value {
+    const nbytes = 8 - (@ctz(n.*) / 8);
+    const buf = @ptrCast(*[8]u8, n)[0..nbytes];
+
+    return Value.of(buf);
 }

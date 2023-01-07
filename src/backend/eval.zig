@@ -17,8 +17,8 @@ const analyze = @import("sema.zig").analyze;
 const lower = @import("lower.zig").lower;
 const compile = @import("compile.zig").compile;
 const run = @import("bytecode/vm.zig").run;
-const Value = @import("value.zig");
 const canon = @import("canon.zig");
+const Value = canon.Value;
 
 pub const Error =
     std.mem.Allocator.Error

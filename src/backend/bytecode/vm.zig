@@ -98,8 +98,8 @@ fn makeFnType(
 ) Allocator.Error!TypeId {
     const sl_ptr_data = self.stack[param_slice..param_slice + 8];
     const sl_len_data = self.stack[param_slice + 8..param_slice + 16];
-    const sl_ptr = canon.toCanonical(sl_ptr_data);
-    const sl_len = canon.toCanonical(sl_len_data);
+    const sl_ptr = canon.to(sl_ptr_data);
+    const sl_len = canon.to(sl_len_data);
 
     // construct fn type data
     // TODO formalize limit to number of function parameters
@@ -220,13 +220,13 @@ pub fn execute(
                 self.stack[SP.n] -= nbytes;
                 const addr = self.get(SP);
                 const data = self.stack[addr..addr + nbytes];
-                self.set(dst, canon.toCanonical(data));
+                self.set(dst, canon.to(data));
             },
             .push => {
                 const nbytes = args[0];
                 const src = Register.of(args[0]);
                 const value = self.get(src);
-                const data = canon.fromCanonical(&value);
+                const data = canon.from(&value);
                 const addr = self.get(SP);
                 std.mem.copy(u8, self.stack[addr..addr + nbytes], data);
             },
@@ -237,7 +237,7 @@ pub fn execute(
                 // read canonical data
                 const addr = self.get(src);
                 const data = self.stack[addr..addr + nbytes];
-                self.set(dst, canon.toCanonical(data));
+                self.set(dst, canon.to(data));
             },
             .store => {
                 const nbytes = args[0];
@@ -246,7 +246,7 @@ pub fn execute(
 
                 // format register canonically
                 const value = self.get(src);
-                const data = canon.fromCanonical(&value);
+                const data = canon.from(&value);
                 // write
                 const addr = self.get(dst);
                 const slice = self.stack[addr..addr + nbytes];

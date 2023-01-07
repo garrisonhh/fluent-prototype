@@ -172,13 +172,13 @@ pub const Program = struct {
                     try line.append(try renderReg(ctx, args[1]));
                 },
                 .imm2 => {
-                    const n = canon.toCanonical(args[1..3]);
+                    const n = canon.to(args[1..3]);
                     try line.append(try renderReg(ctx, args[0]));
                     try line.append(try renderImm(ctx, n));
                 },
                 .imm4 => {
                     const bytes = @ptrCast(*const [4]u8, &insts[i + 1]);
-                    const n = canon.toCanonical(bytes);
+                    const n = canon.to(bytes);
                     i += 1;
 
                     try line.append(try renderReg(ctx, args[0]));
@@ -186,7 +186,7 @@ pub const Program = struct {
                 },
                 .imm8 => {
                     const bytes = @ptrCast(*const [8]u8, insts[i + 1..i + 3]);
-                    const n = canon.toCanonical(bytes);
+                    const n = canon.to(bytes);
                     i += 2;
 
                     try line.append(try renderReg(ctx, args[0]));

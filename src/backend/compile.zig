@@ -15,7 +15,7 @@ const Inst = bytecode.Inst;
 const Bc = bytecode.Construct;
 const building = @import("bytecode/building.zig");
 const canon = @import("canon.zig");
-const Value = @import("value.zig");
+const Value = canon.Value;
 const RegisterMap = @import("bytecode/register_map.zig");
 
 pub const Builder = building.Builder;

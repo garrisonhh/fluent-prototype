@@ -5,7 +5,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const util = @import("util");
 const TExpr = @import("../texpr.zig");
-const Value = @import("../value.zig");
 const Env = @import("../env.zig");
 const Loc = @import("../../context.zig").Loc;
 const types = @import("../types.zig");
@@ -13,6 +12,7 @@ const Type = types.Type;
 const TypeId = types.TypeId;
 const canon = @import("../canon.zig");
 const Number = canon.Number;
+const Value = canon.Value;
 const FuncRef = @import("../ssa/ssa.zig").FuncRef;
 
 pub fn valueToNumber(value: Value, bits: u8, layout: Number.Layout) Number {
@@ -76,7 +76,7 @@ pub fn resurrect(
             };
         },
         .ty => ty: {
-            const index = canon.toCanonical(value.ptr);
+            const index = canon.to(value.buf);
             break :ty TExpr.Data{ .ty = TypeId{ .index = index } };
         },
         .array => |arr| arr: {
@@ -84,14 +84,14 @@ pub fn resurrect(
 
             // resurrect elements
             const el_size = env.sizeOf(arr.of);
-            const buf = try ally.alignedAlloc(u8, 16, el_size);
+            const buf = try ally.alloc(u8, el_size);
             defer ally.free(buf);
-            const el_val = Value{ .ptr = buf };
+            const el_val = Value.of(buf);
 
             var i: usize = 0;
             while (i < arr.size) : (i += 1) {
-                const src = value.ptr[i * el_size..(i + 1) * el_size];
-                std.mem.copy(u8, el_val.ptr, src);
+                const src = value.buf[i * el_size..(i + 1) * el_size];
+                std.mem.copy(u8, el_val.buf, src);
 
                 children[i] = try resurrect(env, el_val, mem, loc, arr.of);
             }
@@ -103,39 +103,35 @@ pub fn resurrect(
             .single => ptr: {
                 // resurrect data being pointed to
                 const size = env.sizeOf(ptr.to);
-                const index = canon.toCanonical(value.ptr);
+                const index = canon.to(value.buf);
 
-                const buf = try ally.alignedAlloc(u8, 16, size);
-                defer ally.free(buf);
-
-                std.mem.copy(u8, buf, mem[index..index + size]);
+                const val = try Value.init(ally, mem[index..index + size]);
+                defer val.deinit(ally);
 
                 // resurrect self from the child data
-                const val = Value{ .ptr = buf };
                 const child = try resurrect(env, val, mem, loc, ptr.to);
                 break :ptr TExpr.Data{ .ptr = try util.placeOn(ally, child) };
             },
             .slice => slice: {
                 // get struct data
-                const struct_index = canon.toCanonical(value.ptr);
+                const struct_index = canon.to(value.buf);
                 const struct_data = mem[struct_index..struct_index + 16];
 
                 // get ptr + len
-                const index = canon.toCanonical(struct_data[0..8]);
-                const len = canon.toCanonical(struct_data[8..16]);
+                const index = canon.to(struct_data[0..8]);
+                const len = canon.to(struct_data[8..16]);
 
                 // resurrect each subvalue
                 const el_size = env.sizeOf(ptr.to);
                 const slice = try ally.alloc(TExpr, len);
 
-                const buf = try ally.alignedAlloc(u8, 16, el_size);
-                defer ally.free(buf);
-                const el = Value{ .ptr = buf };
+                const el = Value.of(try ally.alloc(u8, el_size));
+                defer el.deinit(ally);
 
                 var i: usize = 0;
                 while (i < len) : (i += 1) {
                     const start = index + i * el_size;
-                    std.mem.copy(u8, buf, mem[start..start + el_size]);
+                    std.mem.copy(u8, el.buf, mem[start..start + el_size]);
 
                     slice[i] = try resurrect(env, el, mem, loc,ptr.to);
                 }
@@ -145,7 +141,7 @@ pub fn resurrect(
         },
         // functions are lowered as FuncRef indices
         .func => TExpr.Data{
-            .func_ref = FuncRef.of(canon.toCanonical(value.ptr))
+            .func_ref = FuncRef.of(canon.to(value.buf))
         },
         else => {
             const text = tid.writeAlloc(ally, env.tw) catch {
