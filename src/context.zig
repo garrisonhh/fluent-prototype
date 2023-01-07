@@ -236,7 +236,7 @@ pub fn loadSource(path: []const u8) LoadSourceError!FileHandle {
     const max_bytes = std.math.maxInt(Loc.CharIndex);
     const text = try fs_file.readToEndAlloc(ally, max_bytes);
 
-    return try addSource(abs_path, text);
+    return try addSource(path, text);
 }
 
 pub const Message = struct {

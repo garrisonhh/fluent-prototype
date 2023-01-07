@@ -97,7 +97,7 @@ pub fn getFuncConst(self: Self, ref: SsaRef) *const ssa.Func {
 
 pub fn removeFunc(self: *Self, ref: SsaRef) Allocator.Error!void {
     try self.bc.removeFunc(self.ally, ref);
-    self.prog.remove(self.ally, ref);
+    try self.prog.remove(self.ally, ref);
 }
 
 /// calls the compile pipeline for an ssa function and then ties them
@@ -219,7 +219,7 @@ pub fn dump(self: *Self, ally: Allocator, writer: anytype) !void {
     for (entries) |entry| {
         const name = try renderName(&ctx, entry.key.*);
         const pred = try ctx.slap(name, try ctx.clone(eq), .right, .{});
-        const value = try entry.value.render(&ctx, self.tw);
+        const value = try entry.value.render(&ctx, self.*);
         const decl = try ctx.slap(pred, value, .right, .{});
 
         try decls.append(decl);

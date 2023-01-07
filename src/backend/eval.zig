@@ -52,10 +52,9 @@ pub fn evalTyped(
         var ctx = kz.Context.init(env.ally);
         defer ctx.deinit();
 
-        const tex = try texpr.render(&ctx, env.tw);
+        const tex = try texpr.render(&ctx, env.*);
 
         try stdout.writeAll("[Analyzed AST]\n");
-        std.debug.print("known const? {}\n", .{texpr.known_const});
         try ctx.write(tex, stdout);
         try stdout.writeByte('\n');
 
@@ -138,7 +137,7 @@ pub fn evalTyped(
         var ctx = kz.Context.init(env.ally);
         defer ctx.deinit();
 
-        const tex = try final.render(&ctx, env.tw);
+        const tex = try final.render(&ctx, env.*);
 
         try stdout.writeAll("[Value]\n");
         try ctx.write(tex, stdout);

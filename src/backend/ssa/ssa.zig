@@ -398,7 +398,7 @@ pub const Prophecy = struct {
             const label = Label.of(i);
             y += 1;
             for (block.ops.items) |_, j| {
-                try map.put(Pos.of(self.ref, label, j), y);
+                try map.put(Pos.of(func.ref, label, j), y);
                 y += 1;
             }
         }
@@ -566,7 +566,7 @@ pub const Func = struct {
                 try line.appendSlice(&.{
                     try self.renderLocal(ctx, env, ldc.to),
                     try ctx.print(.{}, " = ", .{}),
-                    try expr.render(ctx, env.tw),
+                    try expr.render(ctx, env),
                 });
             },
             .call => |call| {
@@ -692,8 +692,7 @@ pub const Func = struct {
         var block_texs = std.ArrayList(kz.Ref).init(ctx.ally);
         defer block_texs.deinit();
 
-        var i: usize = 0;
-        while (i < self.blocks.items.len) : (i += 1) {
+        for (self.blocks.items) |_, i| {
             const tex = try self.renderBlock(ctx, env, Label.of(i));
             try block_texs.append(tex);
         }
@@ -757,12 +756,24 @@ pub const Program = struct {
 
     /// invalidated on next `add` call
     pub fn get(self: *Self, ref: FuncRef) *Func {
+        if (builtin.mode == .Debug) {
+            for (self.unused.items) |unused| {
+                if (unused.index == ref.index) {
+                    @panic("funcref use-after-free");
+                }
+            }
+        }
+
         return &self.funcs.items[ref.index];
     }
 
-    pub fn remove(self: *Self, ally: Allocator, ref: FuncRef) void {
-        var func = self.funcs.swapRemove(ref.index);
-        func.deinit(ally);
+    pub fn remove(
+        self: *Self,
+        ally: Allocator,
+        ref: FuncRef
+    ) Allocator.Error!void {
+        self.get(ref).deinit(ally);
+        try self.unused.append(ally, ref);
     }
 
     pub fn render(self: Self, ctx: *kz.Context, env: Env) !kz.Ref {
@@ -777,15 +788,15 @@ pub const Program = struct {
         }
 
         // render each ref if it's not unused
-        const refs = try ally.alloc(kz.Ref, self.funcs.items.len);
-        defer ally.free(refs);
+        var refs = std.ArrayList(kz.Ref).init(ally);
+        defer refs.deinit();
 
         for (self.funcs.items) |func, i| {
             if (!unused.contains(FuncRef.of(i))) {
-                refs[i] = try func.render(ctx, env);
+                try refs.append(try func.render(ctx, env));
             }
         }
 
-        return ctx.stack(refs, .bottom, .{ .space = 1 });
+        return ctx.stack(refs.items, .bottom, .{ .space = 1 });
     }
 };

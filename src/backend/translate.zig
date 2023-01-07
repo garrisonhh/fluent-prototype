@@ -36,21 +36,21 @@ fn translateCall(
     expr: RawExpr
 ) TranslateError!SExpr {
     const children = expr.children.?;
-    const exprs = try ally.alloc(SExpr, initial.len + children.len);
-    errdefer ally.free(exprs);
-
-    for (initial) |str, i| {
-        errdefer for (exprs[0..i]) |e| e.deinit(ally);
-        exprs[i] = try SExpr.initSymbol(ally, expr.loc, str);
+    var exprs = std.ArrayList(SExpr).init(ally);
+    errdefer {
+        for (exprs.items) |sexpr| sexpr.deinit(ally);
+        exprs.deinit();
     }
 
-    const dst = exprs[initial.len..];
-    for (children) |child, i| {
-        errdefer for (dst[0..i]) |e| e.deinit(ally);
-        dst[i] = try translate(ally, child);
+    for (initial) |str| {
+        try exprs.append(try SExpr.initSymbol(ally, expr.loc, str));
     }
 
-    return SExpr.initCall(expr.loc, exprs);
+    for (children) |child| {
+        try exprs.append(try translate(ally, child));
+    }
+
+    return SExpr.initCall(expr.loc, exprs.toOwnedSlice());
 }
 
 fn numberError(loc: Loc) TranslateError {

@@ -322,10 +322,6 @@ fn analyzeNamespace(
     defer ally.free(deferred);
 
     for (defs) |def_expr, i| {
-        errdefer for (deferred[0..i]) |dedef| {
-            dedef.body.deinit(ally);
-        };
-
         // verify that this is a def
         if (def_expr.data != .call or def_expr.data.call.len == 0) {
             _ = try context.post(.err, def_expr.loc, "expected def", .{});
@@ -433,12 +429,11 @@ fn analyzeFn(
         return error.FluentError;
     }
 
-    // define function pie stone
-    const local = env.def(
-        scope,
-        comptime Symbol.init("lambda"),
-        TExpr.init(expr.loc, false, outward, .{ .builtin = .pie_stone })
-    ) catch |e| return filterDefError(expr.loc, e);
+    // define function as a namespace
+    const local_sym = comptime Symbol.init("lambda");
+    const local = env.defNamespace(scope, local_sym) catch |e| {
+        return filterDefError(expr.loc, e);
+    };
 
     // declare params
     for (params) |param, i| {
@@ -461,13 +456,14 @@ fn analyzeFn(
 
     // analyze body
     const body = try analyzeExpr(env, local, exprs[2], func.returns);
-
-    return TExpr.init(expr.loc, false, outward, .{
+    const final = TExpr.init(expr.loc, false, outward, .{
         .func = TExpr.Func{
             .name = local,
             .body = try util.placeOn(env.ally, body),
         }
     });
+
+    return final;
 }
 
 fn analyzeCall(

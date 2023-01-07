@@ -214,6 +214,14 @@ fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
         else => raw_head
     };
 
+    // TODO remove vvv
+    if (head.data == .func_ref) {
+        const stdout = std.io.getStdOut().writer();
+
+        stdout.writeAll("[env during lowerCall]\n") catch unreachable;
+        env.dump(env.ally, stdout) catch unreachable;
+    }
+
     const tail = exprs[1..];
 
     // builtins have their own logic

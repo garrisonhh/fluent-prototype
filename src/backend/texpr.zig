@@ -14,7 +14,7 @@ const context = @import("../context.zig");
 const Loc = context.Loc;
 const types = @import("types.zig");
 const TypeId = types.TypeId;
-const TypeWelt = types.TypeWelt;
+const Env = @import("env.zig");
 const canon = @import("canon.zig");
 const Builtin = canon.Builtin;
 const ssa = @import("ssa/ssa.zig");
@@ -222,7 +222,7 @@ pub fn isBuiltin(self: Self, tag: Builtin) bool {
 pub fn render(
     self: Self,
     ctx: *kz.Context,
-    tw: TypeWelt
+    env: Env,
 ) Allocator.Error!kz.Ref {
     const INDENT = 2;
     const faint = kz.Style{ .special = .faint };
@@ -231,7 +231,7 @@ pub fn render(
     const red = kz.Style{ .fg = .red };
 
     // type for header
-    const ty_text = try tw.get(self.ty).writeAlloc(ctx.ally, tw);
+    const ty_text = try env.tw.get(self.ty).writeAlloc(ctx.ally, env.tw);
     defer ctx.ally.free(ty_text);
 
     const ty_tex = try ctx.print(faint, "{s}", .{ty_text});
@@ -242,11 +242,16 @@ pub fn render(
             => try ctx.print(.{}, "{s}", .{@tagName(self.data)}),
         .unit => try ctx.print(.{}, "()", .{}),
         .func_ref => |fr|
-            try ctx.print(.{}, "function {d}", .{fr.index}),
+            try ctx.slap(
+                try ctx.print(.{}, "&func ", .{}),
+                try ctx.print(red, "{}", .{env.getFuncConst(fr).name}),
+                .right,
+                .{}
+            ),
         .param => |p|
             try ctx.print(.{}, "parameter {d} of {}", .{p.index, p.func}),
         .ty => |ty| ty: {
-            const str = try tw.get(ty).writeAlloc(ctx.ally, tw);
+            const str = try env.tw.get(ty).writeAlloc(ctx.ally, env.tw);
             defer ctx.ally.free(str);
             break :ty try ctx.print(green, "{s}", .{str});
         },
@@ -263,7 +268,7 @@ pub fn render(
     // any children
     var children = try ctx.stub();
     for (self.getChildren()) |child| {
-        const tex = try child.render(ctx, tw);
+        const tex = try child.render(ctx, env);
         children = try ctx.slap(children, tex, .bottom, .{});
     }
 

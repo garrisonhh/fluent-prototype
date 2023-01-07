@@ -118,7 +118,6 @@ fn makeFnType(
     const params = params_buf[0..children.len];
 
     for (children) |child, i| {
-        std.debug.print("resurrected param {} : {}\n", .{i, child.data.ty.index});
         params[i] = child.data.ty;
     }
 

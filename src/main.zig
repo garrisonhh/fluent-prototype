@@ -109,7 +109,7 @@ fn repl(ally: Allocator, env: *Env) !void {
         var ctx = kz.Context.init(ally);
         defer ctx.deinit();
 
-        const tex = try value.render(&ctx, env.tw);
+        const tex = try value.render(&ctx, env.*);
 
         try ctx.write(tex, stdout);
         try stdout.writeByte('\n');
@@ -177,7 +177,7 @@ fn executeFile(ally: Allocator, env: *Env, path: []const u8) !void {
     };
 
     // time execution
-    const value = plumbing.exec(env, handle, .expr) catch |e| {
+    const value = plumbing.exec(env, handle, .file) catch |e| {
         if (e == error.FluentError) {
             try context.flushMessages();
             return;
@@ -185,13 +185,13 @@ fn executeFile(ally: Allocator, env: *Env, path: []const u8) !void {
             return e;
         }
     };
-    defer value.deinit(ally);
+    defer value.deinit(env.ally);
 
     // render
     var ctx = kz.Context.init(ally);
     defer ctx.deinit();
 
-    const tex = try value.render(&ctx, env.tw);
+    const tex = try value.render(&ctx, env.*);
 
     try ctx.write(tex, stdout);
 }

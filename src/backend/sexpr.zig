@@ -32,10 +32,11 @@ pub const Data = union(enum) {
             .number => data,
             .string => |sym| Data{ .string = try sym.clone(ally) },
             .symbol => |sym| Data{ .symbol = try sym.clone(ally) },
-            .call => |exprs| call: {
+            inline .call, .array => |exprs, tag| many: {
                 const cloned = try ally.alloc(Self, exprs.len);
                 for (exprs) |expr, i| cloned[i] = try expr.clone(ally);
-                break :call Data{ .call = cloned };
+
+                break :many @unionInit(Data, tag, cloned);
             },
         };
     }
