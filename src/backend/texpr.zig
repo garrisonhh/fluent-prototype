@@ -17,7 +17,7 @@ const TypeId = types.TypeId;
 const TypeWelt = types.TypeWelt;
 const canon = @import("canon.zig");
 const Builtin = canon.Builtin;
-const ssa = @import("ssa.zig");
+const ssa = @import("ssa/ssa.zig");
 const FuncRef = ssa.FuncRef;
 
 const Self = @This();

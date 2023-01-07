@@ -13,12 +13,12 @@ const util = @import("util");
 const Symbol = util.Symbol;
 const Name = util.Name;
 const builtin = @import("builtin");
-const types = @import("types.zig");
+const types = @import("../types.zig");
 const TypeId = types.TypeId;
-const Env = @import("env.zig");
-const Value = @import("value.zig");
-const TExpr = @import("texpr.zig");
-const canon = @import("canon.zig");
+const Env = @import("../env.zig");
+const Value = @import("../value.zig");
+const TExpr = @import("../texpr.zig");
+const canon = @import("../canon.zig");
 
 /// symbolic representation of operations. since blocks store type info,
 /// there is no need for operations to be type or size specific; this can be

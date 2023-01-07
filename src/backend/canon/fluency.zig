@@ -13,7 +13,7 @@ const Type = types.Type;
 const TypeId = types.TypeId;
 const canon = @import("../canon.zig");
 const Number = canon.Number;
-const FuncRef = @import("../ssa.zig").FuncRef;
+const FuncRef = @import("../ssa/ssa.zig").FuncRef;
 
 pub fn valueToNumber(value: Value, bits: u8, layout: Number.Layout) Number {
     // TODO could I make this more maintanable with inline else?
