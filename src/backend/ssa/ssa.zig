@@ -44,7 +44,13 @@ pub const Op = union(enum) {
     };
 
     pub const Jump = struct {
+        data: Local,
         dst: Label,
+    };
+
+    pub const Phi = struct {
+        from: []Label,
+        to: Local,
     };
 
     pub const Alloca = struct {
@@ -70,6 +76,7 @@ pub const Op = union(enum) {
     // control flow
     br: Branch,
     jmp: Jump,
+    phi: Phi,
 
     // memory
     alloca: Alloca, // allocates a number of bytes and returns pointer
@@ -108,6 +115,19 @@ pub const Op = union(enum) {
         };
     }
 
+    pub fn initPhi(
+        ally: Allocator,
+        to: Local,
+        from: []const Label
+    ) Allocator.Error!Self {
+        return Self{
+            .phi = .{
+                .to = to,
+                .from = try ally.dupe(Label, from),
+            }
+        };
+    }
+
     pub fn initPure(
         ally: Allocator,
         comptime tag: std.meta.Tag(Self),
@@ -135,6 +155,7 @@ pub const Op = union(enum) {
             .call => |call| ally.free(call.params),
             .pure => |pure| ally.free(pure.params),
             .impure => |impure| ally.free(impure.params),
+            .phi => |phi| ally.free(phi.from),
             else => {}
         }
     }
@@ -144,6 +165,7 @@ pub const Op = union(enum) {
         call: Call,
         branch: Branch,
         jump: Jump,
+        phi: Phi,
         alloca: Alloca,
         pure: Pure,
         impure: Impure,
@@ -284,6 +306,18 @@ pub const Pos = struct {
     pub fn eql(self: Self, other: Self) bool {
         return self.order(other) == .eq;
     }
+
+    pub fn format(
+        self: Self,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype
+    ) @TypeOf(writer).Error!void {
+        try writer.print(
+            "{}@{}:{}",
+            .{self.ref.index, self.block.index, self.index}
+        );
+    }
 };
 
 pub const Lifetime = struct {
@@ -322,11 +356,19 @@ pub const Prophecy = struct {
         // usage
         var len: usize = 0;
         switch (op.classify()) {
-            .ldc, .alloca, .jump => {},
+            .ldc, .alloca => {},
             .call => |call| {
                 buf[0] = call.func;
                 std.mem.copy(Local, buf[1..], call.params);
                 len = 1 + call.params.len;
+            },
+            .jump => |jump| {
+                buf[0] = jump.data;
+                len = 1;
+            },
+            .phi => |phi| {
+                buf[0] = phi.to;
+                len = 1;
             },
             .branch => |br| {
                 buf[0] = br.cond;
@@ -371,6 +413,18 @@ pub const Prophecy = struct {
             }
         }
 
+        if (builtin.mode == .Debug) {
+            // verify starts and stops
+            for (map) |lt, i| {
+                if (lt.start.order(lt.stop) == .gt) {
+                    std.debug.panic(
+                        "bad lifetime for %{}: {} - {}",
+                        .{i, lt.start, lt.stop}
+                    );
+                }
+            }
+        }
+
         return Self{
             .ref = func.ref,
             .map = map,
@@ -409,7 +463,7 @@ pub const Prophecy = struct {
 
         for (self.map) |lt, i| {
             const index = map.get(lt.start).?;
-            const len = map.get(lt.stop).? - index + 1;
+            const len = map.get(lt.stop).? + 1 - index;
 
             // generate bar
             const stub = try ctx.block(.{1, y}, .{ .fg = .dark_gray }, '.');
@@ -419,11 +473,7 @@ pub const Prophecy = struct {
             bars[i] = try ctx.unify(stub, bar, .{0, @intCast(isize, index)});
         }
 
-        const graph = try ctx.stack(bars, .right, .{});
-
-        // label the graph
-        const title = try ctx.print(.{ .fg = .cyan }, "lifetimes", .{});
-        return try ctx.slap(graph, title, .top, .{});
+        return try ctx.stack(bars, .right, .{});
     }
 };
 
@@ -547,6 +597,20 @@ pub const Func = struct {
         }
     }
 
+    fn renderLabels(
+        ctx: *kz.Context,
+        list: *std.ArrayList(kz.Ref),
+        labels: []const Label
+    ) !void {
+        const comma = try ctx.print(.{}, ", ", .{});
+        defer ctx.drop(comma);
+
+        for (labels) |label, i| {
+            if (i > 0) try list.append(try ctx.clone(comma));
+            try list.append(try label.render(ctx));
+        }
+    }
+
     fn renderOp(
         self: Self,
         ctx: *kz.Context,
@@ -579,6 +643,14 @@ pub const Func = struct {
 
                 try self.renderParams(ctx, env, &line, call.params);
             },
+            .phi => |phi| {
+                try line.appendSlice(&.{
+                    try self.renderLocal(ctx, env, phi.to),
+                    try ctx.print(.{}, " = {s} ", .{tag}),
+                });
+
+                try renderLabels(ctx, &line, phi.from);
+            },
             .branch => |br| {
                 try line.appendSlice(&.{
                     try ctx.print(.{}, "{s} ", .{tag}),
@@ -593,6 +665,8 @@ pub const Func = struct {
                 try line.appendSlice(&.{
                     try ctx.print(.{}, "{s} ", .{tag}),
                     try jmp.dst.render(ctx),
+                    try ctx.print(.{}, " ", .{}),
+                    try self.renderLocal(ctx, env, jmp.data),
                 });
             },
             .alloca => |all| {
@@ -707,7 +781,8 @@ pub const Func = struct {
 
         // slap it together
         const code = try ctx.slap(header, body, .bottom, .{});
-        return try ctx.slap(code, proph_tex, .right, .{ .space = 1 });
+        const sz = kz.toOffset(ctx.getSize(code));
+        return try ctx.unify(code, proph_tex, .{sz[0] + 1, 1});
     }
 };
 

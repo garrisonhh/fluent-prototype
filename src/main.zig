@@ -80,6 +80,12 @@ fn runFluentInit(ally: Allocator, env: *Env) !void {
 fn repl(ally: Allocator, env: *Env) !void {
     try runFluentInit(ally, env);
 
+    if (builtin.mode == .Debug) {
+        try stdout.writeAll("[Env]\n");
+        try env.dump(ally, stdout);
+        try stdout.writeByte('\n');
+    }
+
     loop: while (true) {
         const input = try replRead(ally);
 

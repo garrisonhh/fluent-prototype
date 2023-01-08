@@ -184,6 +184,39 @@ fn analyzeDo(
     return try unifyTExpr(env, texpr, outward);
 }
 
+fn analyzeIf(
+    env: *Env,
+    scope: Name,
+    expr: SExpr,
+    outward: TypeId
+) SemaError!TExpr {
+    const ally = env.ally;
+
+    // verify form
+    const exprs = expr.data.call;
+
+    if (exprs.len != 4) {
+        const text = "`if` statement requires a condition and two branches";
+        _ = try context.post(.err, expr.loc, text, .{});
+        return error.FluentError;
+    }
+
+    // analyze children
+    const builtin_ty = try env.identify(Type{ .builtin = {} });
+    const @"bool" = try env.identify(Type{ .@"bool" = {} });
+
+    const texprs = [_]TExpr{
+        TExpr.initBuiltin(expr.loc.beginning(), builtin_ty, .@"if"),
+        try analyzeExpr(env, scope, exprs[1], @"bool"),
+        try analyzeExpr(env, scope, exprs[2], outward),
+        try analyzeExpr(env, scope, exprs[3], outward),
+    };
+
+    // TODO peer resolve branches, could also use peer type resolution in arrays
+
+    return try TExpr.initCall(ally, expr.loc, outward, &texprs);
+}
+
 fn analyzeArray(
     env: *Env,
     scope: Name,
@@ -347,14 +380,6 @@ fn analyzeNamespace(
         };
     }
 
-    if (builtin.mode == .Debug) {
-        const stdout = std.io.getStdOut().writer();
-
-        stdout.writeAll("[defined namespace]\n") catch {};
-        env.dump(env.ally, stdout) catch {};
-        stdout.writeAll("\n") catch {};
-    }
-
     // evaluate to unit
     const unit = try env.identify(Type{ .unit = {} });
     const texpr = TExpr.init(expr.loc, true, unit, .{ .unit = {} });
@@ -381,6 +406,7 @@ fn analyzeBuiltin(
         .do => try analyzeDo(env, scope, expr, outward),
         .ns => try analyzeNamespace(env, scope, expr, outward),
         .@"fn" => try analyzeFn(env, scope, expr, outward),
+        .@"if" => try analyzeIf(env, scope, expr, outward),
         else => {
             std.debug.panic("TODO analyze builtin `{s}`", .{@tagName(b)});
         },

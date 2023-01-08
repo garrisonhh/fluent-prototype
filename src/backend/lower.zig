@@ -193,14 +193,48 @@ fn lowerLambda(
         expr.data.func.body.*,
     );
 
-    // compile func ref
-    // TODO this is done here to ensure the bytecode ordering is correct, but
-    // that is pretty hacky ngl
-    _ = try env.compileSsa(lambda);
-
     // load func ref as callable constant
     const final = TExpr.init(expr.loc, true, expr.ty, .{ .func_ref = lambda });
     return try lowerLoadConst(env, ref, block.*, final);
+}
+
+/// if exprs get lowered into two branching blocks
+fn lowerIf(
+    env: *Env,
+    ref: FuncRef,
+    block: *Label,
+    expr: TExpr
+) Error!Local {
+    const ally = env.ally;
+    const exprs = expr.data.call;
+
+    // lower branch op
+    var branches = [2]Label{
+        try ref.addBlock(env),
+        try ref.addBlock(env),
+    };
+    const final_block = try ref.addBlock(env);
+
+    const cond = try lowerExpr(env, ref, block, exprs[1]);
+    try ref.addOp(env, block.*, Op{
+        .br = .{ .cond = cond, .a = branches[0], .b = branches[1] }
+    });
+
+    // lower branches, jump to final block
+    for (branches) |*branch, i| {
+        const local = try lowerExpr(env, ref, branch, exprs[2 + i]);
+        try ref.addOp(env, branch.*, Op{
+            .jmp = .{ .data = local, .dst = final_block }
+        });
+    }
+
+    // final block with phi
+    const final = try ref.addLocal(env, expr.ty);
+    try ref.addOp(env, final_block, try Op.initPhi(ally, final, &branches));
+
+    block.* = final_block;
+
+    return final;
 }
 
 fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
@@ -214,14 +248,6 @@ fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
         else => raw_head
     };
 
-    // TODO remove vvv
-    if (head.data == .func_ref) {
-        const stdout = std.io.getStdOut().writer();
-
-        stdout.writeAll("[env during lowerCall]\n") catch unreachable;
-        env.dump(env.ally, stdout) catch unreachable;
-    }
-
     const tail = exprs[1..];
 
     // builtins have their own logic
@@ -231,6 +257,7 @@ fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
             .slice_ty, .fn_ty
                 => |b| try lowerOperator(env, ref, block, b, tail, expr.ty),
             .@"fn" => try lowerLambda(env, ref, block, expr),
+            .@"if" => try lowerIf(env, ref, block, expr),
             else => |b| {
                 std.debug.panic("TODO lower builtin {s}", .{@tagName(b)});
             }

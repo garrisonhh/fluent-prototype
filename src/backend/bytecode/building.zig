@@ -14,11 +14,11 @@ const Program = bytecode.Program;
 pub const Builder = struct {
     const Self = @This();
 
-    const BackRef = union(enum) {
+    const BackRef = struct {
         // what a Pos resolved to
-        resolved: InstRef,
-        // instructions to resolve once this Pos is resolved
-        unresolved: std.ArrayListUnmanaged(InstRef),
+        ref: ?InstRef = null,
+        // locations of instructions mapped to this backref
+        assoc: std.ArrayListUnmanaged(InstRef) = .{},
     };
 
     const Region = struct {
@@ -40,27 +40,10 @@ pub const Builder = struct {
 
     /// returns an executable view' into the builder
     pub fn build(self: *Self, func: FuncRef) Program {
-        if (builtin.mode == .Debug) {
-            // validate backrefs are completed
-            var entries = self.refs.iterator();
-            while (entries.next()) |entry| {
-                if (entry.value_ptr.* == .unresolved) {
-                    const sp = entry.key_ptr;
-                    const label = sp.block.index;
-
-                    std.debug.panic(
-                        "bytecode compilation failed to resolve {}@{}",
-                        .{func.index, label}
-                    );
-                }
-            }
-        }
-
-        // get function backref
-        const backref = self.refs.get(Pos.ofEntry(func)).?;
+        self.finalize();
 
         return Program{
-            .entry = backref.resolved.index,
+            .entry = self.getResolved(Pos.ofEntry(func)).index,
             .program = self.program.items,
         };
     }
@@ -70,6 +53,11 @@ pub const Builder = struct {
         return InstRef.of(@intCast(u32, self.program.items.len));
     }
 
+    /// contract is that finalize has been called
+    pub fn getResolved(self: Self, sp: Pos) InstRef {
+        return self.refs.get(sp).?.ref.?;
+    }
+
     pub fn append(
         self: *Self,
         ally: Allocator,
@@ -77,19 +65,23 @@ pub const Builder = struct {
     ) Allocator.Error!void {
         const offset = @intCast(u32, self.program.items.len);
 
-        // add insts
-        // TODO modify call, jump, branch ops
+        // add insts, offsetting all instrefs
         try self.program.appendSlice(ally, other.program.items);
 
-        // add refs
-        var backrefs = other.refs.iterator();
-        while (backrefs.next()) |entry| {
-            std.debug.assert(entry.value_ptr.* == .resolved);
-            const ref = entry.value_ptr.resolved;
+        // merge refs
+        var entries = other.refs.iterator();
+        while (entries.next()) |entry| {
+            var resolved = entry.value_ptr.ref;
+            if (resolved) |*r| r.index += offset;
 
-            try self.refs.put(ally, entry.key_ptr.*, BackRef{
-                .resolved = InstRef.of(ref.index + offset)
-            });
+            // add to my entry
+            const backref = try self.getBackref(ally, entry.key_ptr.*);
+            backref.ref = backref.ref orelse resolved;
+
+            for (entry.value_ptr.assoc.items) |ref| {
+                const updated = InstRef.of(ref.index + offset);
+                try backref.assoc.append(ally, updated);
+            }
         }
 
         // add regions
@@ -103,53 +95,59 @@ pub const Builder = struct {
         }
     }
 
+    fn getBackref(
+        self: *Self,
+        ally: Allocator,
+        sp: Pos
+    ) Allocator.Error!*BackRef {
+        const res = try self.refs.getOrPut(ally, sp);
+        if (!res.found_existing) {
+            res.value_ptr.* = .{};
+        }
+
+        return res.value_ptr;
+    }
+
     /// branching instructions expect a position to branch to. this effectively
     /// handles adding the position with any required backreferencing, and hides
     /// the internal backreference impl
-    fn addBranch(self: *Self, ally: Allocator, sp: Pos) Allocator.Error!void {
-        const res = try self.refs.getOrPut(ally, sp);
-        if (res.found_existing) {
-            // retrieve resolved ref or add unresolved ref
-            switch (res.value_ptr.*) {
-                .resolved => |ref| {
-                    try self.addInst(ally, Inst.fromInt(ref.index));
-                },
-                .unresolved => |*list| {
-                    try list.append(ally, self.here());
-                    try self.addInst(ally, Inst.fromInt(0));
-                },
-            }
-        } else {
-            // add unresolved backref
-            res.value_ptr.* = BackRef{ .unresolved = .{} };
-            try res.value_ptr.unresolved.append(ally, self.here());
-            try self.addInst(ally, Inst.fromInt(0));
-        }
+    pub fn addBranch(
+        self: *Self,
+        ally: Allocator,
+        sp: Pos
+    ) Allocator.Error!void {
+        const backref = try self.getBackref(ally, sp);
+        try backref.assoc.append(ally, self.here());
+        try self.addInst(ally, Inst.fromInt(0));
     }
 
-    /// resolve a backreference to a real instref
+    //// resolve a backreference to a real instref
     pub fn resolve(
         self: *Self,
         ally: Allocator,
         sp: Pos,
         to: InstRef
     ) Allocator.Error!void {
-        const res = try self.refs.getOrPut(ally, sp);
-        if (res.found_existing) {
-            // can't resolve the same Pos twice
-            std.debug.assert(res.value_ptr.* == .unresolved);
+        const backref = try self.getBackref(ally, sp);
+        backref.ref = to;
+    }
 
-            // resolve backrefs
-            const list = &res.value_ptr.unresolved;
-            defer list.deinit(ally);
+    /// does the actual backref resolution
+    pub fn finalize(self: *Self) void {
+        var entries = self.refs.iterator();
+        while (entries.next()) |entry| {
+            const assoc = entry.value_ptr.assoc.items;
+            const resolved = entry.value_ptr.ref orelse {
+                // if it's not currently known, don't finalize. this may happen
+                // when a backref references something in a different builder
+                // that this builder will be appended to.
+                continue;
+            };
 
-            for (list.items) |ref| {
-                self.program.items[ref.index] = Inst.fromInt(to.index);
+            for (assoc) |ref| {
+                self.program.items[ref.index] = Inst.fromInt(resolved.index);
             }
         }
-
-        // keep resolved value
-        res.value_ptr.* = BackRef{ .resolved = to };
     }
 
     pub fn addInst(
@@ -190,6 +188,23 @@ pub const Builder = struct {
         const region = self.regions.get(ref).?;
         const start = region.start.index;
         const len = region.stop.index - start;
+
+        // remove all backrefs within the function region
+        var backrefs = self.refs.valueIterator();
+        var to_remove = std.ArrayList(usize).init(ally);
+        defer to_remove.deinit();
+
+        while (backrefs.next()) |backref| {
+            for (backref.assoc.items) |iref, i| {
+                if (iref.index >= start and iref.index < region.stop.index) {
+                    try to_remove.append(i);
+                }
+            }
+
+            while (to_remove.popOrNull()) |i| {
+                _ = backref.assoc.swapRemove(i);
+            }
+        }
 
         try self.program.replaceRange(ally, start, len, &.{});
 

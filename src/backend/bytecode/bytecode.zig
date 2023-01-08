@@ -6,10 +6,14 @@ const kz = @import("kritzler");
 const canon = @import("../canon.zig");
 const Vm = @import("vm.zig");
 const Builder = @import("building.zig").Builder;
+const ssa = @import("../ssa/ssa.zig");
+const Pos = ssa.Pos;
 
 /// a single operation
 pub const Opcode = enum(u8) {
     // NOTE '$bytes' here expects 1, 2, 4, or 8
+
+    nop,
 
     mov, // mov %src %dst
 
@@ -166,7 +170,7 @@ pub const Program = struct {
             // args
             const args = inst.getArgs();
             switch (inst.op) {
-                .ret => {},
+                .nop, .ret => {},
                 .mov => {
                     try line.append(try renderReg(ctx, args[0]));
                     try line.append(try renderReg(ctx, args[1]));
@@ -191,6 +195,10 @@ pub const Program = struct {
 
                     try line.append(try renderReg(ctx, args[0]));
                     try line.append(try renderImm(ctx, n));
+                },
+                .push, .pop => {
+                    try line.append(try renderImm(ctx, args[0]));
+                    try line.append(try renderReg(ctx, args[1]));
                 },
                 .jump => {
                     const n = insts[i + 1].toInt();
@@ -325,6 +333,32 @@ pub const Construct = struct {
         }
     }
 
+    pub fn immBackref(
+        b: *Builder,
+        ally: Allocator,
+        dst: Reg,
+        pos: Pos
+    ) Allocator.Error!void {
+        try b.addInst(ally, make(.imm4, dst.n, 0, 0));
+        try b.addBranch(ally, pos);
+    }
+
+    pub fn jump(b: *Builder, ally: Allocator, dst: Pos) Allocator.Error!void {
+        try b.addInst(ally, make(.jump, 0, 0, 0));
+        try b.addBranch(ally, dst);
+    }
+
+    pub fn jump_if(
+        b: *Builder,
+        ally: Allocator,
+        cond: Reg,
+        dst: Pos
+    ) Allocator.Error!void {
+        try b.addInst(ally, make(.jump_if, cond.n, 0, 0));
+        try b.addBranch(ally, dst);
+    }
+
+    pub const nop = make(.nop, 0, 0, 0);
     pub const mov = conRR(.mov);
     pub const ret = make(.ret, 0, 0, 0);
     pub const call = conR(.call);

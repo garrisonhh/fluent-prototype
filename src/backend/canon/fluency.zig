@@ -50,7 +50,10 @@ fn rawCrucify(env: Env, buf: []u8, texpr: TExpr) CrucifyError!void {
         .func_ref => |ref| {
             // translate to bytecode ref for the vm
             const bc_ref = env.compiled.get(ref) orelse {
-                std.debug.panic("failed to get bcref for `{}` in crucify\n", .{env.getFuncConst(ref).name});
+                std.debug.panic(
+                    "failed to get bcref for `{}` in crucify\n",
+                    .{env.getFuncConst(ref).name}
+                );
             };
             writeCanon(buf, bc_ref.index);
         },

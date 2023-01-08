@@ -171,6 +171,7 @@ pub fn execute(
         // self.debug(program);
 
         switch (op) {
+            .nop => unreachable,
             .mov => {
                 const src = Register.of(args[0]);
                 const dst = Register.of(args[1]);
@@ -198,8 +199,8 @@ pub fn execute(
             },
             .jump_if => {
                 const cond = Register.of(args[0]);
-                const to = insts[ip.* + 1].toInt();
                 ip.* += 1;
+                const to = insts[ip.*].toInt();
                 if (self.get(cond) != 0) {
                     self.set(IP, to);
                     continue;

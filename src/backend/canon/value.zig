@@ -27,18 +27,11 @@ pub fn deinit(self: Self, ally: Allocator) void {
 
 /// bitcast to the type desired
 pub fn as(self: Self, comptime T: type) T {
-    if (builtin.mode == .Debug) {
-        if (@sizeOf(T) != self.buf.len) {
-            std.debug.panic(
-                "attempted to cast Value of size {} to type {} of size {}",
-                .{self.buf.len, T, @sizeOf(T)}
-            );
-        }
-    }
-
     // bitcast
     var t: T = undefined;
-    std.mem.copy(u8, std.mem.asBytes(&t), self.buf);
+    const view = std.mem.asBytes(&t);
+    std.mem.set(u8, view, 0);
+    std.mem.copy(u8, view, self.buf);
 
     return t;
 }

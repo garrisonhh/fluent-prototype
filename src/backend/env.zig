@@ -104,10 +104,16 @@ pub fn removeFunc(self: *Self, ref: SsaRef) Allocator.Error!void {
 pub fn compileSsa(self: *Self, ref: SsaRef) Allocator.Error!BcRef {
     std.debug.assert(!self.compiled.contains(ref));
 
-    const bc = try compile.compile(self, ref);
-    try self.tieLLRefs(ref, bc);
+    try compile.compile(self, ref);
+    const entry = self.bc.getResolved(ssa.Pos.ofEntry(ref));
+    try self.tieLLRefs(ref, entry);
 
-    return bc;
+    return entry;
+}
+
+/// if function is not compiled, compiles it. otherwise returns previous BcRef.
+pub fn ensureCompiled(self: *Self, ref: SsaRef) Allocator.Error!BcRef {
+    return if (self.compiled.get(ref)) |bc| bc else try self.compileSsa(ref);
 }
 
 /// ties the ssa and bytecode IR forms together

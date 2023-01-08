@@ -44,7 +44,7 @@ pub const Program = bytecode.Program;
 pub const Error = Allocator.Error || canon.CrucifyError;
 
 fn compileOp(
-    env: Env,
+    env: *Env,
     b: *Builder,
     rmap: *RegisterMap,
     ref: FuncRef,
@@ -56,12 +56,27 @@ fn compileOp(
         .ldc => |ldc| {
             // crucify and load a constant
             const dst = rmap.get(ldc.to);
-            const texpr = ref.getConst(env, ldc.a);
+            const texpr = ref.getConst(env.*, ldc.a);
 
-            const value = try canon.crucify(env, texpr);
-            defer value.deinit(env.ally);
+            std.debug.assert(texpr.data != .func);
 
-            try Bc.imm(b, ally, dst, value.buf);
+            if (texpr.data == .func_ref) {
+                const call_ref = texpr.data.func_ref;
+                const pos = Pos.ofEntry(call_ref);
+
+                // func refs must be backreferenced
+                try Bc.immBackref(b, ally, dst, pos);
+
+                // ensure called func is compiled and resolved
+                const bc_ref = try env.ensureCompiled(call_ref);
+                try b.resolve(ally, pos, bc_ref);
+            } else {
+                // add value as an immediate
+                const value = try canon.crucify(env.*, texpr);
+                defer value.deinit(env.ally);
+
+                try Bc.imm(b, ally, dst, value.buf);
+            }
         },
         .cast => |pure| {
             const src = rmap.get(pure.params[0]);
@@ -83,7 +98,7 @@ fn compileOp(
         .store => |imp| {
             const src = rmap.get(imp.params[0]);
             const dst = rmap.get(imp.params[1]);
-            const size = env.sizeOf(ref.getLocal(env, imp.params[0]));
+            const size = env.sizeOf(ref.getLocal(env.*, imp.params[0]));
             const nbytes = @intCast(u8, size);
 
             try b.addInst(ally, Bc.store(nbytes, src, dst));
@@ -108,6 +123,23 @@ fn compileOp(
             try b.addInst(ally, Bc.call(func));
             try b.addInst(ally, Bc.mov(Vm.RETURN, dst));
         },
+        .br => |br| {
+            const cond = rmap.get(br.cond);
+
+            try Bc.jump_if(b, ally, cond, Pos.of(ref, br.a, 0));
+            try Bc.jump(b, ally, Pos.of(ref, br.b, 0));
+        },
+        .jmp => |jump| {
+            const data = rmap.get(jump.data);
+
+            try b.addInst(ally, Bc.mov(data, Vm.RETURN));
+            try Bc.jump(b, ally, Pos.of(ref, jump.dst, 0));
+        },
+        .phi => |phi| {
+            const dst = rmap.get(phi.to);
+
+            try b.addInst(ally, Bc.mov(Vm.RETURN, dst));
+        },
         inline .mod, .fn_ty => |pure, tag| {
             // binary ops
             const lhs = rmap.get(pure.params[0]);
@@ -128,7 +160,7 @@ fn compileOp(
             const rhs = rmap.get(pure.params[1]);
             const to = rmap.get(pure.to);
 
-            const ty = env.tw.get(ref.getLocal(env, pure.to));
+            const ty = env.tw.get(ref.getLocal(env.*, pure.to));
 
             if (ty.* == .ptr
              or ty.* == .number and ty.number.layout != .float) {
@@ -176,7 +208,7 @@ fn compileFunc(env: *Env, super: *Builder, ref: FuncRef) Error!void {
 
         // compile block ops
         for (block.ops.items) |op| {
-            try compileOp(env.*, &b, &rmap, ref, op);
+            try compileOp(env, &b, &rmap, ref, op);
             rmap.next();
         }
     }
@@ -186,13 +218,7 @@ fn compileFunc(env: *Env, super: *Builder, ref: FuncRef) Error!void {
     try super.append(env.ally, b);
 }
 
-/// compiles func to bytecode and returns instruction address of the function's
-/// entry point.
-pub fn compile(env: *Env, ref: FuncRef) Error!InstRef {
+pub fn compile(env: *Env, ref: FuncRef) Error!void {
     std.debug.assert(env.sizeOf(env.getFunc(ref).returns) <= 8);
-
     try compileFunc(env, &env.bc, ref);
-
-    // get backref'd function location
-    return env.bc.refs.get(Pos.ofEntry(ref)).?.resolved;
 }
