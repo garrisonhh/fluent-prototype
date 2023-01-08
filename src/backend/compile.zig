@@ -140,6 +140,18 @@ fn compileOp(
 
             try b.addInst(ally, Bc.mov(Vm.RETURN, dst));
         },
+        inline .slice_ty => |pure, tag| {
+            // unary ops
+            const operand = rmap.get(pure.params[0]);
+            const to = rmap.get(pure.to);
+
+            const con = switch (comptime tag) {
+                .slice_ty => Bc.slice_ty,
+                else => unreachable
+            };
+
+            try b.addInst(ally, con(operand, to));
+        },
         inline .mod, .fn_ty => |pure, tag| {
             // binary ops
             const lhs = rmap.get(pure.params[0]);
