@@ -91,27 +91,24 @@ fn makeFnType(
     param_slice: u64,
     return_id: u64
 ) RuntimeError!TypeId {
-    const ally = env.ally;
-    const tw = &env.tw;
-
     // resurrect parameters (*[2]TypeId)
     var slice_ptr = param_slice;
     const params_val = canon.intoValue(&slice_ptr);
 
-    const tyty = try tw.identify(ally, Type{ .ty = {} });
-    const ty_arr_ty = try tw.identify(ally, Type{
-        .array = .{ .size = 2, .of = tyty }
+    const tyty = try env.identify(Type{ .ty = {} });
+    const ty_slice_ty = try env.identify(Type{
+        .ptr = .{ .kind = .slice, .to = tyty }
     });
     const expr = try canon.resurrect(
         env.*,
         params_val,
         self.stack,
         null,
-        try tw.identify(ally, Type.initPtr(.single, ty_arr_ty))
+        ty_slice_ty
     );
-    defer expr.deinit(ally);
+    defer expr.deinit(env.ally);
 
-    const children = expr.data.ptr.data.array;
+    const children = expr.data.slice;
 
     // manipulate parameters into type slice
     var params_buf: [256]TypeId = undefined;
@@ -122,7 +119,7 @@ fn makeFnType(
     }
 
     // id type
-    return try tw.identify(ally, Type{
+    return try env.identify(Type{
         .func = Type.Func{
             .takes = params,
             .returns = TypeId{ .index = return_id },

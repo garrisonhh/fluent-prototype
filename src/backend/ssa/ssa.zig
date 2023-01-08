@@ -92,6 +92,7 @@ pub const Op = union(enum) {
     mod: Pure,
 
     // conditional
+    eq: Pure,
     @"or": Pure,
     @"and": Pure,
     not: Pure,

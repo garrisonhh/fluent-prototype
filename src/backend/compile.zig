@@ -43,6 +43,21 @@ pub const Program = bytecode.Program;
 
 pub const Error = Allocator.Error || canon.CrucifyError;
 
+fn compileAlloca(
+    ally: Allocator,
+    b: *Builder,
+    rmap: *RegisterMap,
+    size: u64,
+    dst: Register
+) Error!void {
+    const size_reg = rmap.getTemp();
+    defer rmap.dropTemp(size_reg);
+
+    try b.addInst(ally, Bc.mov(Vm.SP, dst));
+    try Bc.imm(b, ally, size_reg, canon.from(&size));
+    try b.addInst(ally, Bc.iadd(Vm.SP, size_reg, Vm.SP));
+}
+
 fn compileOp(
     env: *Env,
     b: *Builder,
@@ -82,18 +97,34 @@ fn compileOp(
             const src = rmap.get(pure.params[0]);
             const dst = rmap.get(pure.to);
 
-            // TODO cast requires more than bitcast in many cases
-            try b.addInst(ally, Bc.mov(src, dst));
+            const src_ty = env.tw.get(ref.getLocal(env.*, pure.params[0]));
+            const dst_ty = env.tw.get(ref.getLocal(env.*, pure.to));
+
+            if (dst_ty.* == .ptr and dst_ty.ptr.kind == .slice
+            and src_ty.* == .ptr) {
+                // coerce ptr to array to slice
+                const arr_size = env.tw.get(src_ty.ptr.to).array.size;
+
+                const tmp = rmap.getTemp();
+                const len_ptr = rmap.getTemp();
+                defer rmap.dropTemp(tmp);
+                defer rmap.dropTemp(len_ptr);
+
+                try compileAlloca(ally, b, rmap, 16, dst);
+                try b.addInst(ally, Bc.store(8, src, dst));
+                try Bc.imm(b, ally, tmp, canon.from(&@as(u64, 8)));
+                try b.addInst(ally, Bc.iadd(dst, tmp, len_ptr));
+                try Bc.imm(b, ally, tmp, canon.from(&arr_size));
+                try b.addInst(ally, Bc.store(8, tmp, len_ptr));
+            } else {
+                // bitcast
+                try b.addInst(ally, Bc.mov(src, dst));
+            }
         },
         .alloca => |all| {
-            // store stack pointer in a register and
+            // store stack pointer in a register and add to it
             const dst = rmap.get(all.to);
-            const size = rmap.getTemp();
-            defer rmap.dropTemp(size);
-
-            try b.addInst(ally, Bc.mov(Vm.SP, dst));
-            try Bc.imm(b, ally, size, canon.from(&all.size));
-            try b.addInst(ally, Bc.iadd(Vm.SP, size, Vm.SP));
+            try compileAlloca(ally, b, rmap, all.size, dst);
         },
         .store => |imp| {
             const src = rmap.get(imp.params[0]);

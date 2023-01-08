@@ -185,6 +185,8 @@ pub fn resurrect(
                 const index = canon.to(struct_data[0..8]);
                 const len = canon.to(struct_data[8..16]);
 
+                std.debug.print("resurrecting slice {{ ptr: {}, len: {} }}\n", .{index, len});
+
                 // resurrect each subvalue
                 const el_size = env.sizeOf(ptr.to);
                 const slice = try ally.alloc(TExpr, len);

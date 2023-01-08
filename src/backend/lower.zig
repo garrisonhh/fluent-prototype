@@ -74,7 +74,7 @@ fn lowerOperator(
     // generate operation
     return switch (b) {
         // binary ops
-        inline .add, .sub, .mul, .div, .mod, .@"and", .@"or", .fn_ty, .not,
+        inline .eq, .add, .sub, .mul, .div, .mod, .@"and", .@"or", .fn_ty, .not,
         .cast, .slice_ty
             => |tag| op: {
             // TODO make sure this is checked in sema
@@ -253,7 +253,7 @@ fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     // builtins have their own logic
     if (head.data == .builtin) {
         return switch (head.data.builtin) {
-            .add, .sub, .mul, .div, .mod, .@"and", .@"or", .not, .cast,
+            .eq, .add, .sub, .mul, .div, .mod, .@"and", .@"or", .not, .cast,
             .slice_ty, .fn_ty
                 => |b| try lowerOperator(env, ref, block, b, tail, expr.ty),
             .@"fn" => try lowerLambda(env, ref, block, expr),

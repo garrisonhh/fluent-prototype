@@ -16,6 +16,7 @@ pub const Builtin = enum {
     cast,
     addr_of,
 
+    eq,
     add,
     sub,
     mul,
