@@ -27,11 +27,19 @@ pub const Number = canon.Number;
 pub const Func = struct {
     name: Name,
     body: *Self,
+
+    fn eql(self: Func, other: Func) bool {
+        return self.name.eql(other.name) and self.body.eql(other.body.*);
+    }
 };
 
 pub const Param = struct {
     func: Name,
     index: usize,
+
+    fn eql(self: Param, other: Param) bool {
+        return self.func.eql(other.func) and self.index == other.index;
+    }
 };
 
 pub const Tag = std.meta.Tag(Data);
@@ -63,30 +71,32 @@ pub const Data = union(enum) {
     // TODO get rid of the comment above when I've implemented it
     builtin: Builtin,
 
-    fn eqlChildren(a: []const Self, b: []const Self) bool {
-        if (a.len != b.len) return false;
-
-        for (a) |expr, i| {
-            if (!expr.eql(b[i])) return false;
-        }
-
-        return true;
-    }
-
     fn eql(data: Data, other: Data) bool {
-        if (@as(Tag, data) != @as(Tag, other)) {
-            return false;
-        }
+        return @as(Tag, data) != @as(Tag, other) and switch (data) {
+            .unit => true,
+            .ptr => |to| to.eql(other.ptr.*),
+            // primitives
+            inline .@"bool", .builtin => |x, tag|
+                x == @field(other, @tagName(tag)),
+            // types with .eql
+            inline .number, .string, .name, .ty, .func, .func_ref, .param
+                => |x, tag|
+                x.eql(@field(other, @tagName(tag))),
+            // backed by slices
+            inline .call, .array, .slice => |xs, tag| xs: {
+                const ys = @field(other, @tagName(tag));
+                if (xs.len != ys.len) {
+                    break :xs false;
+                }
 
-        return switch (data) {
-            .ty, .unit => true,
-            .@"bool" => |b| b == other.@"bool",
-            .number => |n| n.eql(other.number),
-            .string => |sym| sym.eql(other.string),
-            .name => |name| name.eql(other.name),
-            .call => |exprs| eqlChildren(exprs, other.call),
-            .array => |arr| eqlChildren(arr, other.array),
-            .builtin => |b| b == other.builtin,
+                for (xs) |el, i| {
+                    if (!el.eql(ys[i])) {
+                        break :xs false;
+                    }
+                }
+
+                break :xs true;
+            },
         };
     }
 };

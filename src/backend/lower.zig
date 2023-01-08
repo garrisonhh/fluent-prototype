@@ -350,8 +350,6 @@ pub fn lower(env: *Env, scope: Name, expr: TExpr) Error!FuncRef {
         verify(env.*, env.getFuncConst(ref)) catch |e| {
             std.debug.panic("SSA verify failed: {}", .{e});
         };
-
-        std.debug.print("SSA successfully verified.\n", .{});
     }
 
     return ref;

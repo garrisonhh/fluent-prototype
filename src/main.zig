@@ -15,6 +15,11 @@ const c = @cImport({
     @cInclude("linenoise.h");
 });
 
+// this test ensures that all code is semantically analyzed
+test {
+    std.testing.refAllDeclsRecursive(@This());
+}
+
 /// returns file
 fn replRead(ally: Allocator) !context.FileHandle {
     const INDENT = 2;

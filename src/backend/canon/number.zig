@@ -91,7 +91,7 @@ pub fn eql(self: @This(), other: @This()) bool {
     const val1 = self.asValue(ally) catch unreachable;
     const val2 = other.asValue(ally) catch unreachable;
 
-    return std.mem.eql(u8, val1.ptr, val2.ptr);
+    return std.mem.eql(u8, val1.buf, val2.buf);
 }
 
 pub fn format(
