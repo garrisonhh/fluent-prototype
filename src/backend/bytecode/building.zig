@@ -14,6 +14,11 @@ const Program = bytecode.Program;
 pub const Builder = struct {
     const Self = @This();
 
+    pub const Comments = std.AutoHashMapUnmanaged(
+        InstRef,
+        std.ArrayListUnmanaged([]u8),
+    );
+
     const BackRef = struct {
         // what a Pos resolved to
         ref: ?InstRef = null,
@@ -31,11 +36,19 @@ pub const Builder = struct {
     refs: std.AutoHashMapUnmanaged(Pos, BackRef) = .{},
     // tracks slices of the program
     regions: std.AutoHashMapUnmanaged(FuncRef, Region) = .{},
+    comments: Comments = .{},
 
     pub fn deinit(self: *Self, ally: Allocator) void {
         self.program.deinit(ally);
         self.refs.deinit(ally);
         self.regions.deinit(ally);
+
+        var comments = self.comments.valueIterator();
+        while (comments.next()) |list| {
+            for (list.items) |str| ally.free(str);
+            list.deinit(ally);
+        }
+        self.comments.deinit(ally);
     }
 
     /// returns an executable view' into the builder
@@ -92,6 +105,15 @@ pub const Builder = struct {
                 .start = InstRef.of(region.start.index + offset),
                 .stop = InstRef.of(region.stop.index + offset),
             });
+        }
+
+        // add comments
+        var comments = other.comments.iterator();
+        while (comments.next()) |entry| {
+            const ref = InstRef.of(entry.key_ptr.index + offset);
+            for (entry.value_ptr.items) |comment| {
+                try self.addCommentAt(ally, ref, "{s}", .{comment});
+            }
         }
     }
 
@@ -158,6 +180,31 @@ pub const Builder = struct {
         try self.program.append(ally, inst);
     }
 
+    pub fn addCommentAt(
+        self: *Self,
+        ally: Allocator,
+        ref: InstRef,
+        comptime fmt: []const u8,
+        args: anytype
+    ) Allocator.Error!void {
+        const res = try self.comments.getOrPut(ally, ref);
+        if (!res.found_existing) {
+            res.value_ptr.* = .{};
+        }
+
+        const msg = try std.fmt.allocPrint(ally, fmt, args);
+        try res.value_ptr.append(ally, msg);
+    }
+
+    pub fn addComment(
+        self: *Self,
+        ally: Allocator,
+        comptime fmt: []const u8,
+        args: anytype
+    ) Allocator.Error!void {
+        try self.addCommentAt(ally, self.here(), fmt, args);
+    }
+
     pub fn addRegion(
         self: *Self,
         ally: Allocator,
@@ -189,6 +236,8 @@ pub const Builder = struct {
         const start = region.start.index;
         const len = region.stop.index - start;
 
+        try self.program.replaceRange(ally, start, len, &.{});
+
         // remove all backrefs within the function region
         var backrefs = self.refs.valueIterator();
         var to_remove = std.ArrayList(usize).init(ally);
@@ -206,7 +255,23 @@ pub const Builder = struct {
             }
         }
 
-        try self.program.replaceRange(ally, start, len, &.{});
+        // collect + remove comments within the region
+        var comms = std.ArrayList(InstRef).init(ally);
+        defer comms.deinit();
+
+        var comm_refs = self.comments.keyIterator();
+        while (comm_refs.next()) |iref| {
+            if (iref.index >= start and iref.index < region.stop.index) {
+                try comms.append(iref.*);
+            }
+        }
+
+        for (comms.items) |iref| {
+            const list = self.comments.getPtr(iref).?;
+            for (list.items) |str| ally.free(str);
+            list.deinit(ally);
+            _ = self.comments.remove(iref);
+        }
 
         // collect + remove ssa positions with the funcref
         var positions = std.ArrayList(Pos).init(ally);

@@ -152,7 +152,11 @@ pub const Program = struct {
         return try ctx.slap(sym, tex, .right, .{});
     }
 
-    pub fn render(self: Self, ctx: *kz.Context) !kz.Ref {
+    pub fn render(
+        self: Self,
+        ctx: *kz.Context,
+        comments: Builder.Comments
+    ) !kz.Ref {
         var lines = std.ArrayList(kz.Ref).init(ctx.ally);
         defer lines.deinit();
 
@@ -165,6 +169,15 @@ pub const Program = struct {
         while (i < insts.len) : (i += 1) {
             const inst = insts[i];
             defer line.shrinkRetainingCapacity(0);
+
+            // check for a comment
+            const iref = InstRef.of(@intCast(u32, i));
+            if (comments.get(iref)) |list| {
+                for (list.items) |comment| {
+                    const gray = kz.Style{ .special = .faint };
+                    try lines.append(try ctx.print(gray, "{s}", .{comment}));
+                }
+            }
 
             try line.append(try ctx.print(.{ .fg = .cyan }, "{:>4}", .{i}));
             try line.append(try renderOpcode(ctx, inst.op));

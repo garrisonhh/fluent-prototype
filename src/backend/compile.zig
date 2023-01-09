@@ -67,6 +67,8 @@ fn compileOp(
 ) Error!void {
     const ally = env.ally;
 
+    try b.addComment(ally, "{}", .{op});
+
     switch (op) {
         .ldc => |ldc| {
             // crucify and load a constant
@@ -79,12 +81,16 @@ fn compileOp(
                 const call_ref = texpr.data.func_ref;
                 const pos = Pos.ofEntry(call_ref);
 
-                // func refs must be backreferenced
-                try Bc.immBackref(b, ally, dst, pos);
+                if (call_ref.eql(ref)) {
+                    // recursive call
+                    const bcref = b.getResolved(Pos.ofEntry(call_ref));
+                    const bytes = canon.from(&@as(u64, bcref.index));
+                    try Bc.imm(b, ally, dst, bytes);
+                } else {
+                    // func refs must be backreferenced
+                    try Bc.immBackref(b, ally, dst, pos);
 
-                // ensure called func is compiled and resolved, as long as
-                // it's not recursive
-                if (!call_ref.eql(ref)) {
+                    // ensure called func is compiled and resolved
                     const bc_ref = try env.ensureCompiled(call_ref);
                     try b.resolve(ally, pos, bc_ref);
                 }
@@ -251,6 +257,8 @@ fn compileFunc(env: *Env, super: *Builder, ref: FuncRef) Error!void {
     // mark start of region
     const start = b.here();
 
+    try b.addComment(ally, "[function {}]", .{func.name});
+
     // register allocation for ssa vars
     var rmap = try RegisterMap.init(ally, func);
     defer rmap.deinit(ally);
@@ -259,6 +267,9 @@ fn compileFunc(env: *Env, super: *Builder, ref: FuncRef) Error!void {
         // resolve block label
         const label = ssa.Label.of(i);
         try b.resolve(ally, Pos.of(ref, label, 0), b.here());
+
+        // comment block
+        try b.addComment(ally, "{} @{}", .{func.name, label.index});
 
         // compile block ops
         for (block.ops.items) |op| {

@@ -44,8 +44,8 @@ pub const Op = union(enum) {
     };
 
     pub const Jump = struct {
-        data: Local,
         dst: Label,
+        data: Local,
     };
 
     pub const Phi = struct {
@@ -190,6 +190,53 @@ pub const Op = union(enum) {
             }
         };
     }
+
+    /// mostly using this for bytecode comments
+    pub fn format(
+        self: Self,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype
+    ) @TypeOf(writer).Error!void {
+        switch (self.classify()) {
+            inline else => |data| {
+                const T = @TypeOf(data);
+
+                if (@hasField(T, "to")) {
+                    try writer.print("%{} = ", .{data.to.index});
+                }
+
+                try writer.writeAll(@tagName(self));
+
+                inline for (@typeInfo(T).Struct.fields) |field| {
+                    if (comptime std.mem.eql(u8, field.name, "to")) {
+                        continue;
+                    }
+
+                    const x = @field(data, field.name);
+                    switch (field.field_type) {
+                        Const => try writer.print(" c{}", .{x.index}),
+                        Local => try writer.print(" %{}", .{x.index}),
+                        []Local => for (x) |el| {
+                            try writer.print(" %{}", .{el.index});
+                        },
+                        Label => try writer.print(" @{}", .{x.index}),
+                        []Label => for (x) |el| {
+                            try writer.print(" @{}", .{el.index});
+                        },
+                        usize => try writer.print(" {}", .{x}),
+                        else => |F| comptime {
+                            const msg = std.fmt.comptimePrint(
+                                "TODO print ssa op field type `{}`",
+                                .{F}
+                            );
+                            @compileError(msg);
+                        }
+                    }
+                }
+            }
+        }
+    }
 };
 
 /// a handle for a const value
@@ -211,18 +258,6 @@ pub const Local = packed struct {
 
     pub fn of(index: usize) Self {
         return Self{ .index = index };
-    }
-
-    pub fn format(
-        self: Self,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype
-    ) @TypeOf(writer).Error!void {
-        _ = fmt;
-        _ = options;
-
-        try writer.print("%{}", .{self.index});
     }
 };
 

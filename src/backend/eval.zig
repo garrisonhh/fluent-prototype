@@ -102,7 +102,7 @@ pub fn evalTyped(
             var ctx = kz.Context.init(env.ally);
             defer ctx.deinit();
 
-            const tex = try prog.render(&ctx);
+            const tex = try prog.render(&ctx, env.bc.comments);
 
             try stdout.writeAll("[Bytecode]\n");
             try ctx.write(tex, stdout);
