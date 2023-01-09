@@ -9,6 +9,7 @@ pub const Builtin = enum {
 
     // control flow
     @"fn",
+    recur,
     do,
     @"if",
 

@@ -154,6 +154,10 @@ pub fn initCall(
     return Self.init(loc, false, ty, .{ .call = cloned });
 }
 
+pub fn initFuncRef(loc: ?Loc, ty: TypeId, ref: FuncRef) Self {
+    return Self.init(loc, true, ty, .{ .func_ref = ref });
+}
+
 pub fn deinit(self: Self, ally: Allocator) void {
     switch (self.data) {
         .unit, .ty, .@"bool", .number, .name, .builtin, .param, .func_ref => {},

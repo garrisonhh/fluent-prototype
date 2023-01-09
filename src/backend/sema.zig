@@ -42,6 +42,12 @@ fn expectError(env: Env, loc: ?Loc, expected: TypeId, found: TypeId) SemaError {
     return error.FluentError;
 }
 
+fn wrongNumArgsError(loc: ?Loc, expected: usize, found: usize) SemaError {
+    const text = "expected {} parameters, found {}";
+    _ = try context.post(.err, loc, text, .{expected, found});
+    return error.FluentError;
+}
+
 fn typeOfNumber(env: *Env, num: Number) SemaError!TypeId {
     return try env.identify(Type{
         .number = .{
@@ -313,6 +319,8 @@ fn firstDefPass(env: *Env, scope: Name, expr: SExpr) SemaError!DeferredDef {
         return filterDefError(expr.loc, e);
     };
 
+    std.debug.print("deferred {}\n", .{name});
+
     return DeferredDef{
         .name = name,
         .ty = ty,
@@ -374,7 +382,14 @@ fn analyzeNamespace(
 
     // second pass, eval and redefine everything
     for (deferred) |dedef| {
+        std.debug.print("deferred analyzing {}...\n", .{dedef.name});
+
         const texpr = try eval.evalTyped(env, dedef.name, dedef.body, dedef.ty);
+
+        if (texpr.isBuiltin(.pie_stone)) {
+            std.debug.panic("pie stone!!!\n", .{});
+        }
+
         env.redef(dedef.name, texpr) catch |e| {
             return filterDefError(dedef.body.loc, e);
         };
@@ -386,6 +401,53 @@ fn analyzeNamespace(
     return try unifyTExpr(env, texpr, outward);
 }
 
+fn analyzeRecur(
+    env: *Env,
+    scope: Name,
+    expr: SExpr,
+    outward: TypeId
+) SemaError!TExpr {
+    const ally = env.ally;
+
+    // find innermost function type
+    var name = scope;
+    const ty = while (true) {
+        const ty = env.get(name).ty;
+
+        if (env.tw.get(ty).* == .func) {
+            break ty;
+        }
+
+        name = name.drop() orelse {
+            const msg = "`recur` outside of function scope.";
+            _ = try context.post(.err, expr.loc, msg, .{});
+            return error.FluentError;
+        };
+    };
+
+    // return call to `recur` with proper type
+    const sexprs = expr.data.call;
+    const func = env.tw.get(ty).func;
+
+    if (sexprs.len - 1 != func.takes.len) {
+        return wrongNumArgsError(expr.loc, func.takes.len, sexprs.len - 1);
+    }
+
+    // analyze subexprs
+    const texprs = try ally.alloc(TExpr, sexprs.len);
+    texprs[0] = TExpr.initBuiltin(expr.loc, ty, .recur);
+
+    for (sexprs[1..]) |child, i| {
+        texprs[i + 1] = try analyzeExpr(env, scope, child, func.takes[i]);
+    }
+
+    const final = TExpr.init(expr.loc, false, func.returns, .{
+        .call = texprs
+    });
+    return try unifyTExpr(env, final, outward);
+}
+
+/// analyze a call to a specific builtin
 fn analyzeBuiltin(
     env: *Env,
     scope: Name,
@@ -406,6 +468,7 @@ fn analyzeBuiltin(
         .do => try analyzeDo(env, scope, expr, outward),
         .ns => try analyzeNamespace(env, scope, expr, outward),
         .@"fn" => try analyzeFn(env, scope, expr, outward),
+        .recur => try analyzeRecur(env, scope, expr, outward),
         .@"if" => try analyzeIf(env, scope, expr, outward),
         else => {
             std.debug.panic("TODO analyze builtin `{s}`", .{@tagName(b)});
@@ -547,9 +610,7 @@ fn analyzeCall(
     // analyze tail with fn param expectations
     const takes = fn_ty.func.takes;
     if (takes.len != tail.len) {
-        const text = "expected {} parameters, found {}";
-        _ = try context.post(.err, expr.loc, text, .{takes.len, tail.len});
-        return error.FluentError;
+        return wrongNumArgsError(expr.loc, takes.len, tail.len);
     }
 
     // infer params
@@ -704,7 +765,7 @@ pub fn analyze(
     var texpr = try analyzeExpr(env, scope, expr, expects);
     errdefer texpr.deinit(env.ally);
 
-    try postprocess(env.*, &texpr);
+    try postprocess(env, &texpr);
 
     // TODO verify texpr contains no pie stones as a postprocessing step
 

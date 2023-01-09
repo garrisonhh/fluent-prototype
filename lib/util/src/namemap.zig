@@ -62,9 +62,13 @@ pub const Name = struct {
         return try Self.initBuf(syms);
     }
 
-    fn drop(ns: Name) Name {
-        std.debug.assert(ns.syms.len > 0);
-        return Self.initBuf(ns.syms[0..ns.syms.len - 1]) catch unreachable;
+    /// returns the parent of this name
+    pub fn drop(ns: Name) ?Name {
+        if (ns.syms.len > 0) {
+            return Self.initBuf(ns.syms[0..ns.syms.len - 1]) catch unreachable;
+        }
+
+        return null;
     }
 
     fn deinit(self: Self, ally: Allocator) void {
@@ -304,7 +308,7 @@ pub fn NameMap(comptime V: type) type {
         /// matches this one
         pub fn seek(self: *Self, ns: Name, sym: Symbol, out_name: ?*Name) ?V {
             var scope = ns;
-            while (true) : (scope = scope.drop()) {
+            while (true) {
                 if (self.getSymbolEntry(scope, sym)) |entry| {
                     if (out_name) |ptr| {
                         ptr.* = entry.key_ptr.*;
@@ -313,10 +317,10 @@ pub fn NameMap(comptime V: type) type {
                     return entry.value_ptr.*;
                 }
 
-                if (scope.syms.len == 0) break;
+                scope = scope.drop() orelse {
+                    return null;
+                };
             }
-
-            return null;
         }
 
         pub const Entry = struct {

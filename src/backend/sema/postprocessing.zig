@@ -1,6 +1,7 @@
 //! extra sema passes that happen after the main type analysis routine
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Env = @import("../env.zig");
 const TExpr = @import("../texpr.zig");
 const context = @import("../../context.zig");
@@ -85,8 +86,25 @@ fn removeTrivialCasts(env: Env, texpr: *TExpr) void {
     }
 }
 
-pub fn postprocess(env: Env, texpr: *TExpr) Error!void {
-    pruneDoBlocks(env, texpr);
-    try verifyDynamic(env, texpr.*);
-    removeTrivialCasts(env, texpr);
+fn identifyLeftovers(texpr: TExpr) Error!void {
+    if (texpr.isBuiltin(.pie_stone)) {
+        const msg = "found pie stone in expr after sema.";
+        _ = try context.post(.err, texpr.loc, msg, .{});
+        return Error.FluentError;
+    }
+
+    for (texpr.getChildren()) |child| {
+        try identifyLeftovers(child);
+    }
+}
+
+pub fn postprocess(env: *Env, texpr: *TExpr) Error!void {
+    pruneDoBlocks(env.*, texpr);
+    try verifyDynamic(env.*, texpr.*);
+    removeTrivialCasts(env.*, texpr);
+
+    // compiler self-diagnostics
+    if (builtin.mode == .Debug) {
+        try identifyLeftovers(texpr.*);
+    }
 }

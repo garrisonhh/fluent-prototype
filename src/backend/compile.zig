@@ -82,9 +82,12 @@ fn compileOp(
                 // func refs must be backreferenced
                 try Bc.immBackref(b, ally, dst, pos);
 
-                // ensure called func is compiled and resolved
-                const bc_ref = try env.ensureCompiled(call_ref);
-                try b.resolve(ally, pos, bc_ref);
+                // ensure called func is compiled and resolved, as long as
+                // it's not recursive
+                if (!call_ref.eql(ref)) {
+                    const bc_ref = try env.ensureCompiled(call_ref);
+                    try b.resolve(ally, pos, bc_ref);
+                }
             } else {
                 // add value as an immediate
                 const value = try canon.crucify(env.*, texpr);
@@ -182,6 +185,14 @@ fn compileOp(
             };
 
             try b.addInst(ally, con(operand, to));
+        },
+        .eq => |pure| {
+            const lhs = rmap.get(pure.params[0]);
+            const rhs = rmap.get(pure.params[1]);
+            const to = rmap.get(pure.to);
+
+            try b.addInst(ally, Bc.xor(lhs, rhs, to));
+            try b.addInst(ally, Bc.bnot(to, to));
         },
         inline .mod, .fn_ty => |pure, tag| {
             // binary ops

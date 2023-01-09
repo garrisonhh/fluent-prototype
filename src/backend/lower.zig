@@ -244,32 +244,45 @@ fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     // get true head
     const raw_head = exprs[0];
     const head = switch (raw_head.data) {
-        .name => |name| env.get(name),
+        .name => |name| name: {
+            const got = env.get(name);
+
+            if (builtin.mode == .Debug and got.isBuiltin(.pie_stone)) {
+                std.debug.panic("called pie_stone {}", .{name});
+            }
+
+            break :name got;
+        },
+        .builtin => |b|
+            if (b == .recur) TExpr.initFuncRef(raw_head.loc, raw_head.ty, ref)
+            else raw_head,
         else => raw_head
     };
 
-    const tail = exprs[1..];
-
-    // builtins have their own logic
+    // dispatch on builtins (except for recur)
     if (head.data == .builtin) {
-        return switch (head.data.builtin) {
+        switch (head.data.builtin) {
+            .recur => unreachable,
             .eq, .add, .sub, .mul, .div, .mod, .@"and", .@"or", .not, .cast,
-            .slice_ty, .fn_ty
-                => |b| try lowerOperator(env, ref, block, b, tail, expr.ty),
-            .@"fn" => try lowerLambda(env, ref, block, expr),
-            .@"if" => try lowerIf(env, ref, block, expr),
+            .slice_ty, .fn_ty => |b| {
+                const tail = expr.data.call[1..];
+                return try lowerOperator(env, ref, block, b, tail, expr.ty);
+            },
+            .@"fn" => return try lowerLambda(env, ref, block, expr),
+            .@"if" => return try lowerIf(env, ref, block, expr),
             else => |b| {
                 std.debug.panic("TODO lower builtin {s}", .{@tagName(b)});
             }
-        };
+        }
     }
 
     // lower all children
     var locals_buf: [256]Local = undefined;
     const locals = locals_buf[0..exprs.len];
 
-    for (exprs) |child, i| {
-        locals[i] = try lowerExpr(env, ref, block, child);
+    locals[0] = try lowerExpr(env, ref, block, head);
+    for (exprs[1..]) |child, i| {
+        locals[i + 1] = try lowerExpr(env, ref, block, child);
     }
 
     // lower call and return value
@@ -324,7 +337,7 @@ fn lowerFunction(
     env: *Env,
     name: Name,
     takes: []const TypeId,
-    body: TExpr
+    body: TExpr,
 ) Error!FuncRef {
     // create func and entry block
     var ref = try env.prog.add(env.ally, name, takes);

@@ -639,7 +639,7 @@ pub const Func = struct {
                     try self.renderLocal(ctx, env, call.to),
                     try ctx.print(.{}, " = {s} ", .{tag}),
                     try self.renderLocal(ctx, env, call.func),
-                    try ctx.print(.{}, " ", .{}),
+                    try ctx.clone(comma),
                 });
 
                 try self.renderParams(ctx, env, &line, call.params);

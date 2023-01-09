@@ -44,9 +44,11 @@ pub const Opcode = enum(u8) {
     imul,
     idiv,
     imod,
+
     lor,
     land,
     lnot,
+
     bor,
     band,
     bnot,
@@ -374,6 +376,9 @@ pub const Construct = struct {
     pub const imul = conRRR(.imul);
     pub const idiv = conRRR(.idiv);
     pub const imod = conRRR(.imod);
+
+    pub const bnot = conRR(.bnot);
+    pub const xor = conRRR(.xor);
 
     pub const fn_ty = conRRR(.fn_ty);
     pub const slice_ty = conRR(.slice_ty);
