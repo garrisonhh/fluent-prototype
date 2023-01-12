@@ -319,8 +319,6 @@ fn firstDefPass(env: *Env, scope: Name, expr: SExpr) SemaError!DeferredDef {
         return filterDefError(expr.loc, e);
     };
 
-    std.debug.print("deferred {}\n", .{name});
-
     return DeferredDef{
         .name = name,
         .ty = ty,
@@ -382,8 +380,6 @@ fn analyzeNamespace(
 
     // second pass, eval and redefine everything
     for (deferred) |dedef| {
-        std.debug.print("deferred analyzing {}...\n", .{dedef.name});
-
         const texpr = try eval.evalTyped(env, dedef.name, dedef.body, dedef.ty);
 
         if (texpr.isBuiltin(.pie_stone)) {

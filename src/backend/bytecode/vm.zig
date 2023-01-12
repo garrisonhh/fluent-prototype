@@ -233,25 +233,12 @@ pub fn execute(
                     break :loop;
                 }
 
-                std.debug.print("ret {}\n\n", .{self.scratch[8]});
-
                 self.mov(FP, SP);
                 self.pop(8, FP);
                 self.pop(8, IP);
             },
             .call => {
                 const dst = Register.of(args[0]);
-
-                if (self.get(dst) == 0) {
-                    std.debug.print(
-                        "(-fib {} {} {})\n\n",
-                        .{self.scratch[9], self.scratch[10], self.scratch[11]}
-                    );
-
-                    if (self.get(SP) > 256) {
-                        @panic("stack overflow :(");
-                    }
-                }
 
                 self.push(8, IP);
                 self.push(8, FP);
@@ -336,8 +323,6 @@ pub fn execute(
                     .fn_ty => (try self.makeFnType(env, lhs, rhs)).index,
                     else => unreachable
                 };
-
-                std.debug.print("[{s} {} {} -> {}]\n", .{@tagName(v), lhs, rhs, value});
 
                 self.set(to, value);
             },
