@@ -4,73 +4,18 @@ const stdout = std.io.getStdOut().writer();
 const stderr = std.io.getStdErr().writer();
 const builtin = @import("builtin");
 const kz = @import("kritzler");
+const linenoize = @import("linenoize");
+const Linenoise = linenoize.Linenoise;
+const linenoiseEdit = linenoize.linenoiseEdit;
 const util = @import("util");
 const context = @import("context.zig");
 const plumbing = @import("plumbing.zig");
 const backend = @import("backend.zig");
 const Env = backend.Env;
 
-// TODO get rid of this and use the zig linenoise port I contributed to
-const c = @cImport({
-    @cInclude("linenoise.h");
-});
-
 // this test ensures that all code is semantically analyzed
 test {
     std.testing.refAllDeclsRecursive(@This());
-}
-
-/// returns file
-fn replRead(ally: Allocator) !context.FileHandle {
-    const INDENT = 2;
-
-    var buf = std.ArrayList(u8).init(ally);
-    defer buf.deinit();
-
-    var level: usize = 0;
-
-    while (true) {
-        // print prompt with indent
-        const indent = try ally.alloc(u8, level * INDENT);
-        defer ally.free(indent);
-
-        std.mem.set(u8, indent, ' ');
-
-        const prompt = try std.fmt.allocPrintZ(ally, "> {s}", .{indent});
-        defer ally.free(prompt);
-
-        // get text with linenoise
-        const raw_line: ?[*:0]u8 = c.linenoise(prompt.ptr);
-        defer c.linenoiseFree(raw_line);
-
-        const line = if (raw_line) |raw| raw[0..std.mem.len(raw)] else "";
-
-        // parse line
-        for (line) |ch| {
-            switch (ch) {
-                '(', '[' => level += 1,
-                ')', ']' => if (level > 0) {
-                    level -= 1;
-                },
-                else => {}
-            }}
-        try buf.appendSlice(line);
-        try buf.append('\n');
-
-        // break once expr is finished
-        if (level == 0) break;
-    }
-
-    // every read needs to have a unique namespace
-    const C = struct { var reads: usize = 0; };
-
-    var tmp: [32]u8 = undefined;
-    const filename = std.fmt.bufPrint(&tmp, "repl-{d}", .{C.reads}) catch {
-        unreachable;
-    };
-    C.reads += 1;
-
-    return context.addExternalSource(filename, buf.items);
 }
 
 /// look for a `.fluentinit` script to run on repl startup
@@ -91,25 +36,19 @@ fn repl(ally: Allocator, env: *Env) !void {
         try stdout.writeByte('\n');
     }
 
-    loop: while (true) {
-        const input = try replRead(ally);
+    var ln = Linenoise.init(ally);
+    defer ln.deinit();
 
-        // check for empty input (exit program)
-        var is_empty: bool = true;
-        for (input.getSource()) |ch| {
-            if (!std.ascii.isSpace(ch)) {
-                is_empty = false;
-                break;
-            }
-        }
+    repl: while (try ln.linenoise("> ")) |line| {
+        try ln.history.add(line);
 
-        if (is_empty) break;
+        const input = try context.addExternalSource("repl", line);
 
         // eval and print any messages
         const value = plumbing.exec(env, input, .expr) catch |e| {
             if (e == error.FluentError) {
                 try context.flushMessages();
-                continue :loop;
+                continue :repl;
             } else {
                 return e;
             }
@@ -253,7 +192,7 @@ pub fn main() !void {
     }){};
     defer _ = gpa.deinit();
     // const ally = gpa.allocator();
-    const ally = std.heap.raw_c_allocator;
+    const ally = std.heap.page_allocator;
 
     try context.init(ally);
     defer context.deinit();
