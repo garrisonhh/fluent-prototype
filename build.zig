@@ -22,13 +22,9 @@ pub fn build(b: *std.build.Builder) void {
     exe.setTarget(target);
     exe.setBuildMode(mode);
     exe.setOutputDir(".");
-    exe.linkLibC();
-
-    // linenoise (placeholder until static library linking gets fixed)
-    exe.addCSourceFile("lib/linenoise/linenoise.c", &.{""});
-    exe.addIncludePath("lib/linenoise");
 
     // packages
+    exe.addPackagePath("linenoize", "lib/linenoize/linenoize.zig");
     exe.addPackagePath("kritzler", "lib/kritzler/kritzler.zig");
     exe.addPackagePath("util", "lib/util/util.zig");
 
