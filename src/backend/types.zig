@@ -530,7 +530,12 @@ pub const Type = union(enum) {
             .unit, .@"bool", .namespace, .builtin
                 => try writer.writeAll(@tagName(self)),
             .ty => try writer.writeAll("type"),
-            .hole, .symbol, .any => try util.writeCaps(@tagName(self), writer),
+            .hole, .symbol, .any => {
+                // write capitalized tag
+                const tag = @tagName(self);
+                const first = std.ascii.toUpper(tag[0]);
+                try writer.print("{c}{s}", .{first, tag[1..]});
+            },
             .atom => |sym| try writer.print("#{}", .{sym}),
             .set => |set| {
                 // render subtypes

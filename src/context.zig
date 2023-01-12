@@ -250,16 +250,14 @@ pub const Message = struct {
         log,
         debug,
 
-        const meta = util.EnumTable(@This(), kz.Style, .{
-            .{.note,  kz.Style{ .fg = .cyan    }},
-            .{.err,   kz.Style{ .fg = .red     }},
-            .{.warn,  kz.Style{ .fg = .magenta }},
-            .{.log,   kz.Style{                }},
-            .{.debug, kz.Style{ .fg = .green   }},
-        });
-
         fn getStyle(self: @This()) kz.Style {
-            return @This().meta.get(self);
+            return switch (self) {
+                .note => .{ .fg = .cyan },
+                .err => .{ .fg = .red },
+                .warn => .{ .fg = .magenta },
+                .log => .{},
+                .debug => .{ .fg = .green },
+            };
         }
     };
 

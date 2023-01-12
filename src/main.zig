@@ -69,7 +69,7 @@ fn repl(ally: Allocator, env: *Env) !void {
 /// the output of argument parsing
 const Command = union(enum) {
     const Self = @This();
-    const Enum = @typeInfo(Self).Union.tag_type.?;
+    const Tag = @typeInfo(Self).Union.tag_type.?;
 
     help: void,
     repl: void,
@@ -79,28 +79,31 @@ const Command = union(enum) {
         desc: []const u8,
         params: []const []const u8 = &.{},
     };
-    const MetaTable = util.EnumTable(Enum, Meta, .{
-        .{.help, Meta{ .desc = "display this prompt" }},
-        .{.repl, Meta{ .desc = "start interactive mode" }},
-        .{.run, Meta{
-            .desc = "run a program dynamically",
-            .params = &[_][]const u8{"file"}
-        }},
-    });
 
-    // maps name -> tag
-    const tag_map = std.ComptimeStringMap(Enum, pairs: {
+    const meta = meta: {
+        var map = std.enums.EnumArray(Tag, Meta).initUndefined();
+        map.set(.help, .{ .desc = "display this prompt" });
+        map.set(.repl, .{ .desc = "start interactive mode" });
+        map.set(.run, .{
+            .desc = "run a program dynamically",
+            .params = &[_][]const u8{"file"},
+        });
+
+        break :meta map;
+    };
+
+    const tags = std.ComptimeStringMap(Tag, pairs: {
         const KV = struct {
             @"0": []const u8,
-            @"1": Enum
+            @"1": Tag
         };
 
-        const fields = @typeInfo(Enum).Enum.fields;
+        const fields = @typeInfo(Tag).Enum.fields;
         var entries: [fields.len]KV = undefined;
         for (fields) |field, i| {
             entries[i] = KV{
                 .@"0" = field.name,
-                .@"1" = @intToEnum(Enum, field.value),
+                .@"1" = @intToEnum(Tag, field.value),
             };
         }
 
@@ -111,8 +114,8 @@ const Command = union(enum) {
 fn printHelp() @TypeOf(stdout).Error!void {
     try stdout.print("commands:\n\n", .{});
 
-    for (std.enums.values(Command.Enum)) |tag| {
-        const meta = Command.MetaTable.get(tag);
+    for (std.enums.values(Command.Tag)) |tag| {
+        const meta = Command.meta.get(tag);
         try stdout.print("{s:<16}{s}\n", .{@tagName(tag), meta.desc});
     }
 }
@@ -171,10 +174,10 @@ fn parseArgs(ally: Allocator) !Command {
 
     if (args.len < 2) return CommandError.BadArgs;
 
-    const tag = Command.tag_map.get(args[1]) orelse {
+    const tag = Command.tags.get(args[1]) orelse {
         return CommandError.BadArgs;
     };
-    const meta = Command.MetaTable.get(tag);
+    const meta = Command.meta.get(tag);
 
     if (args.len != 2 + meta.params.len) return CommandError.BadArgs;
 
