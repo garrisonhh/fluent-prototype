@@ -390,6 +390,8 @@ pub const Construct = struct {
     pub const idiv = conRRR(.idiv);
     pub const imod = conRRR(.imod);
 
+    pub const lnot = conRR(.lnot);
+
     pub const bnot = conRR(.bnot);
     pub const xor = conRRR(.xor);
 

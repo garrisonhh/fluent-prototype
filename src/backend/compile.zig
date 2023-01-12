@@ -150,18 +150,46 @@ fn compileOp(
             try b.addInst(ally, Bc.ret);
         },
         .call => |call| {
-            // map params
-            for (call.params) |param, i| {
-                const reg = Register.param(@intCast(Register.Index, i));
-                try rmap.mapExact(ally, b, param, reg);
+            // push all live ssa values that aren't dying or being born here
+            var live = std.BoundedArray(Register, Register.COUNT){};
+            var iter = rmap.iterator();
+            while (iter.next()) |entry| {
+                const lt = rmap.proph.get(entry.local);
+                if (!lt.start.eql(rmap.pos) and !lt.stop.eql(rmap.pos)) {
+                    live.appendAssumeCapacity(entry.reg);
+                    try b.addInst(ally, Bc.push(8, entry.reg));
+                }
             }
 
-            // call func
+            // mov func to return register
             const func = rmap.get(call.func);
+
+            try b.addInst(ally, Bc.mov(func, Vm.RETURN));
+
+            // push/pop params to ensure no clobbering
+            for (call.params) |param| {
+                try b.addInst(ally, Bc.push(8, rmap.get(param)));
+            }
+
+            var i: usize = 0;
+            while (i < call.params.len) : (i += 1) {
+                const n = call.params.len - i - 1;
+                const reg = Register.param(@intCast(Register.Index, n));
+                try b.addInst(ally, Bc.pop(8, reg));
+            }
+
+            // do call op
             const dst = rmap.get(call.to);
 
-            try b.addInst(ally, Bc.call(func));
+            try b.addInst(ally, Bc.call(Vm.RETURN));
             try b.addInst(ally, Bc.mov(Vm.RETURN, dst));
+
+            // pop all live ssa values back into their mapped registers
+            const slice = live.slice();
+            std.mem.reverse(Register, slice);
+            for (slice) |reg| {
+                try b.addInst(ally, Bc.pop(8, reg));
+            }
         },
         .br => |br| {
             const cond = rmap.get(br.cond);
@@ -198,7 +226,7 @@ fn compileOp(
             const to = rmap.get(pure.to);
 
             try b.addInst(ally, Bc.xor(lhs, rhs, to));
-            try b.addInst(ally, Bc.bnot(to, to));
+            try b.addInst(ally, Bc.lnot(to, to));
         },
         inline .mod, .fn_ty => |pure, tag| {
             // binary ops
@@ -222,9 +250,11 @@ fn compileOp(
 
             const ty = env.tw.get(ref.getLocal(env.*, pure.to));
 
-            if (ty.* == .ptr
-             or ty.* == .number and ty.number.layout != .float) {
-                // integral math
+            if (ty.* == .number and ty.number.layout == .float) {
+                // floats
+                @panic("TODO compile float arithmetic");
+            } else {
+                // integers + pointers
                 const con = switch (comptime tag) {
                     .add => Bc.iadd,
                     .sub => Bc.isub,
@@ -235,11 +265,6 @@ fn compileOp(
                 };
 
                 try b.addInst(ally, con(lhs, rhs, to));
-            } else if (ty.* == .number and ty.number.layout == .float) {
-                // floats
-                @panic("TODO compile float arithmetic");
-            } else {
-                unreachable;
             }
         },
         else => |tag| std.debug.panic("TODO compile op {}", .{tag})

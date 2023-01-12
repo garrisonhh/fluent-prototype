@@ -259,6 +259,15 @@ pub const Local = packed struct {
     pub fn of(index: usize) Self {
         return Self{ .index = index };
     }
+
+    pub fn format(
+        self: Self,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype
+    ) @TypeOf(writer).Error!void {
+        try writer.print("%{}", .{self.index});
+    }
 };
 
 /// a handle for a block
@@ -320,12 +329,13 @@ pub const Pos = struct {
     /// null if this is the end of the function
     pub fn next(self: Self, func: *const Func) ?Self {
         // iterate index
-        if (self.index < func.blocks.items[self.block.index].ops.items.len) {
+        const op_count = func.blocks.items[self.block.index].ops.items.len;
+        if (self.index + 1 < op_count) {
             return Self.of(self.ref, self.block, self.index + 1);
         }
 
         // iterate block
-        if (self.block.index < func.blocks.items.len) {
+        if (self.block.index + 1 < func.blocks.items.len) {
             return Self.of(self.ref, Label.of(self.block.index + 1), 0);
         }
 
@@ -384,41 +394,31 @@ pub const Prophecy = struct {
 
     /// creates OpMeta using buffer memory
     fn getMeta(buf: []Local, op: Op) OpMeta {
-        const to: ?Local = switch (op.classify()) {
-            inline else => |data|
-                if (@hasField(@TypeOf(data), "to")) data.to else null
-        };
-
-        // usage
-        var len: usize = 0;
+        // find `to` and `using`
+        var to: ?Local = null;
+        var using = std.BoundedArray(Local, 256){};
         switch (op.classify()) {
-            .ldc, .alloca => {},
-            .call => |call| {
-                buf[0] = call.func;
-                std.mem.copy(Local, buf[1..], call.params);
-                len = 1 + call.params.len;
-            },
-            .jump => |jump| {
-                buf[0] = jump.data;
-                len = 1;
-            },
-            .phi => |phi| {
-                buf[0] = phi.to;
-                len = 1;
-            },
-            .branch => |br| {
-                buf[0] = br.cond;
-                len = 1;
-            },
-            inline .pure, .impure => |data| {
-                std.mem.copy(Local, buf, data.params);
-                len = data.params.len;
-            },
+            inline else => |data| {
+                const T = @TypeOf(data);
+                inline for (@typeInfo(T).Struct.fields) |field| {
+                    const el = @field(data, field.name);
+                    if (comptime std.mem.eql(u8, field.name, "to")) {
+                        to = el;
+                    } else switch (field.field_type) {
+                        Local => using.appendAssumeCapacity(el),
+                        []Local => using.appendSliceAssumeCapacity(el),
+                        else => {}
+                    }
+                }
+            }
         }
+
+        // copy using to buf
+        std.mem.copy(Local, buf, using.slice());
 
         return OpMeta{
             .to = to,
-            .uses = buf[0..len],
+            .uses = buf[0..using.len],
         };
     }
 
@@ -472,7 +472,7 @@ pub const Prophecy = struct {
     }
 
     pub fn get(self: Self, local: Local) Lifetime {
-        return self.map.items[local.index];
+        return self.map[local.index];
     }
 
     pub fn render(self: Self, ctx: *kz.Context, env: Env) !kz.Ref {

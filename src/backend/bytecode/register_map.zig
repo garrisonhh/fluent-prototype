@@ -44,8 +44,7 @@ pub fn init(ally: Allocator, func: *const Func) Error!Self {
     // make free list
     var free = RegList{};
     var r = Register.of(Register.COUNT - 1);
-    const last_reg = Register.param(0);
-    std.debug.assert(last_reg.n > 0);
+    const last_reg = Register.param(@intCast(Register.Index, func.takes));
     while (r.n >= last_reg.n) : (r.n -= 1) {
         free.appendAssumeCapacity(r);
     }
@@ -53,7 +52,7 @@ pub fn init(ally: Allocator, func: *const Func) Error!Self {
     // make map
     const nlocals = func.locals.items.len;
     const lmap = try ally.alloc(?Register, nlocals);
-    std.mem.set(?Register, lmap, Register.of(Register.COUNT - 1));
+    std.mem.set(?Register, lmap, null);
 
     var self = Self{
         .func = func,
@@ -64,18 +63,22 @@ pub fn init(ally: Allocator, func: *const Func) Error!Self {
         .back = [1]?Local{null} ** Register.COUNT,
     };
 
-    // map function parameters
+    // map function parameters directly to callconv registers
     var param = Local.of(0);
     while (param.index < func.takes) : (param.index += 1) {
         const reg = Register.param(@intCast(Register.Index, param.index));
         self.tie(param, reg);
     }
 
-    // animate any value that lives at the entry point
-    for (self.proph.map) |lt, i| {
-        if (lt.start.eql(self.pos)) {
-            self.animate(Local.of(i));
+    // animate any non-parameter value that lives at the entry point
+    var local = Local.of(func.takes);
+    while (local.index < self.proph.map.len) : (local.index += 1) {
+        const lt = self.proph.get(local);
+        if (!lt.start.eql(self.pos)) {
+            break;
         }
+
+        self.animate(local);
     }
 
     return self;
@@ -87,6 +90,8 @@ pub fn deinit(self: *Self, ally: Allocator) void {
 }
 
 fn tie(self: *Self, local: Local, reg: Register) void {
+    std.debug.assert(self.map[local.index] == null);
+    std.debug.assert(self.back[reg.n] == null);
     self.map[local.index] = reg;
     self.back[reg.n] = local;
 }
@@ -111,36 +116,13 @@ fn murder(self: *Self, local: Local) void {
 }
 
 pub fn get(self: Self, local: Local) Register {
-    return self.map[local.index].?;
-}
-
-/// ensures that a register is available for a local, without losing
-/// allocations for other locals
-pub fn mapExact(
-    self: *Self,
-    ally: Allocator,
-    b: *Builder,
-    local: Local,
-    reg: Register
-) Allocator.Error!void {
-    const old_reg = self.get(local);
-
-    // ensure the register is available
-    if (self.back[reg.n]) |prev| {
-        // swap registers
-        const swap_reg = self.popFree();
-        try b.addInst(ally, Bc.mov(reg, swap_reg));
-
-        self.murder(prev);
-        self.tie(prev, swap_reg);
-        self.murder(local);
-        self.tie(local, reg);
-    } else {
-        // no need to remap, just tie this one
-        self.tie(local, reg);
+    if (builtin.mode == .Debug) {
+        if (self.map[local.index] == null) {
+            std.debug.print("at pos {} tried to get dead {}\n", .{self.pos, local});
+        }
     }
 
-    try b.addInst(ally, Bc.mov(old_reg, reg));
+    return self.map[local.index].?;
 }
 
 /// temporary must be dropped before next iteration
@@ -186,4 +168,34 @@ pub fn next(self: *Self) void {
             self.animate(Local.of(i));
         }
     }
+}
+
+pub const Entry = struct {
+    local: Local,
+    reg: Register,
+};
+
+pub const Iterator = struct {
+    map: []const ?Register,
+    index: usize = 0,
+
+    pub fn next(self: *Iterator) ?Entry {
+        while (self.index < self.map.len) {
+            defer self.index += 1;
+
+            if (self.map[self.index]) |reg| {
+                return Entry{
+                    .local = Local.of(self.index),
+                    .reg = reg,
+                };
+            }
+        }
+
+        return null;
+    }
+};
+
+/// iterate through live locals
+pub fn iterator(self: Self) Iterator {
+    return Iterator{ .map = self.map };
 }

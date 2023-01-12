@@ -70,19 +70,19 @@ fn mov_imm(self: *Self, src: []const u8, dst: Register) void {
     self.set(dst, canon.to(src));
 }
 
-fn push(self: *Self, bytes: usize, src: Register) void {
-    const dst = self.stack[self.scratch[SP.n]..];
-    const src_bytes = @ptrCast([*]u8, &self.scratch[src.n])[0..bytes];
-    std.mem.copy(u8, dst, src_bytes);
-    self.scratch[SP.n] += bytes;
+fn push(self: *Self, nbytes: usize, src: Register) void {
+    const addr = self.get(SP);
+    const dst = self.stack[addr..addr + nbytes];
+    const from = @ptrCast(*const [8]u8, &self.get(src));
+    std.mem.copy(u8, dst, from);
+    self.scratch[SP.n] += nbytes;
 }
 
-fn pop(self: *Self, bytes: usize, dst: Register) void {
-    self.scratch[SP.n] -= bytes;
-    const sp = self.scratch[SP.n];
-    const src = self.stack[sp..sp + bytes];
-    const dst_bytes = @ptrCast([*]u8, &self.scratch[dst.n])[0..bytes];
-    std.mem.copy(u8, dst_bytes, src);
+fn pop(self: *Self, nbytes: usize, dst: Register) void {
+    self.scratch[SP.n] -= nbytes;
+    const addr = self.get(SP);
+    const data = self.stack[addr..addr + nbytes];
+    self.set(dst, canon.to(data));
 }
 
 fn makeFnType(
@@ -133,16 +133,38 @@ fn now() f64 {
 
 /// debug prints state of vm
 fn debug(self: Self, program: Program) void {
+    const kz = @import("kritzler");
+
     const ip = self.get(IP);
     const inst = program.program[ip];
-    std.debug.print("[sp: {} fp: {}]\n", .{self.get(SP), self.get(FP)});
-    std.debug.print("{d:4}: {s} {X} {X} {X}\n", .{
-        ip,
+
+    std.debug.print(
+        "[sp: {} fp: {} ip: {}]\n",
+        .{self.get(SP), self.get(FP), ip}
+    );
+
+    const sl = @ptrCast([*]const u64, self.stack.ptr)[0..self.get(SP) / 8];
+    std.debug.print("stack: {d}\n", .{sl});
+
+    std.debug.print("[", .{});
+    for (self.scratch[RESERVED..RESERVED + 10]) |n, i| {
+        if (i > 0) std.debug.print(" ", .{});
+        const index = i + RESERVED;
+        std.debug.print("%{}={}", .{index, n});
+    }
+    std.debug.print("]\n", .{});
+
+    std.debug.print("{}{s}{} {} {} {}\n\n", .{
+        kz.Style{ .fg = .red },
         @tagName(inst.op),
+        kz.Style{},
         inst.a,
         inst.b,
         inst.c,
     });
+
+    // const stdin = std.io.getStdIn().reader();
+    // _ = stdin.readByte() catch {};
 }
 
 pub fn execute(
@@ -195,6 +217,8 @@ pub fn execute(
                 continue;
             },
             .jump_if => {
+                self.debug(program);
+
                 const cond = Register.of(args[0]);
                 ip.* += 1;
                 const to = insts[ip.*].toInt();
@@ -209,12 +233,26 @@ pub fn execute(
                     break :loop;
                 }
 
+                std.debug.print("ret {}\n\n", .{self.scratch[8]});
+
                 self.mov(FP, SP);
                 self.pop(8, FP);
                 self.pop(8, IP);
             },
             .call => {
                 const dst = Register.of(args[0]);
+
+                if (self.get(dst) == 0) {
+                    std.debug.print(
+                        "(-fib {} {} {})\n\n",
+                        .{self.scratch[9], self.scratch[10], self.scratch[11]}
+                    );
+
+                    if (self.get(SP) > 256) {
+                        @panic("stack overflow :(");
+                    }
+                }
+
                 self.push(8, IP);
                 self.push(8, FP);
                 self.mov(SP, FP);
@@ -224,23 +262,20 @@ pub fn execute(
             .pop => {
                 const nbytes = args[0];
                 const dst = Register.of(args[1]);
-                self.stack[SP.n] -= nbytes;
-                const addr = self.get(SP);
-                const data = self.stack[addr..addr + nbytes];
-                self.set(dst, canon.to(data));
+
+                self.pop(nbytes, dst);
             },
             .push => {
                 const nbytes = args[0];
-                const src = Register.of(args[0]);
-                const value = self.get(src);
-                const data = canon.from(&value);
-                const addr = self.get(SP);
-                std.mem.copy(u8, self.stack[addr..addr + nbytes], data);
+                const src = Register.of(args[1]);
+
+                self.push(nbytes, src);
             },
             .load => {
                 const nbytes = args[0];
                 const src = Register.of(args[1]);
                 const dst = Register.of(args[2]);
+
                 // read canonical data
                 const addr = self.get(src);
                 const data = self.stack[addr..addr + nbytes];
@@ -301,6 +336,8 @@ pub fn execute(
                     .fn_ty => (try self.makeFnType(env, lhs, rhs)).index,
                     else => unreachable
                 };
+
+                std.debug.print("[{s} {} {} -> {}]\n", .{@tagName(v), lhs, rhs, value});
 
                 self.set(to, value);
             },
