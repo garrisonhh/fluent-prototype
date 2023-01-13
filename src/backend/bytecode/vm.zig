@@ -187,8 +187,6 @@ pub fn execute(
         const op = inst.op;
         const args = inst.getArgs();
 
-        // self.debug(program);
-
         switch (op) {
             .nop => unreachable,
             .mov => {
@@ -217,8 +215,6 @@ pub fn execute(
                 continue;
             },
             .jump_if => {
-                self.debug(program);
-
                 const cond = Register.of(args[0]);
                 ip.* += 1;
                 const to = insts[ip.*].toInt();
@@ -326,14 +322,6 @@ pub fn execute(
 
                 self.set(to, value);
             },
-            .debug => {
-                const src = Register.of(args[0]);
-                std.debug.print("debug: {d}\n", .{self.get(src)});
-            },
-            // else => std.debug.panic(
-                // "instruction {s} not implemented",
-                // .{@tagName(op)}
-            // )
         }
 
         // iterate ip. this cannot be in the second while loop stmt because I

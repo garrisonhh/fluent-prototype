@@ -59,9 +59,6 @@ pub const Opcode = enum(u8) {
     // type operations
     fn_ty, // binary
     slice_ty, // unary
-
-    // special
-    debug, // debug %src ; prints a register for debugging
 };
 
 /// all operations take up to 3 operands, which typically represent VM registers
@@ -244,7 +241,7 @@ pub const Program = struct {
                         try line.append(try renderReg(ctx, arg));
                     }
                 },
-                .debug, .call => try line.append(try renderReg(ctx, args[0])),
+                .call => try line.append(try renderReg(ctx, args[0])),
                 else => std.debug.panic(
                     "cannot render op `{s}` yet\n",
                     .{@tagName(inst.op)}
