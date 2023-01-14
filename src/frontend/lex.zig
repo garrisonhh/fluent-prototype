@@ -180,13 +180,5 @@ pub fn tokenize(
         };
     }
 
-    // TODO remove
-    for (tokens.items) |token| {
-        const stdout = std.io.getStdOut().writer();
-        stdout.print("[{s}]\n", .{@tagName(token.tag)}) catch unreachable;
-        @import("kritzler").display(ally, proj, token.loc, stdout) catch unreachable;
-        stdout.writeByte('\n') catch unreachable;
-    }
-
     return Result.ok(tokens.toOwnedSlice());
 }

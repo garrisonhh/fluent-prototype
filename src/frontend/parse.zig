@@ -175,6 +175,23 @@ fn unexpectedIndent(
     return try Message.err(ally, RawExpr, loc, fmt, .{expected});
 }
 
+fn skipEmptyLines(parser: *Parser) void {
+    // skip empty lines
+    while (parser.peek()) |tok| {
+        const zero_len_line = tok.tag == .indent and tok.loc.length() == 0;
+        const empty_line = tok.tag == .indent and next_nl: {
+            const next = parser.get(1) orelse break :next_nl true;
+            break :next_nl next.tag == .indent;
+        };
+
+        if (!(zero_len_line or empty_line)) {
+            break;
+        }
+
+        parser.mustSkip(1);
+    }
+}
+
 /// whitespace awareness
 fn expectIndented(
     ally: Allocator,
@@ -245,18 +262,11 @@ fn expectFile(
 
     // collect all the exprs in the file
     while (!parser.completed()) {
-        // skip empty lines
-        while (parser.peek()) |tok| {
-            if (tok.tag == .indent and tok.loc.length() == 0) {
-                parser.mustSkip(1);
-            } else {
-                break;
-            }
-        }
-
         const res = try expectIndented(ally, proj, file, parser, 0);
         const expr = res.get() orelse return res;
         try exprs.append(expr);
+
+        skipEmptyLines(parser);
     }
 
     // return file as a RawExpr
@@ -280,6 +290,13 @@ pub fn parse(
 
     // parse
     var parser = Parser.init(tokens, 0);
+    skipEmptyLines(&parser);
+
+    // check for empty input
+    if (parser.completed()) {
+        const loc = Loc.of(file, 0, 0);
+        return try Message.err(ally, RawExpr, loc, "nothing to parse", .{});
+    }
 
     return switch (what) {
         .file => try expectFile(ally, proj, file, &parser),
