@@ -8,27 +8,46 @@ const linenoize = @import("linenoize");
 const Linenoise = linenoize.Linenoise;
 const linenoiseEdit = linenoize.linenoiseEdit;
 const util = @import("util");
-const context = @import("context.zig");
+const FileRef = util.FileRef;
+const Project = util.Project;
+const Message = util.Message;
 const plumbing = @import("plumbing.zig");
 const backend = @import("backend.zig");
 const Env = backend.Env;
+const EvalError = backend.eval.Error;
+const ParseType = @import("frontend.zig").ParseType;
 
 // this test ensures that all code is semantically analyzed
 test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-/// look for a `.fluentinit` script to run on repl startup
-fn runFluentInit(ally: Allocator, env: *Env) !void {
-    const PATH = ".fluentinit";
-    const dir = std.fs.cwd();
-
-    dir.access(PATH, .{ .mode = .read_only }) catch return;
-    try executeFile(ally, env, PATH);
+/// put the `ep` in repl. reusable by `fluent run`.
+fn execPrint(
+    proj: Project,
+    env: *Env,
+    ref: FileRef,
+    what: ParseType
+) !void {
+    switch (try plumbing.exec(proj, env, ref, what)) {
+        .ok => |value| {
+            defer value.deinit(env.ally);
+            try kz.display(env.ally, env.*, value, stdout);
+        },
+        .err => |msg| {
+            try kz.display(env.ally, proj, msg, stderr);
+        },
+    }
 }
 
-fn repl(ally: Allocator, env: *Env) !void {
-    try runFluentInit(ally, env);
+/// look for a `.fluentinit` script to run on repl startup
+fn runFluentInit(proj: *Project, env: *Env) !void {
+    const file = proj.load(".fluentinit") catch return;
+    try execPrint(proj.*, env, file, .file);
+}
+
+fn repl(ally: Allocator, proj: *Project, env: *Env) !void {
+    try runFluentInit(proj, env);
 
     if (builtin.mode == .Debug) {
         try stdout.writeAll("[Env]\n");
@@ -39,30 +58,11 @@ fn repl(ally: Allocator, env: *Env) !void {
     var ln = Linenoise.init(ally);
     defer ln.deinit();
 
-    repl: while (try ln.linenoise("> ")) |line| {
+    while (try ln.linenoise("> ")) |line| {
         try ln.history.add(line);
 
-        const input = try context.addExternalSource("repl", line);
-
-        // eval and print any messages
-        const value = plumbing.exec(env, input, .expr) catch |e| {
-            if (e == error.FluentError) {
-                try context.flushMessages();
-                continue :repl;
-            } else {
-                return e;
-            }
-        };
-        defer value.deinit(ally);
-
-        // render
-        var ctx = kz.Context.init(ally);
-        defer ctx.deinit();
-
-        const tex = try value.render(&ctx, env.*);
-
-        try ctx.write(tex, stdout);
-        try stdout.writeByte('\n');
+        const input = try proj.register("repl", line);
+        try execPrint(proj.*, env, input, .expr);
     }
 }
 
@@ -120,35 +120,6 @@ fn printHelp() @TypeOf(stdout).Error!void {
     }
 }
 
-fn executeFile(ally: Allocator, env: *Env, path: []const u8) !void {
-    // required backing stuff
-    const handle = context.loadSource(path) catch |e| {
-        if (e == error.FileNotFound) {
-            try stderr.print("could not find file at '{s}'.\n", .{path});
-            return;
-        } else return e;
-    };
-
-    // time execution
-    const value = plumbing.exec(env, handle, .file) catch |e| {
-        if (e == error.FluentError) {
-            try context.flushMessages();
-            return;
-        } else {
-            return e;
-        }
-    };
-    defer value.deinit(env.ally);
-
-    // render
-    var ctx = kz.Context.init(ally);
-    defer ctx.deinit();
-
-    const tex = try value.render(&ctx, env.*);
-
-    try ctx.write(tex, stdout);
-}
-
 const CommandError = error {
     BadArgs,
 };
@@ -165,6 +136,7 @@ fn read_args(ally: Allocator) ![][]u8 {
     return args.toOwnedSlice();
 }
 
+/// TODO I should probably reroll this into util
 fn parseArgs(ally: Allocator) !Command {
     const args = try read_args(ally);
     defer {
@@ -197,8 +169,8 @@ pub fn main() !void {
     // const ally = gpa.allocator();
     const ally = std.heap.page_allocator;
 
-    try context.init(ally);
-    defer context.deinit();
+    var proj = util.Project.init(ally);
+    defer proj.deinit();
 
     var prelude = try backend.generatePrelude(ally);
     defer prelude.deinit();
@@ -221,10 +193,12 @@ pub fn main() !void {
 
     switch (cmd) {
         .help => try printHelp(),
-        .repl => try repl(ally, &prelude),
+        .repl => try repl(ally, &proj, &prelude),
         .run => |path| {
-            try executeFile(ally, &prelude, path);
-            ally.free(path);
+            defer ally.free(path);
+
+            const ref = try proj.load(path);
+            try execPrint(proj, &prelude, ref, .file);
         }
     }
 }

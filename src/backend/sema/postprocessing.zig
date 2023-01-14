@@ -1,12 +1,14 @@
 //! extra sema passes that happen after the main type analysis routine
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const Env = @import("../env.zig");
 const TExpr = @import("../texpr.zig");
-const context = @import("../../context.zig");
+const util = @import("util");
+const Message = util.Message;
 
-const Error = context.MessageError || context.FluentError;
+const Result = Message.Result(void);
 
 /// flattens `do` blocks with one expression into the expression
 fn pruneDoBlocks(env: Env, texpr: *TExpr) void {
@@ -27,7 +29,7 @@ fn pruneDoBlocks(env: Env, texpr: *TExpr) void {
 
 /// after analysis, it's possible that types that fluent can't actually lower
 /// are produced (e.g. Any and common type sets like Int).
-fn verifyDynamic(env: Env, texpr: TExpr) Error!void {
+fn verifyDynamic(env: Env, texpr: TExpr) Allocator.Error!Result {
     // check that the class isn't analysis
     const class = env.tw.get(texpr.ty).classifyRuntime(env.tw);
 
@@ -35,15 +37,16 @@ fn verifyDynamic(env: Env, texpr: TExpr) Error!void {
         const ty_text = try texpr.ty.writeAlloc(env.ally, env.tw);
         defer env.ally.free(ty_text);
 
-        const text = "inferred type `{s}`, which cannot be executed";
-        _ = try context.post(.err, texpr.loc, text, .{ty_text});
-
-        return error.FluentError;
+        const fmt = "inferred type `{s}`, which cannot be executed";
+        return try Message.err(env.ally, void, texpr.loc, fmt, .{ty_text});
     }
 
     for (texpr.getChildren()) |child| {
-        try verifyDynamic(env, child);
+        const res = try verifyDynamic(env, child);
+        res.get() orelse return res;
     }
+
+    return Result.ok({});
 }
 
 /// when you cast a number literal immediately, there's no reason to execute
@@ -86,25 +89,33 @@ fn removeTrivialCasts(env: Env, texpr: *TExpr) void {
     }
 }
 
-fn identifyLeftovers(texpr: TExpr) Error!void {
+fn identifyLeftovers(ally: Allocator, texpr: TExpr) Allocator.Error!Result {
     if (texpr.isBuiltin(.pie_stone)) {
-        const msg = "found pie stone in expr after sema.";
-        _ = try context.post(.err, texpr.loc, msg, .{});
-        return Error.FluentError;
+        const fmt = "found pie stone in expr after sema.";
+        return try Message.err(ally, void, texpr.loc, fmt, .{});
     }
 
     for (texpr.getChildren()) |child| {
-        try identifyLeftovers(child);
+        const res = try identifyLeftovers(ally, child);
+        res.get() orelse return res;
     }
+
+    return Result.ok({});
 }
 
-pub fn postprocess(env: *Env, texpr: *TExpr) Error!void {
+pub fn postprocess(env: *Env, texpr: *TExpr) Allocator.Error!Result {
     pruneDoBlocks(env.*, texpr);
-    try verifyDynamic(env.*, texpr.*);
+
+    const vd_res = try verifyDynamic(env.*, texpr.*);
+    vd_res.get() orelse return vd_res;
+
     removeTrivialCasts(env.*, texpr);
 
     // compiler self-diagnostics
     if (builtin.mode == .Debug) {
-        try identifyLeftovers(texpr.*);
+        const il_res = try identifyLeftovers(env.ally, texpr.*);
+        il_res.get() orelse return il_res;
     }
+
+    return Result.ok({});
 }

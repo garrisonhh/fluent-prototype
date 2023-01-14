@@ -10,8 +10,7 @@ const kz = @import("kritzler");
 const builtin = @import("builtin");
 const util = @import("util");
 const Symbol = util.Symbol;
-const context = @import("../context.zig");
-const Loc = context.Loc;
+const Loc = util.Loc;
 const canon = @import("canon.zig");
 const Number = canon.Number;
 

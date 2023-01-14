@@ -20,6 +20,7 @@ const util = @import("util");
 const Symbol = util.Symbol;
 const Name = util.Name;
 const NameMap = util.NameMap;
+const Loc = util.Loc;
 const kz = @import("kritzler");
 const types = @import("types.zig");
 const TypeWelt = types.TypeWelt;
@@ -36,7 +37,6 @@ const Vm = @import("bytecode/vm.zig");
 const Program = @import("bytecode/bytecode.zig").Program;
 const canon = @import("canon.zig");
 const Value = canon.Value;
-const context = @import("../context.zig");
 
 const Self = @This();
 
@@ -131,7 +131,7 @@ pub fn tieLLRefs(
 pub fn run(
     self: *Self,
     prog: Program,
-    loc: ?context.Loc,
+    loc: ?Loc,
     ty: TypeId
 ) (Vm.RuntimeError || canon.ResError)!TExpr {
     try self.vm.execute(self, prog);

@@ -24,9 +24,26 @@ pub fn build(b: *std.build.Builder) void {
     exe.setOutputDir(".");
 
     // packages
-    exe.addPackagePath("linenoize", "lib/linenoize/linenoize.zig");
-    exe.addPackagePath("kritzler", "lib/kritzler/kritzler.zig");
-    exe.addPackagePath("util", "lib/util/util.zig");
+    const Pkg = std.build.Pkg;
+    const rel_fs = std.build.FileSource.relative;
+
+    const linenoize = Pkg{
+        .name = "linenoize",
+        .source = rel_fs("lib/linenoize/linenoize.zig")
+    };
+    const kritzler = Pkg{
+        .name = "kritzler",
+        .source = rel_fs("lib/kritzler/kritzler.zig"),
+    };
+    const util = Pkg{
+        .name = "util",
+        .source = rel_fs("lib/util/util.zig"),
+        .dependencies = &[_]Pkg{kritzler},
+    };
+
+    exe.addPackage(linenoize);
+    exe.addPackage(kritzler);
+    exe.addPackage(util);
 
     exe.install();
 

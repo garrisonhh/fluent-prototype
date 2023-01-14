@@ -8,29 +8,35 @@ const builtin = @import("builtin");
 const kz = @import("kritzler");
 const util = @import("util");
 const Name = util.Name;
+const FileRef = util.FileRef;
+const Project = util.Project;
 const frontend = @import("frontend.zig");
 const backend = @import("backend.zig");
 const Env = backend.Env;
 const TExpr = backend.TExpr;
 const eval = backend.eval;
-const context = @import("context.zig");
-const FileHandle = context.FileHandle;
 
 /// loads a file and evaluate it
-pub fn exec(env: *Env, handle: FileHandle, what: frontend.ParseType) !TExpr {
+pub fn exec(
+    proj: Project,
+    env: *Env,
+    file: FileRef,
+    what: frontend.ParseType
+) !eval.Result {
+    const ally = env.ally;
+
     const now = std.time.nanoTimestamp;
     const start = now();
     var render_time: i128 = 0;
 
     // parse
-    const ast = frontend.parse(env.ally, handle, what) catch {
-        try context.flushMessages();
-        return error.FluentError;
-    };
-    defer ast.deinit(env.ally);
+    const parse_res = try frontend.parse(ally, proj, file, what);
+    const ast = parse_res.get() orelse return parse_res.cast(TExpr);
+    defer ast.deinit(ally);
 
     // translate
-    const sexpr = try backend.translate(env.ally, ast);
+    const trans_res = try backend.translate(env.ally, proj, ast);
+    const sexpr = trans_res.get() orelse return trans_res.cast(TExpr);
     defer sexpr.deinit(env.ally);
 
     if (builtin.mode == .Debug) {
@@ -51,5 +57,5 @@ pub fn exec(env: *Env, handle: FileHandle, what: frontend.ParseType) !TExpr {
     }
 
     // call backend
-    return try eval(env, Env.ROOT, sexpr);
+    return try eval.eval(env, Env.ROOT, sexpr);
 }

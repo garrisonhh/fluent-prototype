@@ -5,10 +5,9 @@ const util = @import("util");
 const Symbol = util.Symbol;
 const Name = util.Name;
 const NameMap = util.NameMap;
+const Loc = util.Loc;
+const Message = util.Message;
 const kz = @import("kritzler");
-const context = @import("../context.zig");
-const FluentError = context.FluentError;
-const Loc = context.Loc;
 const types = @import("types.zig");
 const TypeId = types.TypeId;
 const Type = types.Type;
@@ -23,29 +22,39 @@ const postprocess = @import("sema/postprocessing.zig").postprocess;
 
 pub const SemaError = eval.Error;
 
-fn holeError(env: Env, loc: ?Loc, ty: TypeId) SemaError {
+const Result = Message.Result(TExpr);
+
+fn holeError(env: Env, loc: ?Loc, ty: TypeId) Allocator.Error!Result {
     const ty_text = try ty.writeAlloc(env.ally, env.tw);
     defer env.ally.free(ty_text);
 
-    _ = try context.post(.note, loc, "this hole expects {s}", .{ty_text});
-    return error.FluentError;
+    const fmt = "this hole expects {s}";
+    return try Message.err(env.ally, TExpr, loc, fmt, .{ty_text});
 }
 
-fn expectError(env: Env, loc: ?Loc, expected: TypeId, found: TypeId) SemaError {
+fn expectError(
+    env: Env,
+    loc: ?Loc,
+    expected: TypeId,
+    found: TypeId
+) Allocator.Error!Result {
     const exp_text = try expected.writeAlloc(env.ally, env.tw);
     defer env.ally.free(exp_text);
     const found_text = try found.writeAlloc(env.ally, env.tw);
     defer env.ally.free(found_text);
 
-    const msg = try context.post(.err, loc, "expected type {s}", .{exp_text});
-    _ = try msg.annotate(null, "found {s}", .{found_text});
-    return error.FluentError;
+    const fmt = "expected {s}, found {s}";
+    return try Message.err(env.ally, TExpr, loc, fmt, .{exp_text, found_text});
 }
 
-fn wrongNumArgsError(loc: ?Loc, expected: usize, found: usize) SemaError {
-    const text = "expected {} parameters, found {}";
-    _ = try context.post(.err, loc, text, .{expected, found});
-    return error.FluentError;
+fn wrongNArgsError(
+    ally: Allocator,
+    loc: ?Loc,
+    expected: usize,
+    found: usize
+) Allocator.Error!Result {
+    const fmt = "expected {} parameters, found {}";
+    return try Message.err(ally, TExpr, loc, fmt, .{expected, found});
 }
 
 fn typeOfNumber(env: *Env, num: Number) SemaError!TypeId {
@@ -62,19 +71,19 @@ fn analyzeSymbol(
     scope: Name,
     expr: SExpr,
     outward: TypeId
-) SemaError!TExpr {
+) SemaError!Result {
     const symbol = expr.data.symbol;
 
     // holes
     if (symbol.str[0] == '_') {
-        return holeError(env.*, expr.loc, outward);
+        return try holeError(env.*, expr.loc, outward);
     }
 
     // normal symbol
     var name: Name = undefined;
     const ty = if (env.seek(scope, symbol, &name)) |value| value.ty else {
-        _ = try context.post(.err, expr.loc, "unknown symbol `{}`", .{symbol});
-        return error.FluentError;
+        const fmt = "unknown symbol `{}`";
+        return try Message.err(env.ally, TExpr, expr.loc, fmt, .{symbol});
     };
 
     const inner_expr = TExpr.init(expr.loc, false, ty, .{ .name = name });
@@ -86,13 +95,12 @@ fn analyzeAs(
     scope: Name,
     expr: SExpr,
     outward: TypeId
-) SemaError!TExpr {
+) SemaError!Result {
     const exprs = expr.data.call;
 
     if (exprs.len != 3) {
-        const text = "`as` expression requires a type and a body";
-        _ = try context.post(.err, expr.loc, text, .{});
-        return error.FluentError;
+        const fmt = "`as` expression requires a type and a body";
+        return try Message.err(env.ally, TExpr, expr.loc, fmt, .{});
     }
 
     const type_expr = exprs[1];
@@ -100,13 +108,15 @@ fn analyzeAs(
 
     // compile type
     const tyty = try env.identify(Type{ .ty = {} });
-    const type_val = try eval.evalTyped(env, scope, type_expr, tyty);
+    const type_res = try eval.evalTyped(env, scope, type_expr, tyty);
+    const type_val = type_res.get() orelse return type_res;
     defer type_val.deinit(env.ally);
 
     const anno = type_val.data.ty;
 
     // generate inner expr and unify
-    const texpr = try analyzeExpr(env, scope, body_expr, anno);
+    const res = try analyzeExpr(env, scope, body_expr, anno);
+    const texpr = res.get() orelse return res;
     return try unifyTExpr(env, texpr, outward);
 }
 
@@ -115,13 +125,13 @@ fn analyzeAddrOf(
     scope: Name,
     expr: SExpr,
     outward: TypeId
-) SemaError!TExpr {
+) SemaError!Result {
+    const ally = env.ally;
     const exprs = expr.data.call;
 
     if (exprs.len != 2) {
-        const text = "`&` expression expects a single argument";
-        _ = try context.post(.err, expr.loc, text, .{});
-        return error.FluentError;
+        const fmt = "`&` expression expects a single argument";
+        return try Message.err(ally, TExpr, expr.loc, fmt, .{});
     }
 
     // analyze subexpr with any expectations I can pass through
@@ -132,13 +142,14 @@ fn analyzeAddrOf(
         else
             try env.identify(Type{ .any = {} });
 
-    const subexpr = try analyzeExpr(env, scope, exprs[1], expect);
+    const sub_res = try analyzeExpr(env, scope, exprs[1], expect);
+    const subexpr = sub_res.get() orelse return sub_res;
 
     // generate this texpr
     const ptr_ty = try env.identify(Type.initPtr(.single, subexpr.ty));
 
     const texpr = TExpr.init(expr.loc, false, ptr_ty, TExpr.Data{
-        .ptr = try util.placeOn(env.ally, subexpr)
+        .ptr = try util.placeOn(ally, subexpr)
     });
     return try unifyTExpr(env, texpr, outward);
 }
@@ -148,16 +159,14 @@ fn analyzeDo(
     scope: Name,
     expr: SExpr,
     outward: TypeId
-) SemaError!TExpr {
+) SemaError!Result {
     const ally = env.ally;
-
-    // verify form
     const exprs = expr.data.call;
 
+    // verify form
     if (exprs.len < 2) {
-        const text = "`do` block requires at least one expression";
-        _ = try context.post(.err, expr.loc, text, .{});
-        return error.FluentError;
+        const fmt = "`do` block requires at least one expression";
+        return try Message.err(ally, TExpr, expr.loc, fmt, .{});
     }
 
     const texprs = try env.ally.alloc(TExpr, exprs.len);
@@ -173,7 +182,8 @@ fn analyzeDo(
     const stmts = exprs[1..exprs.len - 1];
     for (stmts) |stmt, i| {
         errdefer for (texprs[1..i + 1]) |texpr| texpr.deinit(ally);
-        texprs[i + 1] = try analyzeExpr(env, scope, stmt, unit);
+        const res = try analyzeExpr(env, scope, stmt, unit);
+        texprs[i + 1] = res.get() orelse return res;
     }
 
     errdefer for (texprs[0..stmts.len]) |texpr| {
@@ -183,7 +193,8 @@ fn analyzeDo(
     // analyze return expr
     const final = exprs[exprs.len - 1];
     const ret_expr = &texprs[texprs.len - 1];
-    ret_expr.* = try analyzeExpr(env, scope, final, outward);
+    const ret_res = try analyzeExpr(env, scope, final, outward);
+    ret_expr.* = ret_res.get() orelse return ret_res;
 
     // create TExpr
     const texpr = TExpr.init(expr.loc, false, ret_expr.ty, .{ .call = texprs });
@@ -195,32 +206,33 @@ fn analyzeIf(
     scope: Name,
     expr: SExpr,
     outward: TypeId
-) SemaError!TExpr {
+) SemaError!Result {
     const ally = env.ally;
-
-    // verify form
     const exprs = expr.data.call;
 
+    // verify form
     if (exprs.len != 4) {
-        const text = "`if` statement requires a condition and two branches";
-        _ = try context.post(.err, expr.loc, text, .{});
-        return error.FluentError;
+        const fmt = "`if` statement requires a condition and two branches";
+        return try Message.err(ally, TExpr, expr.loc, fmt, .{});
     }
 
     // analyze children
     const builtin_ty = try env.identify(Type{ .builtin = {} });
     const @"bool" = try env.identify(Type{ .@"bool" = {} });
 
-    const texprs = [_]TExpr{
-        TExpr.initBuiltin(expr.loc.beginning(), builtin_ty, .@"if"),
-        try analyzeExpr(env, scope, exprs[1], @"bool"),
-        try analyzeExpr(env, scope, exprs[2], outward),
-        try analyzeExpr(env, scope, exprs[3], outward),
-    };
+    var texprs: [4]TExpr = undefined;
+    texprs[0] = TExpr.initBuiltin(exprs[0].loc, builtin_ty, .@"if");
+
+    const expects = [_]TypeId{@"bool", outward, outward};
+    var i: usize = 0;
+    while (i < 3) : (i += 1) {
+        const res = try analyzeExpr(env, scope, exprs[i + 1], expects[i]);
+        texprs[i + 1] = res.get() orelse return res;
+    }
 
     // TODO peer resolve branches, could also use peer type resolution in arrays
 
-    return try TExpr.initCall(ally, expr.loc, outward, &texprs);
+    return Result.ok(try TExpr.initCall(ally, expr.loc, outward, &texprs));
 }
 
 fn analyzeArray(
@@ -228,7 +240,7 @@ fn analyzeArray(
     scope: Name,
     expr: SExpr,
     outward: TypeId
-) SemaError!TExpr {
+) SemaError!Result {
     const ally = env.ally;
 
     const exprs = expr.data.array;
@@ -245,7 +257,8 @@ fn analyzeArray(
         errdefer for (texprs[0..i]) |texpr| {
             texpr.deinit(ally);
         };
-        texprs[i] = try analyzeExpr(env, scope, elem, elem_outward);
+        const res = try analyzeExpr(env, scope, elem, elem_outward);
+        texprs[i] = res.get() orelse return res;
     }
 
     // TODO array elements must be retyped again either here or as a
@@ -260,20 +273,23 @@ fn analyzeArray(
         }
     });
     const texpr = TExpr.init(expr.loc, false, ty, .{ .array = texprs });
-    return unifyTExpr(env, texpr, outward);
+    return try unifyTExpr(env, texpr, outward);
 }
 
-fn filterDefError(loc: Loc, err: (SemaError || Env.DefError)) SemaError {
+fn filterDefError(
+    ally: Allocator,
+    loc: Loc,
+    err: (SemaError || Env.DefError)
+) SemaError!Result {
     return switch (err) {
         error.NameNoRedef => unreachable,
         error.NameTooLong => err: {
-            const text = "name is nested too deeply in namespaces";
-            _ = try context.post(.err, loc, text, .{});
-            break :err error.FluentError;
+            const fmt = "name is nested too deeply in namespaces";
+            break :err try Message.err(ally, TExpr, loc, fmt, .{});
         },
         error.NameRedef, error.RenamedType => err: {
-            _ = try context.post(.err, loc, "this name already exists", .{});
-            break :err error.FluentError;
+            const fmt = "this name already exists";
+            break :err try Message.err(ally, TExpr, loc, fmt, .{});
         },
         else => |e| @errSetCast(SemaError, e),
     };
@@ -282,19 +298,24 @@ fn filterDefError(loc: Loc, err: (SemaError || Env.DefError)) SemaError {
 const DeferredDef = struct {
     name: Name,
     ty: TypeId,
-    body: SExpr
+    body: SExpr,
+
+    const Result = Message.Result(@This());
 };
 
 /// the first pass over a `def` declaration. evaluates type info and stores
 /// a pie stone.
-fn firstDefPass(env: *Env, scope: Name, expr: SExpr) SemaError!DeferredDef {
+fn firstDefPass(
+    env: *Env,
+    scope: Name,
+    expr: SExpr
+) SemaError!DeferredDef.Result {
     const args = expr.data.call[1..];
 
     // check syntax form
     if (args.len != 3) {
-        const text = "`def` expression requires a name, a type, and a body";
-        _ = try context.post(.err, expr.loc, text, .{});
-        return error.FluentError;
+        const fmt = "`def` expression requires a name, a type, and a body";
+        return try Message.err(env.ally, DeferredDef, expr.loc, fmt, .{});
     }
 
     const name_expr = args[0];
@@ -302,28 +323,29 @@ fn firstDefPass(env: *Env, scope: Name, expr: SExpr) SemaError!DeferredDef {
     const body_expr = args[2];
 
     if (name_expr.data != .symbol) {
-        _ = try context.post(.err, name_expr.loc, "expected identifier", .{});
-        return error.FluentError;
+        const fmt = "expected identifier";
+        return try Message.err(env.ally, DeferredDef, name_expr.loc, fmt, .{});
     }
 
     const symbol = name_expr.data.symbol;
 
     // eval type expr
     const tyty = try env.identify(Type{ .ty = {} });
-    const type_value = try eval.evalTyped(env, scope, type_expr, tyty);
+    const type_res = try eval.evalTyped(env, scope, type_expr, tyty);
+    const type_value = type_res.get() orelse return type_res.cast(DeferredDef);
 
     // store first pass info for the def
     const ty = type_value.data.ty;
     const pie_stone = TExpr.initBuiltin(expr.loc, ty, .pie_stone);
     const name = env.def(scope, symbol, pie_stone) catch |e| {
-        return filterDefError(expr.loc, e);
+        return (try filterDefError(env.ally, expr.loc, e)).cast(DeferredDef);
     };
 
-    return DeferredDef{
+    return DeferredDef.Result.ok(DeferredDef{
         .name = name,
         .ty = ty,
         .body = body_expr,
-    };
+    });
 }
 
 fn analyzeNamespace(
@@ -331,29 +353,28 @@ fn analyzeNamespace(
     scope: Name,
     expr: SExpr,
     outward: TypeId
-) SemaError!TExpr {
+) SemaError!Result {
     const ally = env.ally;
     const args = expr.data.call[1..];
 
     // check syntax form
     if (args.len < 1) {
-        const text = "`ns` expression requires a name";
-        _ = try context.post(.err, expr.loc, text, .{});
-        return error.FluentError;
+        const fmt = "`ns` expression requires a name";
+        return try Message.err(ally, TExpr, expr.loc, fmt, .{});
     }
 
     const name_expr = args[0];
     const defs = args[1..];
 
     if (name_expr.data != .symbol) {
-        _ = try context.post(.err, name_expr.loc, "expected identifier", .{});
-        return error.FluentError;
+        const fmt = "expected identifier";
+        return try Message.err(ally, TExpr, name_expr.loc, fmt, .{});
     }
 
     // create ns
     const symbol = name_expr.data.symbol;
     const ns = env.defNamespace(scope, symbol) catch |e| {
-        return filterDefError(name_expr.loc, e);
+        return filterDefError(ally, name_expr.loc, e);
     };
 
     // first pass, collect all decls, eval types, and def pie stones
@@ -363,31 +384,33 @@ fn analyzeNamespace(
     for (defs) |def_expr, i| {
         // verify that this is a def
         if (def_expr.data != .call or def_expr.data.call.len == 0) {
-            _ = try context.post(.err, def_expr.loc, "expected def", .{});
-            return error.FluentError;
+            const fmt = "expected def";
+            return try Message.err(ally, TExpr, def_expr.loc, fmt, .{});
         }
 
         const head = def_expr.data.call[0];
         const def_sym = comptime Symbol.init("def");
         if (head.data != .symbol or !head.data.symbol.eql(def_sym)) {
-            _ = try context.post(.err, def_expr.loc, "expected def", .{});
-            return error.FluentError;
+            const fmt = "expected def";
+            return try Message.err(ally, TExpr, head.loc, fmt, .{});
         }
 
         // do first pass
-        deferred[i] = try firstDefPass(env, ns, def_expr);
+        const deferred_res = try firstDefPass(env, ns, def_expr);
+        deferred[i] = deferred_res.get() orelse return deferred_res.cast(TExpr);
     }
 
     // second pass, eval and redefine everything
     for (deferred) |dedef| {
-        const texpr = try eval.evalTyped(env, dedef.name, dedef.body, dedef.ty);
+        const res = try eval.evalTyped(env, dedef.name, dedef.body, dedef.ty);
+        const texpr = res.get() orelse return res;
 
         if (texpr.isBuiltin(.pie_stone)) {
             std.debug.panic("pie stone!!!\n", .{});
         }
 
         env.redef(dedef.name, texpr) catch |e| {
-            return filterDefError(dedef.body.loc, e);
+            return try filterDefError(ally, dedef.body.loc, e);
         };
     }
 
@@ -402,7 +425,7 @@ fn analyzeRecur(
     scope: Name,
     expr: SExpr,
     outward: TypeId
-) SemaError!TExpr {
+) SemaError!Result {
     const ally = env.ally;
 
     // find innermost function type
@@ -415,9 +438,8 @@ fn analyzeRecur(
         }
 
         name = name.drop() orelse {
-            const msg = "`recur` outside of function scope.";
-            _ = try context.post(.err, expr.loc, msg, .{});
-            return error.FluentError;
+            const fmt = "expected def";
+            return try Message.err(ally, TExpr, expr.loc, fmt, .{});
         };
     };
 
@@ -426,7 +448,7 @@ fn analyzeRecur(
     const func = env.tw.get(ty).func;
 
     if (sexprs.len - 1 != func.takes.len) {
-        return wrongNumArgsError(expr.loc, func.takes.len, sexprs.len - 1);
+        return wrongNArgsError(ally, expr.loc, func.takes.len, sexprs.len - 1);
     }
 
     // analyze subexprs
@@ -434,7 +456,8 @@ fn analyzeRecur(
     texprs[0] = TExpr.initBuiltin(expr.loc, ty, .recur);
 
     for (sexprs[1..]) |child, i| {
-        texprs[i + 1] = try analyzeExpr(env, scope, child, func.takes[i]);
+        const res = try analyzeExpr(env, scope, child, func.takes[i]);
+        texprs[i + 1] = res.get() orelse return res;
     }
 
     const final = TExpr.init(expr.loc, false, func.returns, .{
@@ -450,16 +473,15 @@ fn analyzeBuiltin(
     expr: SExpr,
     b: Builtin,
     outward: TypeId,
-) SemaError!TExpr {
+) SemaError!Result {
     return switch (b) {
         .pie_stone => unreachable,
         .cast => try analyzeAs(env, scope, expr, outward),
         .addr_of => try analyzeAddrOf(env, scope, expr, outward),
         .def => def: {
-            const text = "`def` declarations can only exist inside of a "
-                      ++ "namespace.";
-            _ = try context.post(.err, expr.loc, text, .{});
-            break :def error.FluentError;
+            const fmt =
+                "`def` declarations can only exist inside of a namespace.";
+            break :def try Message.err(env.ally, TExpr, expr.loc, fmt, .{});
         },
         .do => try analyzeDo(env, scope, expr, outward),
         .ns => try analyzeNamespace(env, scope, expr, outward),
@@ -479,7 +501,7 @@ fn analyzeFn(
     scope: Name,
     expr: SExpr,
     outward: TypeId
-) SemaError!TExpr {
+) SemaError!Result {
     const outer = env.tw.get(outward);
     if (outer.* != .func) {
         @panic("TODO compile lambdas without expectations?");
@@ -491,41 +513,39 @@ fn analyzeFn(
     const exprs = expr.data.call;
 
     if (exprs.len != 3) {
-        const text = "`fn` requires parameters and a single body expression";
-        _ = try context.post(.err, expr.loc, text, .{});
-        return error.FluentError;
+        const fmt = "`fn` requires parameters and a single body expression";
+        return try Message.err(env.ally, TExpr, expr.loc, fmt, .{});
     }
 
     const params_expr = exprs[1];
     if (params_expr.data != .array) {
-        const text = "`fn` parameters expects an array";
-        _ = try context.post(.err, params_expr.loc, text, .{});
-        return error.FluentError;
+        const fmt = "`fn` parameters expects an array";
+        const loc = params_expr.loc;
+        return try Message.err(env.ally, TExpr, loc, fmt, .{});
     }
 
     const params = params_expr.data.array;
     if (params.len != func.takes.len) {
-        _ = try context.post(
-            .err,
+        return try Message.err(
+            env.ally,
+            TExpr,
             params_expr.loc,
             "found {d} parameters, expected {d}",
             .{params.len, func.takes.len}
         );
-        return error.FluentError;
     }
 
     // define function as a namespace
     const local_sym = comptime Symbol.init("lambda");
     const local = env.defNamespace(scope, local_sym) catch |e| {
-        return filterDefError(expr.loc, e);
+        return try filterDefError(env.ally, expr.loc, e);
     };
 
     // declare params
     for (params) |param, i| {
         if (param.data != .symbol) {
-            const text = "`fn` parameters should be symbols";
-            _ = try context.post(.err, param.loc, text, .{});
-            return error.FluentError;
+            const fmt = "`fn` parameters should be symbols";
+            return try Message.err(env.ally, TExpr, param.loc, fmt, .{});
         }
 
         // define parameter
@@ -535,12 +555,13 @@ fn analyzeFn(
             .param = TExpr.Param{ .func = local, .index = i }
         });
         _ = env.def(local, sym, pexpr) catch |e| {
-            return filterDefError(param.loc, e);
+            return try filterDefError(env.ally, param.loc, e);
         };
     }
 
     // analyze body
-    const body = try analyzeExpr(env, local, exprs[2], func.returns);
+    const body_res = try analyzeExpr(env, local, exprs[2], func.returns);
+    const body = body_res.get() orelse return body_res;
     const final = TExpr.init(expr.loc, false, outward, .{
         .func = TExpr.Func{
             .name = local,
@@ -548,7 +569,7 @@ fn analyzeFn(
         }
     });
 
-    return final;
+    return Result.ok(final);
 }
 
 fn analyzeCall(
@@ -556,7 +577,7 @@ fn analyzeCall(
     scope: Name,
     expr: SExpr,
     outward: TypeId
-) SemaError!TExpr {
+) SemaError!Result {
     const ally = env.ally;
     const exprs = expr.data.call;
 
@@ -574,7 +595,8 @@ fn analyzeCall(
     const any = try env.identify(Type{ .any = {} });
     const flbuiltin = try env.identify(Type{ .builtin = {} });
 
-    const head_expr = try analyzeExpr(env, scope, head, any);
+    const head_res = try analyzeExpr(env, scope, head, any);
+    const head_expr = head_res.get() orelse return head_res;
     errdefer head_expr.deinit(ally);
 
     // builtins get special logic
@@ -598,15 +620,14 @@ fn analyzeCall(
         const ty_text = try fn_ty.writeAlloc(ally, env.tw);
         defer ally.free(ty_text);
 
-        const text = "expected function, found {s}";
-        _ = try context.post(.err, texprs[0].loc, text, .{ty_text});
-        return error.FluentError;
+        const fmt = "expected function, found {s}";
+        return try Message.err(ally, TExpr, texprs[0].loc, fmt, .{ty_text});
     }
 
     // analyze tail with fn param expectations
     const takes = fn_ty.func.takes;
     if (takes.len != tail.len) {
-        return wrongNumArgsError(expr.loc, takes.len, tail.len);
+        return wrongNArgsError(ally, expr.loc, takes.len, tail.len);
     }
 
     // infer params
@@ -615,7 +636,8 @@ fn analyzeCall(
             texpr.deinit(ally);
         };
 
-        texprs[i + 1] = try analyzeExpr(env, scope, tail[i], tid);
+        const res = try analyzeExpr(env, scope, tail[i], tid);
+        texprs[i + 1] = res.get() orelse return res;
     }
 
     // create TExpr
@@ -632,7 +654,11 @@ fn analyzeCall(
 /// b) make an implicit cast explicitly expressed in the AST
 /// c) identify that an expectation was violated and produce an appropriate
 ///    error
-fn unifyTExpr(env: *Env, texpr: TExpr, outward: TypeId) SemaError!TExpr {
+fn unifyTExpr(
+    env: *Env,
+    texpr: TExpr,
+    outward: TypeId
+) SemaError!Result {
     const inner = env.tw.get(texpr.ty);
     const outer = env.tw.get(outward);
 
@@ -643,7 +669,7 @@ fn unifyTExpr(env: *Env, texpr: TExpr, outward: TypeId) SemaError!TExpr {
         else => texpr.ty.eql(outward)
     };
 
-    if (is_unified) return texpr;
+    if (is_unified) return Result.ok(texpr);
 
     // types aren't unified, check whether an implicit cast is allowed
     // TODO this is quickly revealing itself to be a source of complexity that
@@ -665,7 +691,7 @@ fn unifyTExpr(env: *Env, texpr: TExpr, outward: TypeId) SemaError!TExpr {
             &[2]TExpr{cast, texpr}
         );
 
-        return final;
+        return Result.ok(final);
     }
 
     // no unification :(
@@ -677,7 +703,7 @@ fn analyzeExpr(
     scope: Name,
     expr: SExpr,
     outward: TypeId
-) SemaError!TExpr {
+) SemaError!Result {
     return switch (expr.data) {
         .call => try analyzeCall(env, scope, expr, outward),
         .array => try analyzeArray(env, scope, expr, outward),
@@ -740,10 +766,8 @@ fn verifyDynamic(env: Env, texpr: TExpr) SemaError!void {
         const ty_text = try texpr.ty.writeAlloc(env.ally, env.tw);
         defer env.ally.free(ty_text);
 
-        const text = "inferred type `{s}`, which cannot be executed";
-        _ = try context.post(.err, texpr.loc, text, .{ty_text});
-
-        return error.FluentError;
+        const fmt = "inferred type `{s}`, which cannot be executed";
+        return try Message.err(env.ally, TExpr, texpr.loc, fmt, .{ty_text});
     }
 
     // recurse
@@ -757,13 +781,14 @@ pub fn analyze(
     scope: Name,
     expr: SExpr,
     expects: TypeId
-) SemaError!TExpr {
-    var texpr = try analyzeExpr(env, scope, expr, expects);
-    errdefer texpr.deinit(env.ally);
+) SemaError!Result {
+    const res = try analyzeExpr(env, scope, expr, expects);
+    var texpr = res.get() orelse return res;
 
-    try postprocess(env, &texpr);
+    const pp = try postprocess(env, &texpr);
+    pp.get() orelse return pp.cast(TExpr);
 
     // TODO verify texpr contains no pie stones as a postprocessing step
 
-    return texpr;
+    return Result.ok(texpr);
 }

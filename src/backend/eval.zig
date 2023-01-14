@@ -6,7 +6,8 @@ const builtin = @import("builtin");
 const kz = @import("kritzler");
 const util = @import("util");
 const Name = util.Name;
-const context = @import("../context.zig");
+const Project = util.Project;
+const Message = util.Message;
 const TExpr = @import("texpr.zig");
 const SExpr = @import("sexpr.zig");
 const Env = @import("env.zig");
@@ -22,12 +23,13 @@ const Value = canon.Value;
 
 pub const Error =
     std.mem.Allocator.Error
- || context.MessageError
- || context.FluentError
- || canon.ResError;
+ || canon.ResError
+ || @TypeOf(stdout).Error;
+
+pub const Result = Message.Result(TExpr);
 
 /// evaluate any dynamic value in the provided scope
-pub fn eval(env: *Env, scope: Name, sexpr: SExpr) Error!TExpr {
+pub fn eval(env: *Env, scope: Name, sexpr: SExpr) Error!Result {
     const any = try env.identify(Type{ .any = {} });
     return try evalTyped(env, scope, sexpr, any);
 }
@@ -38,27 +40,23 @@ pub fn evalTyped(
     scope: Name,
     sexpr: SExpr,
     expected: TypeId
-) Error!TExpr {
+) Error!Result {
     const now = std.time.nanoTimestamp;
     const start = now();
     var render_time: i128 = 0;
 
     // analyze
-    const texpr = try analyze(env, scope, sexpr, expected);
+    const sema_res = try analyze(env, scope, sexpr, expected);
+    const texpr = sema_res.get() orelse return sema_res;
     defer texpr.deinit(env.ally);
 
     if (builtin.mode == .Debug) {
         const t = now();
-        var ctx = kz.Context.init(env.ally);
-        defer ctx.deinit();
-
-        const tex = try texpr.render(&ctx, env.*);
+        defer render_time += now() - t;
 
         try stdout.writeAll("[Analyzed AST]\n");
-        try ctx.write(tex, stdout);
+        try kz.display(env.ally, env.*, texpr, stdout);
         try stdout.writeByte('\n');
-
-        render_time += now() - t;
     }
 
     // analysis may produce a constant, otherwise the expr must be lowered,
@@ -80,16 +78,11 @@ pub fn evalTyped(
 
         if (builtin.mode == .Debug) {
             const t = now();
-            var ctx = kz.Context.init(env.ally);
-            defer ctx.deinit();
-
-            const tex = try env.prog.render(&ctx, env.*);
+            defer render_time += now() - t;
 
             try stdout.writeAll("[SSA Program]\n");
-            try ctx.write(tex, stdout);
+            try kz.display(env.ally, env.*, env.prog, stdout);
             try stdout.writeByte('\n');
-
-            render_time += now() - t;
         }
 
         // compile to bytecode
@@ -119,7 +112,7 @@ pub fn evalTyped(
 
         // when returning structured data, the vm may return a pointer to the
         // data I actually wanted
-        return if (!final.ty.eql(texpr.ty)) deref: {
+        const derefed = if (!final.ty.eql(texpr.ty)) deref: {
             const out_ty = env.tw.get(final.ty);
             std.debug.assert(out_ty.ptr.to.eql(texpr.ty));
 
@@ -128,6 +121,8 @@ pub fn evalTyped(
 
             break :deref child;
         } else final;
+
+        return Result.ok(derefed);
     };
 
     // render final value
@@ -156,5 +151,5 @@ pub fn evalTyped(
         try stdout.print("render time {d:.6}s.\n", .{render_secs});
     }
 
-    return final;
+    return Result.ok(final);
 }

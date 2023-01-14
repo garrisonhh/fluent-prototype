@@ -5,36 +5,37 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const util = @import("util");
 const Symbol = util.Symbol;
+const Loc = util.Loc;
+const Message = util.Message;
+const Project = util.Project;
 const frontend = @import("../frontend.zig");
 const RawExpr = frontend.RawExpr;
-const context = @import("../context.zig");
-const Loc = context.Loc;
 const SExpr = @import("sexpr.zig");
 const canon = @import("canon.zig");
 const Number = canon.Number;
 
-pub const TranslateError =
-    Allocator.Error
- || context.MessageError
- || context.FluentError;
+const Error = Allocator.Error;
+const Result = Message.Result(SExpr);
 
-fn translateGroup(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
+fn translateGroup(ally: Allocator, proj: Project, expr: RawExpr) Error!Result {
     const children = expr.children.?;
     const exprs = try ally.alloc(SExpr, children.len);
 
     for (children) |child, i| {
-        exprs[i] = try translate(ally, child);
+        const res = try translate(ally, proj, child);
+        exprs[i] = res.get() orelse return res;
     }
 
-    return SExpr.initCall(expr.loc, exprs);
+    return Result.ok(SExpr.initCall(expr.loc, exprs));
 }
 
 /// translate a call with some symbols at the front
 fn translateCall(
     ally: Allocator,
+    proj: Project,
     initial: []const []const u8,
     expr: RawExpr
-) TranslateError!SExpr {
+) Error!Result {
     const children = expr.children.?;
     var exprs = std.ArrayList(SExpr).init(ally);
     errdefer {
@@ -47,27 +48,23 @@ fn translateCall(
     }
 
     for (children) |child| {
-        try exprs.append(try translate(ally, child));
+        const trans_res = try translate(ally, proj, child);
+        const child_expr = trans_res.get() orelse return trans_res;
+        try exprs.append(child_expr);
     }
 
-    return SExpr.initCall(expr.loc, exprs.toOwnedSlice());
+    return Result.ok(SExpr.initCall(expr.loc, exprs.toOwnedSlice()));
 }
 
-fn numberError(loc: Loc) TranslateError {
-    const text = "malformed number literal";
-    _ = try context.post(.err, loc, text, .{});
-    return error.FluentError;
+fn numberError(ally: Allocator, loc: Loc) Allocator.Error!Result {
+    return try Message.err(ally, SExpr, loc, "malformed number literal", .{});
 }
 
-fn translateNumber(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
-    const num = util.parseNumber(ally, expr.loc.getSlice()) catch |e| {
-        return switch (e) {
-            error.BadNumber,
-            error.WrongLayout,
-            error.TooManyBits,
-            error.NegativeToUnsigned => numberError(expr.loc),
-            else => @errSetCast(TranslateError, e)
-        };
+fn translateNumber(ally: Allocator, proj: Project, expr: RawExpr) Error!Result {
+    const slice = proj.getSlice(expr.loc);
+    const num = util.parseNumber(ally, slice) catch |e| switch (e) {
+        Error.OutOfMemory => return Error.OutOfMemory,
+        else => return try numberError(ally, expr.loc)
     };
     defer num.deinit(ally);
 
@@ -80,89 +77,73 @@ fn translateNumber(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
         for (valid_bits) |valid| {
             if (bits == valid) break;
         } else {
-            const msg = try context.post(
-                .err,
-                expr.loc,
-                "invalid number width",
-                .{}
-            );
-
-            if (integral) {
-                _ = try msg.annotate(
-                    null,
-                    "fluent supports 8, 16, 32, or 64 bit integers",
-                    .{}
-                );
-            } else {
-                _ = try msg.annotate(
-                    null,
-                    "fluent supports 32 or 64 bit floats",
-                    .{}
-                );
-            }
-
-            return error.FluentError;
+            const text = "invalid number width";
+            return try Message.err(ally, SExpr, expr.loc, text, .{});
         }
     }
 
     const sexpr_num = Number.from(num) catch {
-        return numberError(expr.loc);
+        return try numberError(ally, expr.loc);
     };
 
-    return SExpr.initNumber(expr.loc, sexpr_num);
+    return Result.ok(SExpr.initNumber(expr.loc, sexpr_num));
 }
 
-fn translateString(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
-    const slice = expr.loc.getSlice();
-    const str = util.stringUnescape(ally, slice[1..slice.len - 1]) catch |e| {
-        if (e == error.BadEscapeSeq) {
-            _ = try context.post(
-                .err, expr.loc, "string contains bad escape sequence", .{}
-            );
-
-            return error.FluentError;
-        }
-        return @errSetCast(TranslateError, e);
+fn translateString(ally: Allocator, proj: Project, expr: RawExpr) Error!Result {
+    const slice = proj.getSlice(expr.loc);
+    const trimmed = slice[1..slice.len - 1];
+    const str = util.stringUnescape(ally, trimmed) catch |e| switch (e) {
+        error.BadEscapeSeq => {
+            const text = "string contains bad escape sequence";
+            return try Message.err(ally, SExpr, expr.loc, text, .{});
+        },
+        Error.OutOfMemory => return Error.OutOfMemory,
     };
 
-    return SExpr.initOwnedString(expr.loc, str);
+    return Result.ok(SExpr.initOwnedString(expr.loc, str));
 }
 
-fn translateSymbol(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
-    const symbol = Symbol.init(try ally.dupe(u8, expr.loc.getSlice()));
+fn translateSymbol(ally: Allocator, proj: Project, expr: RawExpr) Error!Result {
+    const slice = proj.getSlice(expr.loc);
+    const symbol = Symbol.init(try ally.dupe(u8, slice));
 
     // regular symbol
-    return SExpr{
+    return Result.ok(SExpr{
         .data = .{ .symbol = symbol },
         .loc = expr.loc,
-    };
+    });
 }
 
-fn translateArray(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
+fn translateArray(ally: Allocator, proj: Project, expr: RawExpr) Error!Result {
     const children = expr.children.?;
     const exprs = try ally.alloc(SExpr, children.len);
 
     for (children) |child, i| {
-        exprs[i] = try translate(ally, child);
+        const res = try translate(ally, proj, child);
+        exprs[i] = res.get() orelse return res;
     }
 
-    return SExpr{
+    return Result.ok(SExpr{
         .data = .{ .array = exprs },
         .loc = expr.loc,
-    };
+    });
 }
 
-pub fn translate(ally: Allocator, expr: RawExpr) TranslateError!SExpr {
+pub fn translate(
+    ally: Allocator,
+    proj: Project,
+    expr: RawExpr
+) Error!Result {
     return switch (expr.tag) {
         .file => file: {
-            const filename = expr.loc.file.getName();
+            const filename = proj.getName(expr.loc.file);
             const initial = &[_][]const u8{"ns", filename};
-            break :file try translateCall(ally, initial, expr);
+            break :file try translateCall(ally, proj, initial, expr);
         },
-        .group => try translateGroup(ally, expr),
-        .number => try translateNumber(ally, expr),
-        .string => try translateString(ally, expr),
-        .symbol => try translateSymbol(ally, expr),
-        .array => try translateArray(ally, expr),
+        .group => try translateGroup(ally, proj, expr),
+        .number => try translateNumber(ally, proj, expr),
+        .string => try translateString(ally, proj, expr),
+        .symbol => try translateSymbol(ally, proj, expr),
+        .array => try translateArray(ally, proj, expr),
     };
 }
