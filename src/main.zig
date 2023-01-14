@@ -184,13 +184,6 @@ pub fn main() !void {
         return e;
     };
 
-    if (builtin.mode == .Debug) {
-        // display prelude as a sanity check
-        try stdout.writeAll("[Prelude]\n");
-        try prelude.dump(ally, stdout);
-        try stdout.writeByte('\n');
-    }
-
     switch (cmd) {
         .help => try printHelp(),
         .repl => try repl(ally, &proj, &prelude),

@@ -39,7 +39,6 @@ pub const Token = struct {
 const CharClass = enum {
     lexical,
     digit,
-    dot,
     lparen,
     rparen,
     lbracket,
@@ -54,7 +53,6 @@ const Error = Allocator.Error || error { InvalidCharacter };
 
 fn classify(ch: u8) Error!CharClass {
     return switch (ch) {
-        '.' => .dot,
         '0'...'9' => .digit,
         ' ' => .space,
         '(' => .lparen,
@@ -156,7 +154,6 @@ fn lexLine(
                 const tok = Token.of(@field(Token.Tag, @tagName(tag)), loc);
                 try tokens.append(tok);
             },
-            .dot => return Error.InvalidCharacter,
         }
     }
 }

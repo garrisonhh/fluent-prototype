@@ -65,73 +65,79 @@ fn skipWhitespace(parser: *Parser) void {
     }
 }
 
-fn collectParens(
+fn expectGroup(
     ally: Allocator,
     proj: Project,
     file: FileRef,
     parser: *Parser
-) Error!Message.Result([]RawExpr) {
-    var children = std.ArrayList(RawExpr).init(ally);
-
-    // expect child exprs until rparen is reached
-    while (true) {
-        const begin_index = parser.index;
-
-        const next = parser.peek() orelse {
-            return (try unexpectedEof(proj, parser.*)).cast([]RawExpr);
-        };
-
-        switch (next.tag) {
-            .rparen => {
-                parser.mustSkip(1);
-                break;
-            },
-            // expectExpr does not care about whitespace
-            .indent => parser.mustSkip(1),
-            else => {
-                const res = try expectExpr(ally, proj, file, parser);
-                const child = res.get() orelse return res.cast([]RawExpr);
-                try children.append(child);
-            }
-        }
-
-        if (builtin.mode == .Debug) {
-            // parser index must iterate or this loop will be infinite
-            if (parser.index == begin_index) unreachable;
-        }
-    }
-
-    return Message.Result([]RawExpr).ok(children.toOwnedSlice());
-}
-
-/// helper for expectExpr
-fn collectArray(
-    ally: Allocator,
-    proj: Project,
-    file: FileRef,
-    parser: *Parser
-) Error!Message.Result([]RawExpr) {
+) Error!Result {
     // collect
     var children = std.ArrayList(RawExpr).init(ally);
 
+    const lparen = parser.next().?;
+    std.debug.assert(lparen.tag == .lparen);
+
     skipWhitespace(parser);
 
-    const next = parser.peek() orelse {
-        return (try unexpectedEof(proj, parser.*)).cast([]RawExpr);
-    };
+    while (true) {
+        const next = parser.peek() orelse {
+            return try unexpectedEof(proj, parser.*);
+        };
 
-    while (next.tag != .rbracket) {
+        if (next.tag == .rparen) break;
+
         // expect next element
         const res = try expectExpr(ally, proj, file, parser);
-        const child = res.get() orelse return res.cast([]RawExpr);
+        const child = res.get() orelse return res;
         try children.append(child);
+
         skipWhitespace(parser);
     }
 
-    // skip rbracket
-    parser.mustSkip(1);
+    const rparen = parser.next().?;
+    std.debug.assert(rparen.tag == .rparen);
 
-    return Message.Result([]RawExpr).ok(children.toOwnedSlice());
+    // collect into a rawexpr
+    const loc = lparen.loc.span(rparen.loc);
+    return Result.ok(RawExpr.init(.group, loc, children.toOwnedSlice()));
+}
+
+/// helper for expectExpr
+fn expectArray(
+    ally: Allocator,
+    proj: Project,
+    file: FileRef,
+    parser: *Parser
+) Error!Result {
+    // collect
+    var children = std.ArrayList(RawExpr).init(ally);
+
+    const lbracket = parser.next().?;
+    std.debug.assert(lbracket.tag == .lbracket);
+
+    skipWhitespace(parser);
+
+    while (true) {
+        const next = parser.peek() orelse {
+            return try unexpectedEof(proj, parser.*);
+        };
+
+        if (next.tag == .rbracket) break;
+
+        // expect next element
+        const res = try expectExpr(ally, proj, file, parser);
+        const child = res.get() orelse return res;
+        try children.append(child);
+
+        skipWhitespace(parser);
+    }
+
+    const rbracket = parser.next().?;
+    std.debug.assert(rbracket.tag == .rbracket);
+
+    // collect into a rawexpr
+    const loc = lbracket.loc.span(rbracket.loc);
+    return Result.ok(RawExpr.init(.array, loc, children.toOwnedSlice()));
 }
 
 /// expects a non-whitespace-aware expr
@@ -141,37 +147,19 @@ fn expectExpr(
     file: FileRef,
     parser: *Parser
 ) Error!Result {
-    const fst = parser.next() orelse {
+    const fst = parser.peek() orelse {
         return unexpectedEof(proj, parser.*);
     };
 
     return switch (fst.tag) {
         inline .number, .string, .symbol => |tag| lit: {
+            parser.mustSkip(1);
+
             const raw_tag = @field(RawExpr.Tag, @tagName(tag));
             break :lit Result.ok(RawExpr.init(raw_tag, fst.loc, null));
         },
-        inline .lparen, .lbracket => |tag| coll: {
-            const collect = comptime switch (tag) {
-                .lparen => collectParens,
-                .lbracket => collectArray,
-                else => unreachable
-            };
-
-            const raw_tag: RawExpr.Tag = comptime switch (tag) {
-                .lparen => .group,
-                .lbracket => .array,
-                else => unreachable
-            };
-
-            const start = parser.index;
-            const res = try collect(ally, proj, file, parser);
-            const stop = parser.index;
-
-            const exprs = res.get() orelse return res.cast(RawExpr);
-            const loc = Loc.of(file, start, stop);
-
-            break :coll Result.ok(RawExpr.init(raw_tag, loc, exprs));
-        },
+        .lparen => try expectGroup(ally, proj, file, parser),
+        .lbracket => try expectArray(ally, proj, file, parser),
         .rparen, .rbracket, =>
             try Message.err(ally, RawExpr, fst.loc, "expected expression", .{}),
         .indent => unreachable,
@@ -239,8 +227,8 @@ fn expectIndented(
         1 => Result.ok(children.items[0]),
         else => group: {
             const start = children.items[0].loc;
-            const stop = children.items[1].loc;
-            const loc = Loc.span(start, stop);
+            const stop = children.items[children.items.len - 1].loc;
+            const loc = start.span(stop);
             const expr = RawExpr.init(.group, loc, children.toOwnedSlice());
             break :group Result.ok(expr);
         }
@@ -256,13 +244,14 @@ fn expectFile(
     var exprs = std.ArrayList(RawExpr).init(ally);
 
     // collect all the exprs in the file
-    while (parser.peek()) |fst| {
-        if (fst.tag == .indent) {
-            if (proj.getSlice(fst.loc).len != 0) {
-                return unexpectedIndent(ally, fst.loc, 0);
+    while (!parser.completed()) {
+        // skip empty lines
+        while (parser.peek()) |tok| {
+            if (tok.tag == .indent and tok.loc.length() == 0) {
+                parser.mustSkip(1);
+            } else {
+                break;
             }
-
-            parser.mustSkip(1);
         }
 
         const res = try expectIndented(ally, proj, file, parser, 0);

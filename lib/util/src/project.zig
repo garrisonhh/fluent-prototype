@@ -40,6 +40,10 @@ pub const Loc = struct {
         return Loc.of(start.file, start.start, stop.stop);
     }
 
+    pub fn length(self: Self) usize {
+        return self.stop - self.start;
+    }
+
     pub fn slice(self: Self, proj: Project) []const u8 {
         return proj.get(self.file).text[self.start..self.stop];
     }
@@ -76,8 +80,8 @@ pub const Loc = struct {
             blk_stop += 1;
         }
 
-        var char_stop_line = blk_stop - 1;
-        while (char_stop_line > 0 and text[char_stop_line] != '\n') {
+        var char_stop_line = blk_stop;
+        while (char_stop_line > 0 and text[char_stop_line - 1] != '\n') {
             char_stop_line -= 1;
         }
 
