@@ -2,12 +2,9 @@
 //! this is code connecting the frontend to the backend for use in main
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const stdout = std.io.getStdOut().writer();
 const builtin = @import("builtin");
-const kz = @import("kritzler");
 const util = @import("util");
-const Name = util.Name;
 const FileRef = util.FileRef;
 const Project = util.Project;
 const frontend = @import("frontend.zig");

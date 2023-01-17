@@ -1,13 +1,11 @@
 //! the thing that executes bytecode programs.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Program = @import("bytecode.zig").Program;
 const types = @import("../types.zig");
-const TypeWelt = types.TypeWelt;
-const TypeId = types.TypeId;
 const Type = types.Type;
+const TypeId = types.TypeId;
 const Env = @import("../env.zig");
 const canon = @import("../canon.zig");
 

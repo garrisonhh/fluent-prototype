@@ -403,6 +403,7 @@ pub const Type = union(enum) {
     }
 
     /// given two types, create a type that fits the values of each
+    /// TODO I think this should actually be called `peerResolve`
     pub fn unify(
         self: Self,
         ally: Allocator,

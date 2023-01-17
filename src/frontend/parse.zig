@@ -1,7 +1,5 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const builtin = @import("builtin");
-const kz = @import("kritzler");
 const util = @import("util");
 const Loc = util.Loc;
 const FileRef = util.FileRef;

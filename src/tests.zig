@@ -1,5 +1,4 @@
 const std = @import("std");
-const stdout = std.io.getStdOut().writer();
 const backend = @import("backend.zig");
 const context = @import("context.zig");
 const plumbing = @import("plumbing.zig");
