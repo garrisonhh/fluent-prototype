@@ -54,9 +54,13 @@ pub fn numActiveRefs(self: Self) usize {
     return self.chunks.items.len - self.reusable.items.len;
 }
 
+pub fn isAlive(self: Self, ref: Ref) bool {
+    return self.chunks.items[ref.index].gen == ref.gen;
+}
+
 fn assertCurrent(self: *Self, ref: Ref) void {
     if (builtin.mode == .Debug) {
-        if (self.chunks.items[ref.index].gen != ref.gen) {
+        if (!self.isAlive(ref)) {
             std.debug.panic(
                 "mismatched chunk generation. remember to clone your chunks.",
                 .{}
@@ -256,6 +260,7 @@ pub const SlapDirection = enum {
     right,
     top,
     bottom,
+
     fn flip(self: @This()) @This() {
         return switch (self) {
             .left => .right,

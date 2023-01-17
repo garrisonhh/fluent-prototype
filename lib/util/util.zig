@@ -1,5 +1,6 @@
 //! forwarding namespaces
 
+pub const cli = @import("src/cli.zig");
 pub const Symbol = @import("src/symbol.zig");
 pub usingnamespace @import("src/result.zig");
 pub usingnamespace @import("src/project.zig");
