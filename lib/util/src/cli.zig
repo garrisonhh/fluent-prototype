@@ -53,12 +53,18 @@ pub const Value = union(Type.Tag) {
 const Option = struct {
     const Self = @This();
 
-    name: []const u8,
-    desc: []const u8,
+    name: []u8,
+    desc: []u8,
     ty: Type,
 
     short: ?*u8 = null,
-    long: ?[]const u8 = null,
+    long: ?[]u8 = null,
+
+    fn deinit(self: Self, ally: Allocator) void {
+        ally.free(self.name);
+        ally.free(self.desc);
+        if (self.long) |long| ally.free(long);
+    }
 };
 
 pub const Output = union(enum) {
@@ -84,6 +90,47 @@ pub const Output = union(enum) {
                 while (iter.next()) |val| val.deinit(ally);
                 opts.deinit(ally);
             }
+        }
+    }
+
+    /// use to test for and access a specific path
+    pub fn match(
+        self: *const Self,
+        path: []const []const u8,
+    ) ?*const Options {
+        if (path.len == 0) {
+            return if (self.* == .options) &self.options else null;
+        } else if (self.* != .path) {
+            return null;
+        }
+
+        if (!std.mem.eql(u8, self.path.subcommand, path[0])) {
+            return null;
+        }
+
+        return self.path.out.match(path[1..]);
+    }
+
+    /// same as match but in bool form
+    pub fn matches(self: *const Self, path: []const []const u8) bool {
+        return self.match(path) != null;
+    }
+
+    /// test if your output looks like a subcommand followed by `help`. if so,
+    /// show usage and exit.
+    pub fn filterHelp(
+        self: *const Self,
+        parser: *const Parser
+    ) Parser.ExitError!void {
+        // test if this output is help
+        var state = self;
+        var p: *const Parser = parser;
+        while (state.* == .path) : (state = state.path.out) {
+            if (std.mem.eql(u8, state.path.subcommand, "help")) {
+                try p.usageExit();
+            }
+
+            p = p.subcommands.get(state.path.subcommand).?;
         }
     }
 
@@ -137,8 +184,8 @@ pub const Parser = struct {
 
     ally: Allocator,
     parent: ?*const Parser = null,
-    name: []const u8,
-    desc: []const u8,
+    name: []u8,
+    desc: []u8,
 
     subcommands: std.StringHashMapUnmanaged(*Parser) = .{},
 
@@ -148,21 +195,30 @@ pub const Parser = struct {
     long: std.StringHashMapUnmanaged(OptionId) = .{},
     positional: std.ArrayListUnmanaged(OptionId) = .{},
 
-    pub fn init(ally: Allocator, name: []const u8, desc: []const u8) Self {
-        return Self{
+    pub fn init(
+        ally: Allocator,
+        name: []const u8,
+        desc: []const u8
+    ) Allocator.Error!Self {
+         return Self{
             .ally = ally,
-            .name = name,
-            .desc = desc,
+            .name = try ally.dupe(u8, name),
+            .desc = try ally.dupe(u8, desc),
         };
     }
 
     pub fn deinit(self: *Self) void {
+        self.ally.free(self.name);
+        self.ally.free(self.desc);
+
         var subs = self.subcommands.valueIterator();
         while (subs.next()) |sub| {
             sub.*.deinit();
             self.ally.destroy(sub.*);
         }
         self.subcommands.deinit(self.ally);
+
+        for (self.options.items) |opt| opt.deinit(self.ally);
         self.options.deinit(self.ally);
         self.short.deinit(self.ally);
         self.long.deinit(self.ally);
@@ -190,15 +246,17 @@ pub const Parser = struct {
         desc: []const u8,
         ty: Type,
     ) Allocator.Error!void {
+        const long_owned = try self.ally.dupe(u8, long);
+
         const id = try self.acquire(Option{
-            .name = name,
-            .desc = desc,
+            .name = try self.ally.dupe(u8, name),
+            .desc = try self.ally.dupe(u8, desc),
             .ty = ty,
             .short = if (short) |*c| c else null,
             .long = long,
         });
         if (short) |c| try self.short.put(self.ally, c, id);
-        try self.long.put(self.ally, long, id);
+        try self.long.put(self.ally, long_owned, id);
     }
 
     pub fn addPositional(
@@ -208,8 +266,8 @@ pub const Parser = struct {
         ty: Type,
     ) Allocator.Error!void {
         const id = try self.acquire(Option{
-            .name = name,
-            .desc = desc,
+            .name = try self.ally.dupe(u8, name),
+            .desc = try self.ally.dupe(u8, desc),
             .ty = ty,
         });
         try self.positional.append(self.ally, id);
@@ -223,14 +281,19 @@ pub const Parser = struct {
     ) Allocator.Error!*Parser {
         // make parser
         const parser = try self.ally.create(Self);
-        parser.* = Self.init(self.ally, name, desc);
+        parser.* = try Self.init(self.ally, name, desc);
         parser.parent = self;
 
         // store parser
         std.debug.assert(!self.subcommands.contains(name));
-        try self.subcommands.putNoClobber(self.ally, name, parser);
+        try self.subcommands.putNoClobber(self.ally, parser.name, parser);
 
         return parser;
+    }
+
+    /// adds the `help` subcommand
+    pub fn addHelp(self: *Self) Allocator.Error!void {
+        _ = try self.addSubcommand("help", "show this message");
     }
 
     /// used for errors
@@ -331,6 +394,7 @@ pub const Parser = struct {
             std.debug.assert(arg.len != 0);
 
             if (arg.len == 1 or arg[1] != '-') {
+                // invalid opt; could be positional though so break
                 iter.unget();
                 break;
             } else if (arg[1] == '-') {
@@ -409,14 +473,16 @@ pub const Parser = struct {
 
     fn renderName(
         ctx: *kz.Context,
+        sty: kz.Style,
         parser: Parser
     ) Allocator.Error!kz.Ref {
         var names = std.ArrayList(kz.Ref).init(ctx.ally);
         defer names.deinit();
 
-        var p: ?*const Parser = &parser;
-        while (p) |got| : (p = got.parent){
-            try names.append(try ctx.print(.{}, "{s}", .{got.name}));
+        var p: *const Parser = &parser;
+        while (true) {
+            try names.append(try ctx.print(sty, "{s}", .{p.name}));
+            p = p.parent orelse break;
         }
 
         return try ctx.stack(names.items, .left, .{ .space = 1 });
@@ -511,7 +577,7 @@ pub const Parser = struct {
         const desc = try ctx.print(.{}, "{s}", .{self.desc});
         var example = try ctx.stub();
 
-        const name = try renderName(ctx, self);
+        const name = try renderName(ctx, .{}, self);
         defer ctx.drop(name);
 
         if (self.options.items.len > 0) {
@@ -582,8 +648,7 @@ pub const Parser = struct {
         while (iter.next()) |entry| {
             const sub = entry.value_ptr.*;
 
-            const sub_ex =
-                try ctx.print(yellow, "{s} {s}", .{self.name, sub.name});
+            const sub_ex = try renderName(ctx, yellow, sub.*);
             const size = kz.toOffset(ctx.getSize(sub_ex));
 
             try subs.append(try ctx.unify(

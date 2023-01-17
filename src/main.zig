@@ -67,38 +67,59 @@ fn repl(ally: Allocator, proj: *Project, env: *Env) !void {
     }
 }
 
+fn dispatchArgs(
+    ally: Allocator,
+    parser: cli.Parser,
+    output: cli.Output,
+    proj: *Project,
+    env: *Env
+) !void {
+    try output.filterHelp(&parser);
+
+    if (output.matches(&.{})) {
+        try parser.usageExit();
+    } else if (output.matches(&.{"repl"})) {
+        try repl(ally, proj, env);
+    } else if (output.match(&.{"run"})) |options| {
+        const filepath = options.get("file").?.string;
+        const file = try proj.load(filepath);
+        try execPrint(proj.*, env, file, .file);
+    } else {
+        unreachable;
+    }
+}
+
 pub fn main() !void {
     // allocator boilerplate
     var gpa = std.heap.GeneralPurposeAllocator(.{
         .stack_trace_frames = 1000,
     }){};
     defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    // const ally = std.heap.page_allocator;
+    // const ally = gpa.allocator();
+    const ally = std.heap.page_allocator;
 
-    // parse cli args
-    var parser = cli.Parser.init(ally, "fluent", "the fluent compiler");
+    // cli input
+    var parser = try cli.Parser.init(ally, "fluent", "the fluent compiler");
     defer parser.deinit();
 
-    _ = try parser.addSubcommand("help", "display usage and exit");
-    _ = try parser.addSubcommand("repl", "start the fluent repl");
+    try parser.addHelp();
 
-    const run_cmd =
-        try parser.addSubcommand("run", "run a fluent program");
+    const repl_cmd = try parser.addSubcommand("repl", "start the fluent repl");
+    try repl_cmd.addHelp();
 
+    const run_cmd = try parser.addSubcommand("run", "run a fluent program");
+    try run_cmd.addHelp();
     try run_cmd.addPositional("file", "the file to run", .string);
 
     var output = try parser.parse();
     defer output.deinit(ally);
 
-    try kz.display(ally, {}, output, stdout);
-
     // fluent env
     var proj = util.Project.init(ally);
     defer proj.deinit();
 
-    var prelude = try backend.generatePrelude(ally);
-    defer prelude.deinit();
+    var env = try backend.generatePrelude(ally);
+    defer env.deinit();
 
-    @panic("TODO tie everything back together");
+    try dispatchArgs(ally, parser, output, &proj, &env);
 }
