@@ -6,16 +6,13 @@ const builtin = @import("builtin");
 const kz = @import("kritzler");
 const linenoize = @import("linenoize");
 const Linenoise = linenoize.Linenoise;
-const linenoiseEdit = linenoize.linenoiseEdit;
 const util = @import("util");
 const cli = util.cli;
 const FileRef = util.FileRef;
 const Project = util.Project;
-const Message = util.Message;
 const plumbing = @import("plumbing.zig");
 const backend = @import("backend.zig");
 const Env = backend.Env;
-const EvalError = backend.eval.Error;
 const ParseType = @import("frontend.zig").ParseType;
 
 // this test ensures that all code is semantically analyzed

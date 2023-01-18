@@ -2,11 +2,8 @@
 //! is what SSA IR constants use, and the bytecode VM follows its layout rules
 //! in code generation.
 
-// TODO move this to canon?
-
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const builtin = @import("builtin");
 
 const Self = @This();
 

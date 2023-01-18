@@ -2,13 +2,10 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const kz = @import("kritzler");
 const builtin = @import("builtin");
 const util = @import("util");
-const Symbol = util.Symbol;
 const Name = util.Name;
 const ssa = @import("ssa/ssa.zig");
-const Const = ssa.Const;
 const Local = ssa.Local;
 const Op = ssa.Op;
 const Label = ssa.Label;

@@ -1,6 +1,29 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+fn addPackages(step: *std.build.LibExeObjStep) void {
+    const Pkg = std.build.Pkg;
+    const rel_fs = std.build.FileSource.relative;
+
+    const linenoize = Pkg{
+        .name = "linenoize",
+        .source = rel_fs("lib/linenoize/linenoize.zig")
+    };
+    const kritzler = Pkg{
+        .name = "kritzler",
+        .source = rel_fs("lib/kritzler/kritzler.zig"),
+    };
+    const util = Pkg{
+        .name = "util",
+        .source = rel_fs("lib/util/util.zig"),
+        .dependencies = &[_]Pkg{kritzler},
+    };
+
+    step.addPackage(linenoize);
+    step.addPackage(kritzler);
+    step.addPackage(util);
+}
+
 pub fn build(b: *std.build.Builder) void {
     const target = b.standardTargetOptions(.{});
     const mode = b.standardReleaseOptions();
@@ -23,38 +46,17 @@ pub fn build(b: *std.build.Builder) void {
     exe.setBuildMode(mode);
     exe.setOutputDir(".");
 
-    // packages
-    const Pkg = std.build.Pkg;
-    const rel_fs = std.build.FileSource.relative;
-
-    const linenoize = Pkg{
-        .name = "linenoize",
-        .source = rel_fs("lib/linenoize/linenoize.zig")
-    };
-    const kritzler = Pkg{
-        .name = "kritzler",
-        .source = rel_fs("lib/kritzler/kritzler.zig"),
-    };
-    const util = Pkg{
-        .name = "util",
-        .source = rel_fs("lib/util/util.zig"),
-        .dependencies = &[_]Pkg{kritzler},
-    };
-
-    exe.addPackage(linenoize);
-    exe.addPackage(kritzler);
-    exe.addPackage(util);
+    addPackages(exe);
 
     exe.install();
 
     // tests
-    const tests = b.addTest("src/tests.zig");
+    const tests = b.addTest("src/main.zig");
     tests.setTarget(target);
     tests.setBuildMode(mode);
     tests.setOutputDir(".");
 
-    tests.addPackagePath("kritzler", "lib/kritzler/kritzler.zig");
-    tests.addPackagePath("util", "lib/util/util.zig");
+    addPackages(tests);
 
     const test_step = b.step("test", "run fluent tests");
     test_step.dependOn(&tests.step);

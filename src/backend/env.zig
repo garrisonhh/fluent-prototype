@@ -36,7 +36,6 @@ const BcRef = compile.InstRef;
 const Vm = @import("bytecode/vm.zig");
 const Program = @import("bytecode/bytecode.zig").Program;
 const canon = @import("canon.zig");
-const Value = canon.Value;
 
 const Self = @This();
 

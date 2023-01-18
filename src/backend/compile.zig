@@ -1,12 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const kz = @import("kritzler");
-const builtin = @import("builtin");
 const Env = @import("env.zig");
 const ssa = @import("ssa/ssa.zig");
 const FuncRef = ssa.FuncRef;
 const Label = ssa.Label;
-const Local = ssa.Local;
 const Pos = ssa.Pos;
 const Op = ssa.Op;
 const Vm = @import("bytecode/vm.zig");
@@ -16,9 +13,7 @@ const Inst = bytecode.Inst;
 const Bc = bytecode.Construct;
 const building = @import("bytecode/building.zig");
 const canon = @import("canon.zig");
-const Value = canon.Value;
 const RegisterMap = @import("bytecode/register_map.zig");
-const TExpr = @import("texpr.zig");
 
 pub const Builder = building.Builder;
 pub const InstRef = bytecode.InstRef;

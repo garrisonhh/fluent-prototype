@@ -7,7 +7,6 @@ const Symbol = util.Symbol;
 const types = @import("../types.zig");
 const Type = types.Type;
 const TypeId = types.TypeId;
-const TypeWelt = types.TypeWelt;
 const Env = @import("../env.zig");
 const TExpr = @import("../texpr.zig");
 const Builtin = @import("../canon.zig").Builtin;

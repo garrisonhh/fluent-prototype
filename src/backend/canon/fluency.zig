@@ -8,12 +8,10 @@ const Loc = util.Loc;
 const TExpr = @import("../texpr.zig");
 const Env = @import("../env.zig");
 const types = @import("../types.zig");
-const Type = types.Type;
 const TypeId = types.TypeId;
 const canon = @import("../canon.zig");
 const Number = canon.Number;
 const Value = canon.Value;
-const FuncRef = @import("../ssa/ssa.zig").FuncRef;
 const BcRef = @import("../bytecode/bytecode.zig").InstRef;
 
 // crucifixion =================================================================

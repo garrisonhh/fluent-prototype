@@ -5,7 +5,6 @@ const stdout = std.io.getStdOut().writer();
 const kz = @import("kritzler");
 const util = @import("util");
 const Name = util.Name;
-const Project = util.Project;
 const Message = util.Message;
 const TExpr = @import("texpr.zig");
 const SExpr = @import("sexpr.zig");
