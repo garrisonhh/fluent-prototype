@@ -1,6 +1,19 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+// check compiler version
+comptime {
+    const desired = std.SemanticVersion.parse("0.10.0") catch unreachable;
+    const version = builtin.zig_version;
+    if (version.order(desired).compare(.neq)) {
+        const msg = std.fmt.comptimePrint(
+            "expected zig version {}, found {}",
+            .{desired, version}
+        );
+        @compileError(msg);
+    }
+}
+
 fn addPackages(step: *std.build.LibExeObjStep) void {
     const Pkg = std.build.Pkg;
     const rel_fs = std.build.FileSource.relative;
@@ -28,24 +41,10 @@ pub fn build(b: *std.build.Builder) void {
     const target = b.standardTargetOptions(.{});
     const mode = b.standardReleaseOptions();
 
-    // check compiler version
-    comptime {
-        const desired = try std.SemanticVersion.parse("0.10.0");
-        const version = builtin.zig_version;
-        if (version.order(desired).compare(.neq)) {
-            const msg = std.fmt.comptimePrint(
-                "expected zig version {}, found {}",
-                .{desired, version}
-            );
-            @compileError(msg);
-        }
-    }
-
     const exe = b.addExecutable("fluent", "src/main.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
     exe.setOutputDir(".");
-
     addPackages(exe);
 
     exe.install();
@@ -55,7 +54,6 @@ pub fn build(b: *std.build.Builder) void {
     tests.setTarget(target);
     tests.setBuildMode(mode);
     tests.setOutputDir(".");
-
     addPackages(tests);
 
     const test_step = b.step("test", "run fluent tests");
