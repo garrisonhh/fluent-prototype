@@ -67,6 +67,25 @@ fn repl(ally: Allocator, proj: *Project, env: *Env) !void {
     }
 }
 
+const LOG_FIELDS = @typeInfo(@TypeOf(util.options.log)).Struct.fields;
+
+fn addLogArgs(parser: *cli.Parser) !void {
+    inline for (LOG_FIELDS) |field| {
+        const name = "log-" ++ field.name;
+        const desc = "enable logging for the " ++ field.name ++ " stage";
+        try parser.addArg(null, name, name, desc, .flag);
+    }
+}
+
+fn checkLogFlags(options: *const cli.Output.Options) void {
+    inline for (LOG_FIELDS) |field| {
+        const name = "log-" ++ field.name;
+        if (options.get(name) != null) {
+            @field(util.options.log, field.name) = true;
+        }
+    }
+}
+
 fn dispatchArgs(
     ally: Allocator,
     parser: cli.Parser,
@@ -78,9 +97,13 @@ fn dispatchArgs(
 
     if (output.matches(&.{})) {
         try parser.usageExit();
-    } else if (output.matches(&.{"repl"})) {
+    } else if (output.match(&.{"repl"})) |options| {
+        checkLogFlags(options);
+
         try repl(ally, proj, env);
     } else if (output.match(&.{"run"})) |options| {
+        checkLogFlags(options);
+
         const filepath = options.get("file").?.string;
         const file = try proj.load(filepath);
         try execPrint(proj.*, env, file, .file);
@@ -106,9 +129,11 @@ pub fn main() !void {
 
     const repl_cmd = try parser.addSubcommand("repl", "start the fluent repl");
     try repl_cmd.addHelp();
+    try addLogArgs(repl_cmd);
 
     const run_cmd = try parser.addSubcommand("run", "run a fluent program");
     try run_cmd.addHelp();
+    try addLogArgs(run_cmd);
     try run_cmd.addPositional("file", "the file to run", .string);
 
     var output = try parser.parse();

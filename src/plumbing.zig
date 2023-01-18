@@ -3,7 +3,6 @@
 
 const std = @import("std");
 const stdout = std.io.getStdOut().writer();
-const builtin = @import("builtin");
 const util = @import("util");
 const FileRef = util.FileRef;
 const Project = util.Project;
@@ -36,7 +35,7 @@ pub fn exec(
     const sexpr = trans_res.get() orelse return trans_res.cast(TExpr);
     defer sexpr.deinit(env.ally);
 
-    if (builtin.mode == .Debug) {
+    if (util.options.log.translate) {
         const t = now();
         try stdout.print("[Translated AST]\n{}\n\n", .{sexpr});
 

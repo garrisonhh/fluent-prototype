@@ -2,7 +2,6 @@
 
 const std = @import("std");
 const stdout = std.io.getStdOut().writer();
-const builtin = @import("builtin");
 const kz = @import("kritzler");
 const util = @import("util");
 const Name = util.Name;
@@ -50,7 +49,7 @@ pub fn evalTyped(
     const texpr = sema_res.get() orelse return sema_res;
     defer texpr.deinit(env.ally);
 
-    if (builtin.mode == .Debug) {
+    if (util.options.log.sema) {
         const t = now();
         defer render_time += now() - t;
 
@@ -64,7 +63,7 @@ pub fn evalTyped(
     const final = final: {
         // values don't need further execution
         if (texpr.known_const) {
-            if (builtin.mode == .Debug) {
+            if (util.options.log.sema) {
                 const msg_start = now();
                 try stdout.writeAll("analyzed a constant.\n");
                 render_time += now() - msg_start;
@@ -76,7 +75,7 @@ pub fn evalTyped(
         // lower to ssa ir
         const ssa = try lower(env, scope, texpr);
 
-        if (builtin.mode == .Debug) {
+        if (util.options.log.ssa) {
             const t = now();
             defer render_time += now() - t;
 
@@ -90,18 +89,13 @@ pub fn evalTyped(
 
         const prog = env.bc.build(ssa);
 
-        if (builtin.mode == .Debug) {
+        if (util.options.log.bytecode) {
             const t = now();
-            var ctx = kz.Context.init(env.ally);
-            defer ctx.deinit();
-
-            const tex = try prog.render(&ctx, env.bc.comments);
+            defer render_time += now() - t;
 
             try stdout.writeAll("[Bytecode]\n");
-            try ctx.write(tex, stdout);
+            try kz.display(env.ally, env.bc.comments, prog, stdout);
             try stdout.writeByte('\n');
-
-            render_time += now() - t;
         }
 
         // run compiled bytecode
@@ -126,19 +120,13 @@ pub fn evalTyped(
     };
 
     // render final value
-    if (builtin.mode == .Debug) {
+    if (util.options.log.eval) {
         const t = now();
-
-        var ctx = kz.Context.init(env.ally);
-        defer ctx.deinit();
-
-        const tex = try final.render(&ctx, env.*);
+        defer render_time += now() - t;
 
         try stdout.writeAll("[Value]\n");
-        try ctx.write(tex, stdout);
+        try kz.display(env.ally, env.*, final, stdout);
         try stdout.writeByte('\n');
-
-        render_time += now() - t;
     }
 
     // time logging

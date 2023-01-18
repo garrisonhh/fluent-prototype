@@ -57,7 +57,7 @@ const Option = struct {
     desc: []u8,
     ty: Type,
 
-    short: ?*u8 = null,
+    short: ?u8 = null,
     long: ?[]u8 = null,
 
     fn deinit(self: Self, ally: Allocator) void {
@@ -70,7 +70,7 @@ const Option = struct {
 pub const Output = union(enum) {
     const Self = @This();
 
-    const Options = std.StringHashMapUnmanaged(Value);
+    pub const Options = std.StringHashMapUnmanaged(Value);
 
     /// maps option name -> value
     options: Options,
@@ -252,8 +252,8 @@ pub const Parser = struct {
             .name = try self.ally.dupe(u8, name),
             .desc = try self.ally.dupe(u8, desc),
             .ty = ty,
-            .short = if (short) |*c| c else null,
-            .long = long,
+            .short = short,
+            .long = long_owned,
         });
         if (short) |c| try self.short.put(self.ally, c, id);
         try self.long.put(self.ally, long_owned, id);
