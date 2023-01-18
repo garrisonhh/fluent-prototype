@@ -1,3 +1,5 @@
+const std = @import("std");
+
 pub fn Stream(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -12,7 +14,7 @@ pub fn Stream(comptime T: type) type {
             };
         }
 
-        pub fn completed(self: Self) bool {
+        pub fn done(self: Self) bool {
             return self.index == self.tokens.len;
         }
 
@@ -25,26 +27,9 @@ pub fn Stream(comptime T: type) type {
             return self.get(0);
         }
 
-        pub fn prev(self: Self) ?T {
-            return if (self.index > 0) self.tokens[self.index] else null;
-        }
-
-        pub fn next(self: *Self) ?T {
-            const token = self.peek() orelse return null;
+        pub fn eat(self: *Self) void {
+            std.debug.assert(self.index < self.tokens.len);
             self.index += 1;
-            return token;
-        }
-
-        pub fn skip(self: *Self, steps: usize) error { OutOfBounds }!void {
-            if (self.index + steps <= self.tokens.len) {
-                self.index += steps;
-            } else {
-                return error.OutOfBounds;
-            }
-        }
-
-        pub fn mustSkip(self: *Self, steps: usize) void {
-            return self.skip(steps) catch unreachable;
         }
     };
 }

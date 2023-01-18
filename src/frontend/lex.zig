@@ -5,24 +5,17 @@ const Loc = util.Loc;
 const Message = util.Message;
 const FileRef = util.FileRef;
 const Project = util.Project;
+const kz = @import("kritzler");
 const Stream = @import("stream.zig").Stream;
 
 pub const Token = struct {
     const Self = @This();
 
     pub const Tag = enum {
-        indent,
-
-        // literal-ish
         number,
         string,
         symbol,
-
-        // reserved symbols
-        lparen,
-        rparen,
-        lbracket,
-        rbracket,
+        keyword,
     };
 
     tag: Tag,
@@ -36,15 +29,33 @@ pub const Token = struct {
     }
 };
 
+const KEYWORDS = kw: {
+    const list = [_][]const u8{
+        // parens
+        "(", ")",
+        // lists
+        "[", "]",
+        // if
+        "if", "then", "else"
+    };
+
+    // manipulate so it's consumable by ComptimeStringMap
+    const KV = struct {
+        @"0": []const u8,
+        @"1": void = {},
+    };
+    var kvs: [list.len]KV = undefined;
+    for (list) |keyword, i| {
+        kvs[i] = KV{ .@"0" = keyword };
+    }
+
+    break :kw std.ComptimeStringMap(void, kvs);
+};
+
 const CharClass = enum {
     lexical,
     digit,
-    lparen,
-    rparen,
-    lbracket,
-    rbracket,
-    space,
-    newline,
+    whitespace,
 };
 
 const Lexer = Stream(u8);
@@ -54,12 +65,7 @@ const Error = Allocator.Error || error { InvalidCharacter };
 fn classify(ch: u8) Error!CharClass {
     return switch (ch) {
         '0'...'9' => .digit,
-        ' ' => .space,
-        '(' => .lparen,
-        ')' => .rparen,
-        '[' => .lbracket,
-        ']' => .rbracket,
-        '\n' => .newline,
+        ' ', '\n' => .whitespace,
         else => if (std.ascii.isPrint(ch)) .lexical else Error.InvalidCharacter
     };
 }
@@ -79,81 +85,57 @@ fn lengthen(loc: Loc, len: usize) Loc {
     return Loc.of(loc.file, loc.start, loc.start + len);
 }
 
-fn lexNumber(lexer: *Lexer, start: Loc) Error!Token {
-    var len: usize = 0;
+fn lexNumber(lexer: *Lexer, loc: Loc) Error!Token {
+    const start = lexer.index;
 
     // integral section
-    while (lexer.peek()) |ch| {
+    while (lexer.peek()) |ch| : (lexer.eat()) {
         if (!try isLexOrNum(ch)) break;
-
-        lexer.mustSkip(1);
-        len += 1;
     }
 
     // test for int
     if (lexer.peek() != @as(u8, '.')) {
-        return Token.of(.number, lengthen(start, len));
+        return Token.of(.number, lengthen(loc, lexer.index - start));
     }
 
-    lexer.mustSkip(1);
-    len += 1;
+    lexer.eat();
 
     // float section
-    while (lexer.peek()) |ch| {
+    while (lexer.peek()) |ch| : (lexer.eat()) {
         if (!try isLexOrNum(ch)) break;
-
-        lexer.mustSkip(1);
-        len += 1;
     }
 
-    return Token.of(.number, lengthen(start, len));
+    return Token.of(.number, lengthen(loc, lexer.index - start));
 }
 
-fn lexIdent(lexer: *Lexer, start: Loc) Error!Token {
-    var len: usize = 0;
-    while (lexer.peek()) |ch| {
-        if (!try isLexOrNum(ch)) break;
+fn lexSymbol(lexer: *Lexer, loc: Loc) Error!Token {
+    const start = lexer.index;
 
-        lexer.mustSkip(1);
-        len += 1;
+    while (lexer.peek()) |ch| : (lexer.eat()) {
+        if (!try isLexOrNum(ch)) break;
     }
 
-    return Token.of(.symbol, lengthen(start, len));
+    // this token could be a keyword or a symbol
+    const full_loc = lengthen(loc, lexer.index - start);
+    const slice = lexer.tokens[start..lexer.index];
+
+    const tag: Token.Tag =
+        if (KEYWORDS.get(slice) != null) .keyword else .symbol;
+
+    return Token.of(tag, full_loc);
 }
 
-fn lexLine(
+fn lex(
     lexer: *Lexer,
     tokens: *std.ArrayList(Token),
     file: FileRef,
 ) Error!void {
-    // indentation
-    const start = here(lexer.*, file, 0);
-    var indent: usize = 0;
-    while (lexer.peek()) |ch| {
-        if (ch != ' ') break;
-
-        lexer.mustSkip(1);
-        indent += 1;
-    }
-
-    try tokens.append(Token.of(.indent, lengthen(start, indent)));
-
-    // other tokens
     while (lexer.peek()) |ch| {
         const loc = here(lexer.*, file, 1);
         switch (try classify(ch)) {
-            .newline => {
-                lexer.mustSkip(1);
-                break;
-            },
-            .space => lexer.mustSkip(1),
+            .whitespace => lexer.eat(),
             .digit => try tokens.append(try lexNumber(lexer, loc)),
-            .lexical => try tokens.append(try lexIdent(lexer, loc)),
-            inline .lparen, .rparen, .lbracket, .rbracket => |tag| {
-                defer lexer.mustSkip(1);
-                const tok = Token.of(@field(Token.Tag, @tagName(tag)), loc);
-                try tokens.append(tok);
-            },
+            .lexical => try tokens.append(try lexSymbol(lexer, loc)),
         }
     }
 }
@@ -169,16 +151,20 @@ pub fn tokenize(
     var lexer = Lexer.init(proj.getText(file), 0);
     var tokens = std.ArrayList(Token).init(ally);
 
-    while (!lexer.completed()) {
-        lexLine(&lexer, &tokens, file) catch |e| switch (e) {
-            Error.OutOfMemory => return Error.OutOfMemory,
-            Error.InvalidCharacter => {
-                const loc = here(lexer, file, 0);
-                const fmt = "invalid character";
-                return try Message.err(ally, []Token, loc, fmt, .{});
-            }
-        };
-    }
+    lex(&lexer, &tokens, file) catch |e| switch (e) {
+        Error.OutOfMemory => return Error.OutOfMemory,
+        Error.InvalidCharacter => {
+            const loc = here(lexer, file, 0);
+            const fmt = "invalid character";
+            return try Message.err(ally, []Token, loc, fmt, .{});
+        }
+    };
+
+    // std.debug.print("[tokens]\n", .{});
+    // for (tokens.items) |token| {
+        // const slice = token.loc.slice(proj);
+        // std.debug.print("{s} `{s}`\n", .{@tagName(token.tag), slice});
+    // }
 
     return Result.ok(tokens.toOwnedSlice());
 }

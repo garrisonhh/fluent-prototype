@@ -27,15 +27,29 @@ fn execPrint(
     ref: FileRef,
     what: ParseType
 ) !void {
-    switch (try plumbing.exec(proj, env, ref, what)) {
-        .ok => |value| {
-            defer value.deinit(env.ally);
-            try kz.display(env.ally, env.*, value, stdout);
+    const ally = env.ally;
+    const parse = @import("frontend.zig").parse;
+
+    switch (try parse(ally, proj, ref, what)) {
+        .ok => |rexpr| {
+            defer rexpr.deinit(ally);
+            try stdout.print("[parsed]\n", .{});
+            try kz.display(ally, proj, rexpr, stdout);
         },
         .err => |msg| {
-            try kz.display(env.ally, proj, msg, stderr);
+            try kz.display(ally, proj, msg, stderr);
         },
     }
+
+    // switch (try plumbing.exec(proj, env, ref, what)) {
+        // .ok => |value| {
+            // defer value.deinit(env.ally);
+            // try kz.display(env.ally, env.*, value, stdout);
+        // },
+        // .err => |msg| {
+            // try kz.display(env.ally, proj, msg, stderr);
+        // },
+    // }
 }
 
 /// look for a `.fluentinit` script to run on repl startup

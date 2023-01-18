@@ -1,5 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const stdout = std.io.getStdOut().writer();
+const kz = @import("kritzler");
 const util = @import("util");
 const Loc = util.Loc;
 const FileRef = util.FileRef;
@@ -9,270 +11,449 @@ const lex = @import("lex.zig");
 const Token = lex.Token;
 const Stream = @import("stream.zig").Stream;
 
-pub const Error = Allocator.Error;
+const Precedence = union(enum) {
+    const Self = @This();
 
-const Parser = Stream(Token);
-const Result = Message.Result(RawExpr);
+    unary: struct {
+        power: usize,
+    },
+    binary: struct {
+        power: usize,
+        right: bool = false,
+    },
 
-/// a structured but still very raw textual representation of the AST
+    const ASSIGNMENT     = Self{ .binary = .{ .power = 1 } };
+    const COMPARISON     = Self{ .binary = .{ .power = 2 } };
+    const ADDITIVE       = Self{ .binary = .{ .power = 3 } };
+    const MULTIPLICATIVE = Self{ .binary = .{ .power = 4 } };
+    const NEGATION       = Self{ .unary  = .{ .power = 5 } };
+};
+
+pub const Syntax = enum {
+    const Self = @This();
+
+    // special
+    file,
+    list,
+    parens,
+
+    // math
+    add,
+    sub,
+    mul,
+    div,
+    mod,
+
+    // conditions
+    eq,
+    gt,
+    lt,
+    ge,
+    le,
+
+    // flow
+    @"if",
+
+    // if a syntax form has multiple symbols, only the first is included. the
+    // rest are checked manually.
+    const symbols = std.ComptimeStringMap(Self, .{
+        .{"+", .add},
+        .{"-", .sub},
+        .{"*", .mul},
+        .{"/", .div},
+        .{"%", .mod},
+        .{"==", .eq},
+        .{">", .gt},
+        .{"<", .lt},
+        .{">=", .ge},
+        .{"<=", .le},
+        .{"(", .parens},
+        .{"if", .@"if"},
+    });
+
+    const precs = map: {
+        var map = std.EnumArray(Self, Precedence).initUndefined();
+
+        inline for (std.enums.values(Self)) |tag| {
+            const prec: ?Precedence = switch (tag) {
+                .add, .sub => Precedence.ADDITIVE,
+                .mul, .div, .mod => Precedence.MULTIPLICATIVE,
+                .eq, .gt, .lt, .ge, .le => Precedence.COMPARISON,
+                .file, .list, .parens, .@"if" => null,
+            };
+
+            if (prec) |got| {
+                map.set(tag, got);
+            }
+        }
+
+        break :map map;
+    };
+
+    fn ofStr(sym: []const u8) ?Self {
+        return symbols.get(sym);
+    }
+
+    fn getPrec(self: Self) Precedence {
+        std.debug.assert(self != .file);
+        return precs.get(self);
+    }
+};
+
 pub const RawExpr = struct {
     const Self = @This();
 
-    pub const Tag = enum {
-        file,
-        group,
+    pub const Form = struct {
+        kind: Syntax,
+        exprs: []RawExpr,
+    };
 
-        // literal-ish
+    pub const Data = union(enum) {
+        unit,
         number,
         string,
         symbol,
-
-        // syntax
-        array,
+        group: []RawExpr,
+        form: Form,
     };
 
-    tag: Tag,
     loc: Loc,
-    children: ?[]RawExpr,
+    data: Data,
 
-    fn init(tag: Tag, loc: Loc, children: ?[]RawExpr) Self {
+    /// create a form expr by shallow cloning a slice of exprs
+    pub fn initForm(
+        ally: Allocator,
+        loc: Loc,
+        kind: Syntax,
+        exprs: []const RawExpr
+    ) Allocator.Error!Self {
         return Self{
-            .tag = tag,
             .loc = loc,
-            .children = children,
+            .data = .{
+                .form = .{
+                    .kind = kind,
+                    .exprs = try ally.dupe(Self, exprs),
+                }
+            },
         };
     }
 
     pub fn deinit(self: Self, ally: Allocator) void {
-        if (self.children) |children| {
-            for (children) |child| child.deinit(ally);
-            ally.free(children);
+        switch (self.data) {
+            .group => |group| {
+                for (group) |child| child.deinit(ally);
+                ally.free(group);
+            },
+            .form => |form| {
+                for (form.exprs) |child| child.deinit(ally);
+                ally.free(form.exprs);
+            },
+            else => {}
         }
+    }
+
+    pub fn render(
+        self: Self,
+        ctx: *kz.Context,
+        proj: Project
+    ) Allocator.Error!kz.Ref {
+        const INDENT = 2;
+        return switch (self.data) {
+            .unit => try ctx.print(.{}, "()", .{}),
+            .number, .string, .symbol => lit: {
+                const color: kz.Color = switch (self.data) {
+                    .number => .magenta,
+                    .string => .green,
+                    .symbol => .red,
+                    else => unreachable
+                };
+
+                const slice = self.loc.slice(proj);
+                break :lit try ctx.print(.{ .fg = color }, "{s}", .{slice});
+            },
+            .group => |exprs| group: {
+                const faint = kz.Style{ .special = .faint };
+                const head = try ctx.print(faint, "group", .{});
+
+                var children = std.ArrayList(kz.Ref).init(ctx.ally);
+                defer children.deinit();
+
+                for (exprs) |expr| {
+                    try children.append(try expr.render(ctx, proj));
+                }
+
+                break :group try ctx.unify(
+                    head,
+                    try ctx.stack(children.items, .bottom, .{}),
+                    .{INDENT, 1},
+                );
+            },
+            .form => |form| form: {
+                const yellow = kz.Style{ .fg = .yellow };
+                const name = @tagName(form.kind);
+                const head = try ctx.print(yellow, "{s}", .{name});
+
+                var children = std.ArrayList(kz.Ref).init(ctx.ally);
+                defer children.deinit();
+
+                for (form.exprs) |expr| {
+                    try children.append(try expr.render(ctx, proj));
+                }
+
+                break :form try ctx.unify(
+                    head,
+                    try ctx.stack(children.items, .bottom, .{}),
+                    .{INDENT, 1},
+                );
+            },
+        };
     }
 };
 
-fn unexpectedEof(proj: Project, parser: Parser) Allocator.Error!Result {
-    const loc = parser.prev().?.loc;
-    return try Message.err(proj.ally, RawExpr, loc, "unexpected EOF", .{});
-}
-
-fn skipWhitespace(parser: *Parser) void {
-    while (parser.peek()) |tok| {
-        if (tok.tag != .indent) break;
-        parser.mustSkip(1);
-    }
-}
-
-fn expectGroup(
-    ally: Allocator,
-    proj: Project,
-    file: FileRef,
-    parser: *Parser
-) Error!Result {
-    // collect
-    var children = std.ArrayList(RawExpr).init(ally);
-
-    const lparen = parser.next().?;
-    std.debug.assert(lparen.tag == .lparen);
-
-    skipWhitespace(parser);
-
-    while (true) {
-        const next = parser.peek() orelse {
-            return try unexpectedEof(proj, parser.*);
-        };
-
-        if (next.tag == .rparen) break;
-
-        // expect next element
-        const res = try expectExpr(ally, proj, file, parser);
-        const child = res.get() orelse return res;
-        try children.append(child);
-
-        skipWhitespace(parser);
-    }
-
-    const rparen = parser.next().?;
-    std.debug.assert(rparen.tag == .rparen);
-
-    // collect into a rawexpr
-    const loc = lparen.loc.span(rparen.loc);
-    return Result.ok(RawExpr.init(.group, loc, children.toOwnedSlice()));
-}
-
-/// helper for expectExpr
-fn expectArray(
-    ally: Allocator,
-    proj: Project,
-    file: FileRef,
-    parser: *Parser
-) Error!Result {
-    // collect
-    var children = std.ArrayList(RawExpr).init(ally);
-
-    const lbracket = parser.next().?;
-    std.debug.assert(lbracket.tag == .lbracket);
-
-    skipWhitespace(parser);
-
-    while (true) {
-        const next = parser.peek() orelse {
-            return try unexpectedEof(proj, parser.*);
-        };
-
-        if (next.tag == .rbracket) break;
-
-        // expect next element
-        const res = try expectExpr(ally, proj, file, parser);
-        const child = res.get() orelse return res;
-        try children.append(child);
-
-        skipWhitespace(parser);
-    }
-
-    const rbracket = parser.next().?;
-    std.debug.assert(rbracket.tag == .rbracket);
-
-    // collect into a rawexpr
-    const loc = lbracket.loc.span(rbracket.loc);
-    return Result.ok(RawExpr.init(.array, loc, children.toOwnedSlice()));
-}
-
-/// expects a non-whitespace-aware expr
-fn expectExpr(
-    ally: Allocator,
-    proj: Project,
-    file: FileRef,
-    parser: *Parser
-) Error!Result {
-    const fst = parser.peek() orelse {
-        return unexpectedEof(proj, parser.*);
-    };
-
-    return switch (fst.tag) {
-        inline .number, .string, .symbol => |tag| lit: {
-            parser.mustSkip(1);
-
-            const raw_tag = @field(RawExpr.Tag, @tagName(tag));
-            break :lit Result.ok(RawExpr.init(raw_tag, fst.loc, null));
-        },
-        .lparen => try expectGroup(ally, proj, file, parser),
-        .lbracket => try expectArray(ally, proj, file, parser),
-        .rparen, .rbracket, =>
-            try Message.err(ally, RawExpr, fst.loc, "expected expression", .{}),
-        .indent => unreachable,
-    };
-}
-
-fn unexpectedIndent(
+fn parseError(
     ally: Allocator,
     loc: Loc,
-    expected: usize
+    comptime fmt: []const u8,
+    args: anytype
 ) Allocator.Error!Result {
-    const fmt = "expected indentation level of {}";
-    return try Message.err(ally, RawExpr, loc, fmt, .{expected});
+    return try Message.err(ally, RawExpr, loc, fmt, args);
 }
 
-fn skipEmptyLines(parser: *Parser) void {
-    // skip empty lines
-    while (parser.peek()) |tok| {
-        const zero_len_line = tok.tag == .indent and tok.loc.length() == 0;
-        const empty_line = tok.tag == .indent and next_nl: {
-            const next = parser.get(1) orelse break :next_nl true;
-            break :next_nl next.tag == .indent;
+fn streamError(
+    ally: Allocator,
+    file: FileRef,
+    strm: *const Stream(Token),
+    comptime fmt: []const u8,
+    args: anytype
+) Allocator.Error!Result {
+    const loc =
+        if (strm.peek()) |tok| tok.loc
+        else if (strm.tokens.len == 0) Loc.of(file, 0, 0)
+        else eof: {
+            const final = strm.tokens[strm.index - 1].loc;
+            break :eof Loc.of(file, final.stop, final.stop);
         };
 
-        if (!(zero_len_line or empty_line)) {
-            break;
-        }
-
-        parser.mustSkip(1);
-    }
+    return parseError(ally, loc, fmt, args);
 }
 
-/// whitespace awareness
-fn expectIndented(
+fn unexpectedEof(
+    ally: Allocator,
+    file: FileRef,
+    strm: *const Stream(Token)
+) Allocator.Error!Result {
+    return streamError(ally, file, strm, "unexpected EOF", .{});
+}
+
+fn unmatchedLParen(ally: Allocator, loc: Loc) Allocator.Error!Result {
+    return parseError(ally, loc, "unmatched `(`", .{});
+}
+
+/// try to extract an operator from a token
+fn parseOp(proj: Project, tok: Token) ?Syntax {
+    return Syntax.ofStr(tok.loc.slice(proj));
+}
+
+fn expectKeyword(
     ally: Allocator,
     proj: Project,
     file: FileRef,
-    parser: *Parser,
-    parent_level: usize
-) Error!Result {
-    var children = std.ArrayList(RawExpr).init(ally);
-    defer children.deinit();
+    strm: *Stream(Token),
+    kw: []const u8,
+) Allocator.Error!Message.Result(void) {
+    const tok = strm.peek() orelse {
+        const fmt = "expected `{s}`, found EOF";
+        return (try streamError(ally, file, strm, fmt, .{kw})).cast(void);
+    };
 
-    // parse non-indented children
-    while (parser.peek()) |tok| {
-        if (tok.tag == .indent) break;
-        const res = try expectExpr(ally, proj, file, parser);
-        const child = res.get() orelse return res;
-        try children.append(child);
+    if (tok.tag != .keyword or !std.mem.eql(u8, kw, tok.loc.slice(proj))) {
+        const fmt = "expected `{s}`";
+        return (try streamError(ally, file, strm, fmt, .{kw})).cast(void);
     }
 
-    // indented children
-    if (parser.peek()) |next_expr| {
-        const level = proj.getSlice(next_expr.loc).len;
-        if (next_expr.tag == .indent and level > parent_level) {
-            parser.mustSkip(1); // now we can skip this indent
+    strm.eat();
 
-            while (true) {
-                // parse child
-                const res = try expectIndented(ally, proj, file, parser, level);
-                const child = res.get() orelse return res;
-                try children.append(child);
+    return Message.Result(void).ok({});
+}
 
-                // verify next indent
-                const next = parser.peek() orelse break;
-                const len = next.loc.stop - next.loc.start;
-                if (next.tag != .indent or len < level) {
-                    break;
-                } else if (len > level) {
-                    return unexpectedIndent(ally, next.loc, level);
-                }
+fn parseForm(
+    ally: Allocator,
+    proj: Project,
+    file: FileRef,
+    strm: *Stream(Token),
+) Allocator.Error!Result {
+    const tok = strm.peek().?;
+    const op = parseOp(proj, tok) orelse {
+        // keywords that don't have associated ops are either misplaced or a
+        // part of another parse sequence
+        const text = tok.loc.slice(proj);
+        return streamError(ally, file, strm, "misplaced `{s}`", .{text});
+    };
+    strm.eat();
 
-                // found another indent, so continue
-                parser.mustSkip(1);
+    // TODO I can definitely metaprogram this boilerplate somehow
+    switch (op) {
+        // ( <expr> )
+        .parens => {
+            const res = try climb(ally, proj, file, 0, strm, true);
+            const expr = res.get() orelse return res;
+
+            const rparen_res = try expectKeyword(ally, proj, file, strm, ")");
+            rparen_res.get() orelse return rparen_res.cast(RawExpr);
+
+            return Result.ok(expr);
+        },
+        // if <cond> then <when> else <else>
+        .@"if" => {
+            const cond_res = try climb(ally, proj, file, 0, strm, false);
+            const cond = cond_res.get() orelse return cond_res;
+
+            const exp_then = try expectKeyword(ally, proj, file, strm, "then");
+            exp_then.get() orelse return exp_then.cast(RawExpr);
+
+            const when_res = try climb(ally, proj, file, 0, strm, false);
+            const when = when_res.get() orelse return when_res;
+
+            const exp_else = try expectKeyword(ally, proj, file, strm, "else");
+            exp_else.get() orelse return exp_else.cast(RawExpr);
+
+            const else_res = try climb(ally, proj, file, 0, strm, false);
+            const @"else" = else_res.get() orelse return else_res;
+
+            const loc = tok.loc.span(@"else".loc);
+            const expr = try RawExpr.initForm(ally, loc, .@"if", &.{
+                cond, when, @"else"
+            });
+
+            return Result.ok(expr);
+        },
+        else => unreachable
+    }
+}
+
+fn parseAtom(
+    ally: Allocator,
+    proj: Project,
+    file: FileRef,
+    strm: *Stream(Token)
+) Allocator.Error!Result {
+    const tok = strm.peek() orelse {
+        return unexpectedEof(ally, file, strm);
+    };
+
+    return switch (tok.tag) {
+        inline .number, .string => |tag| lit: {
+            strm.eat();
+            break :lit Result.ok(RawExpr{
+                .loc = tok.loc,
+                .data = @unionInit(RawExpr.Data, @tagName(tag), {}),
+            });
+        },
+        .keyword => try parseForm(ally, proj, file, strm),
+        .symbol => sym: {
+            // operators have special logic
+            if (parseOp(proj, tok)) |op| switch (op.getPrec()) {
+                .unary => |un| {
+                    strm.eat();
+
+                    const sub_res =
+                        try climb(ally, proj, file, un.power, strm, false);
+                    const sub = sub_res.get() orelse return sub_res;
+
+                    const loc = tok.loc.span(sub.loc);
+                    const expr = try RawExpr.initForm(ally, loc, op, &.{sub});
+                    break :sym Result.ok(expr);
+                },
+                .binary => {
+                    const fmt = "expected expr, found binary op";
+                    break :sym try streamError(ally, file, strm, fmt, .{});
+                },
+            };
+
+            // regular symbol
+            strm.eat();
+            break :sym Result.ok(RawExpr{
+                .loc = tok.loc,
+                .data = .symbol
+            });
+        },
+    };
+}
+
+fn parseGroup(
+    ally: Allocator,
+    proj: Project,
+    file: FileRef,
+    strm: *Stream(Token),
+    force_call: bool
+) Allocator.Error!Result {
+    // parse at least one atom
+    var exprs = std.ArrayList(RawExpr).init(ally);
+
+    const head_res = try parseAtom(ally, proj, file, strm);
+    const head = head_res.get() orelse return head_res;
+    try exprs.append(head);
+
+    while (true) {
+        switch (try parseAtom(ally, proj, file, strm)) {
+            .ok => |expr| try exprs.append(expr),
+            .err => |msg| {
+                msg.deinit(ally);
+                break;
             }
         }
     }
 
-    // extrapolate to RawExpr
-    return switch (children.items.len) {
-        0 => unreachable,
-        1 => Result.ok(children.items[0]),
-        else => group: {
-            const start = children.items[0].loc;
-            const stop = children.items[children.items.len - 1].loc;
-            const loc = start.span(stop);
-            const expr = RawExpr.init(.group, loc, children.toOwnedSlice());
-            break :group Result.ok(expr);
-        }
-    };
+    // based on the number of exprs, extract final result
+    if (!force_call and exprs.items.len == 1) {
+        defer exprs.deinit();
+        return Result.ok(exprs.items[0]);
+    }
+
+    const first = exprs.items[0];
+    const last = exprs.items[exprs.items.len - 1];
+
+    return Result.ok(RawExpr{
+        .loc = first.loc.span(last.loc),
+        .data = .{ .group = exprs.toOwnedSlice() },
+    });
 }
 
-fn expectFile(
+fn climb(
     ally: Allocator,
     proj: Project,
     file: FileRef,
-    parser: *Parser
-) Error!Result {
-    var exprs = std.ArrayList(RawExpr).init(ally);
+    power: usize,
+    strm: *Stream(Token),
+    force_call: bool,
+) Allocator.Error!Result {
+    const head_res = try parseGroup(ally, proj, file, strm, force_call);
+    var expr = head_res.get() orelse return head_res;
 
-    // collect all the exprs in the file
-    while (!parser.completed()) {
-        const res = try expectIndented(ally, proj, file, parser, 0);
-        const expr = res.get() orelse return res;
-        try exprs.append(expr);
+    while (true) {
+        // look for binary operators
+        const next = strm.peek() orelse break;
+        const op = parseOp(proj, next) orelse break;
 
-        skipEmptyLines(parser);
+        const prec = op.getPrec();
+        if (prec != .binary or prec.binary.power < power) break;
+
+        strm.eat();
+
+        // token is a binary operator, dispatch climb
+        const climb_power = prec.binary.power + @boolToInt(prec.binary.right);
+        const rhs_res = try climb(ally, proj, file, climb_power, strm, false);
+        const rhs = rhs_res.get() orelse return rhs_res;
+
+        const loc = expr.loc.span(rhs.loc);
+        expr = try RawExpr.initForm(ally, loc, op, &.{expr, rhs});
     }
 
-    // return file as a RawExpr
-    const loc = Loc.of(file, 0, proj.getText(file).len - 1);
-    return Result.ok(RawExpr.init(.file, loc, exprs.toOwnedSlice()));
+    return Result.ok(expr);
 }
 
 pub const ParseType = enum { file, expr };
+pub const Result = Message.Result(RawExpr);
 
 /// parses a token string, providing errors
 pub fn parse(
@@ -280,27 +461,40 @@ pub fn parse(
     proj: Project,
     file: FileRef,
     what: ParseType
-) Error!Result {
+) Allocator.Error!Result {
     // lex
     const lex_res = try lex.tokenize(ally, proj, file);
     const tokens = lex_res.get() orelse return lex_res.cast(RawExpr);
     defer ally.free(tokens);
 
     // parse
-    var parser = Parser.init(tokens, 0);
-    skipEmptyLines(&parser);
+    var stream = Stream(Token).init(tokens, 0);
 
-    // check for empty input
-    if (parser.completed()) {
-        const loc = Loc.of(file, 0, 0);
-        return try Message.err(ally, RawExpr, loc, "nothing to parse", .{});
+    if (stream.done()) {
+        return switch (what) {
+            .file => try streamError(ally, file, &stream, "empty file", .{}),
+            .expr => Result.ok(RawExpr{
+                .loc = Loc.of(file, 0, 0),
+                .data = .unit,
+            }),
+        };
     }
 
-    return switch (what) {
-        .file => try expectFile(ally, proj, file, &parser),
-        .expr => expr: {
-            // TODO check for tokens left over in token stream
-            break :expr expectIndented(ally, proj, file, &parser, 0);
-        }
-    };
+    // handle parse result
+    const res = try climb(ally, proj, file, 0, &stream, false);
+
+    // check for leftover input
+    if (res == .ok and !stream.done()) {
+        const fmt = "leftover tokens after parsing";
+        return try streamError(ally, file, &stream, fmt, .{});
+    }
+
+    if (what == .file and res == .ok) {
+        // files need to be wrapped in a file expr
+        const expr = res.ok;
+        const formed = try RawExpr.initForm(ally, expr.loc, .file, &.{expr});
+        return Result.ok(formed);
+    }
+
+    return res;
 }
