@@ -55,6 +55,7 @@ const KEYWORDS = kw: {
 const CharClass = enum {
     lexical,
     digit,
+    separator,
     whitespace,
 };
 
@@ -66,6 +67,7 @@ fn classify(ch: u8) Error!CharClass {
     return switch (ch) {
         '0'...'9' => .digit,
         ' ', '\n' => .whitespace,
+        '.', ';' => .separator,
         else => if (std.ascii.isPrint(ch)) .lexical else Error.InvalidCharacter
     };
 }
@@ -108,21 +110,23 @@ fn lexNumber(lexer: *Lexer, loc: Loc) Error!Token {
     return Token.of(.number, lengthen(loc, lexer.index - start));
 }
 
-fn lexSymbol(lexer: *Lexer, loc: Loc) Error!Token {
+fn tokenOfIdent(loc: Loc, slice: []const u8) Token {
+    const tag: Token.Tag =
+        if (KEYWORDS.get(slice) != null) .keyword else .symbol;
+
+    return Token.of(tag, loc);
+}
+
+fn lexIdent(lexer: *Lexer, loc: Loc) Error!Token {
     const start = lexer.index;
 
     while (lexer.peek()) |ch| : (lexer.eat()) {
         if (!try isLexOrNum(ch)) break;
     }
 
-    // this token could be a keyword or a symbol
     const full_loc = lengthen(loc, lexer.index - start);
     const slice = lexer.tokens[start..lexer.index];
-
-    const tag: Token.Tag =
-        if (KEYWORDS.get(slice) != null) .keyword else .symbol;
-
-    return Token.of(tag, full_loc);
+    return tokenOfIdent(full_loc, slice);
 }
 
 fn lex(
@@ -135,7 +139,11 @@ fn lex(
         switch (try classify(ch)) {
             .whitespace => lexer.eat(),
             .digit => try tokens.append(try lexNumber(lexer, loc)),
-            .lexical => try tokens.append(try lexSymbol(lexer, loc)),
+            .lexical => try tokens.append(try lexIdent(lexer, loc)),
+            .separator => {
+                lexer.eat();
+                try tokens.append(tokenOfIdent(loc, &[_]u8{ch}));
+            },
         }
     }
 }

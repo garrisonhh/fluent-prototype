@@ -22,11 +22,13 @@ const Precedence = union(enum) {
         right: bool = false,
     },
 
+    const STATEMENT      = Self{ .binary = .{ .power = 0, .right = true } };
     const ASSIGNMENT     = Self{ .binary = .{ .power = 1 } };
     const COMPARISON     = Self{ .binary = .{ .power = 2 } };
     const ADDITIVE       = Self{ .binary = .{ .power = 3 } };
     const MULTIPLICATIVE = Self{ .binary = .{ .power = 4 } };
     const NEGATION       = Self{ .unary  = .{ .power = 5 } };
+    const FIELD_ACCESS   = Self{ .binary = .{ .power = 6, .right = true } };
 };
 
 pub const Syntax = enum {
@@ -36,6 +38,9 @@ pub const Syntax = enum {
     file,
     list,
     parens,
+
+    // general ops
+    dot,
 
     // math
     add,
@@ -52,11 +57,13 @@ pub const Syntax = enum {
     le,
 
     // flow
+    stmt,
     @"if",
 
     // if a syntax form has multiple symbols, only the first is included. the
     // rest are checked manually.
     const symbols = std.ComptimeStringMap(Self, .{
+        .{".", .dot},
         .{"+", .add},
         .{"-", .sub},
         .{"*", .mul},
@@ -68,6 +75,7 @@ pub const Syntax = enum {
         .{">=", .ge},
         .{"<=", .le},
         .{"(", .parens},
+        .{";", .stmt},
         .{"if", .@"if"},
     });
 
@@ -76,9 +84,11 @@ pub const Syntax = enum {
 
         inline for (std.enums.values(Self)) |tag| {
             const prec: ?Precedence = switch (tag) {
+                .dot => Precedence.FIELD_ACCESS,
                 .add, .sub => Precedence.ADDITIVE,
                 .mul, .div, .mod => Precedence.MULTIPLICATIVE,
                 .eq, .gt, .lt, .ge, .le => Precedence.COMPARISON,
+                .stmt => Precedence.STATEMENT,
                 .file, .list, .parens, .@"if" => null,
             };
 
@@ -441,7 +451,7 @@ fn climb(
         strm.eat();
 
         // token is a binary operator, dispatch climb
-        const climb_power = prec.binary.power + @boolToInt(prec.binary.right);
+        const climb_power = prec.binary.power + @boolToInt(!prec.binary.right);
         const rhs_res = try climb(ally, proj, file, climb_power, strm, false);
         const rhs = rhs_res.get() orelse return rhs_res;
 
