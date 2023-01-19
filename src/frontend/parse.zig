@@ -284,10 +284,6 @@ fn unexpectedEof(p: *const Parser) Allocator.Error!Result {
     return streamError(p, "unexpected EOF", .{});
 }
 
-fn unmatchedLParen(p: *const Parser, loc: Loc) Allocator.Error!Result {
-    return parseError(p, loc, "unmatched `(`", .{});
-}
-
 /// try to extract an operator from a token
 fn parseOp(p: *const Parser, tok: Token) ?Syntax {
     return Syntax.ofStr(tok.loc.slice(p.proj));
@@ -312,6 +308,100 @@ fn expectKeyword(
     return Message.Result(Token).ok(tok);
 }
 
+/// used by parseForm to encode syntax
+const FormExpr = union(enum) {
+    const Self = @This();
+
+    expr,
+    keyword: []const u8,
+
+    const ExpResult = Message.Result(?RawExpr);
+
+    /// expect a single formexpr
+    fn expect(self: Self, p: *Parser) Allocator.Error!ExpResult {
+        return switch (self) {
+            .expr => switch (try climb(p, 0)) {
+                .ok => |expr| ExpResult.ok(expr),
+                .err => |msg| ExpResult.err(msg),
+            },
+            .keyword => |kw| switch (try expectKeyword(p, kw)) {
+                .ok => ExpResult.ok(null),
+                .err => |msg| ExpResult.err(msg),
+            },
+        };
+    }
+};
+
+fn countFormExprs(comptime str: []const u8) usize {
+    comptime {
+        var count: usize = 0;
+        var iter = std.mem.tokenize(u8, str, " ");
+        while (iter.next() != null) {
+            count += 1;
+        }
+
+        return count;
+    }
+}
+
+/// parses a formexpr at comptime.
+/// this is a series of keywords and `<exprs>`
+fn series(comptime str: []const u8) [countFormExprs(str)]FormExpr {
+    comptime {
+        var fexprs = std.BoundedArray(FormExpr, countFormExprs(str)){};
+
+        var iter = std.mem.tokenize(u8, str, " ");
+        while (iter.next()) |tok| {
+            if (tok[0] == '<' and tok[tok.len - 1] == '>') {
+                fexprs.appendAssumeCapacity(.expr);
+            } else {
+                fexprs.appendAssumeCapacity(.{ .keyword = tok });
+            }
+        }
+
+        return fexprs.buffer;
+    }
+}
+
+fn parseSeries(
+    p: *Parser,
+    kind: Syntax,
+    fexprs: []const FormExpr
+) Allocator.Error!Result {
+    // parse each FormExpr in order
+    var group = std.ArrayList(RawExpr).init(p.ally);
+    defer group.deinit();
+
+    for (fexprs) |fexpr, i| {
+        const res = try fexpr.expect(p);
+        switch (res) {
+            .err => |msg| {
+                // early failure
+                for (group.items[0..i]) |parsed| parsed.deinit(p.ally);
+                return Result.err(msg);
+            },
+            .ok => |maybe| {
+                // parsing was successful
+                if (maybe) |got| try group.append(got);
+            },
+        }
+    }
+
+    // make form expr
+    const first = group.items[0];
+    const last = group.items[group.items.len - 1];
+
+    return Result.ok(RawExpr{
+        .loc = first.loc.span(last.loc),
+        .data = .{
+            .form = .{
+                .kind = kind,
+                .exprs = group.toOwnedSlice(),
+            }
+        },
+    });
+}
+
 fn parseForm(p: *Parser) Allocator.Error!Result {
     const tok = p.peek().?;
     const op = parseOp(p, tok) orelse {
@@ -320,17 +410,16 @@ fn parseForm(p: *Parser) Allocator.Error!Result {
         const text = tok.loc.slice(p.proj);
         return streamError(p, "misplaced `{s}`", .{text});
     };
-    p.eat();
 
     // TODO I can definitely metaprogram this boilerplate somehow
-    switch (op) {
+    return switch (op) {
         // ( <expr> )
-        .parens => {
+        .parens => parens: {
             // look for unit literals `()`
             switch (try expectKeyword(p, ")")) {
                 .err => |msg| msg.deinit(p.ally),
                 .ok => |rparen| {
-                    return Result.ok(RawExpr{
+                    break :parens Result.ok(RawExpr{
                         .loc = tok.loc.span(rparen.loc),
                         .data = .unit,
                     });
@@ -343,7 +432,7 @@ fn parseForm(p: *Parser) Allocator.Error!Result {
 
             const rparen_res = try expectKeyword(p, ")");
             const rparen = rparen_res.get() orelse {
-                return rparen_res.cast(RawExpr);
+                break :parens rparen_res.cast(RawExpr);
             };
 
             // ensure that the enclosed expr is getting called (if that was the
@@ -353,34 +442,11 @@ fn parseForm(p: *Parser) Allocator.Error!Result {
                 return Result.ok(try RawExpr.initGroup(p.ally, loc, &.{expr}));
             }
 
-            return Result.ok(expr);
+            break :parens Result.ok(expr);
         },
-        // if <cond> then <when> else <else>
-        .@"if" => {
-            const cond_res = try climb(p, 0);
-            const cond = cond_res.get() orelse return cond_res;
-
-            const exp_then = try expectKeyword(p, "then");
-            _ = exp_then.get() orelse return exp_then.cast(RawExpr);
-
-            const when_res = try climb(p, 0);
-            const when = when_res.get() orelse return when_res;
-
-            const exp_else = try expectKeyword(p, "else");
-            _ = exp_else.get() orelse return exp_else.cast(RawExpr);
-
-            const else_res = try climb(p, 0);
-            const @"else" = else_res.get() orelse return else_res;
-
-            const loc = tok.loc.span(@"else".loc);
-            const expr = try RawExpr.initForm(p.ally, loc, .@"if", &.{
-                cond, when, @"else"
-            });
-
-            return Result.ok(expr);
-        },
+        .@"if" => try parseSeries(p, .@"if", &series("if <> then <> else <>")),
         else => unreachable
-    }
+    };
 }
 
 fn parseAtom(p: *Parser) Allocator.Error!Result {
