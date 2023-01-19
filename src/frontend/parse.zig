@@ -131,7 +131,19 @@ pub const RawExpr = struct {
     loc: Loc,
     data: Data,
 
-    /// create a form expr by shallow cloning a slice of exprs
+    /// create a group expr by shallow cloning slice
+    pub fn initGroup(
+        ally: Allocator,
+        loc: Loc,
+        exprs: []const RawExpr
+    ) Allocator.Error!Self {
+        return Self{
+            .loc = loc,
+            .data = .{ .group = try ally.dupe(RawExpr, exprs) },
+        };
+    }
+
+    /// create a form expr by shallow cloning slice
     pub fn initForm(
         ally: Allocator,
         loc: Loc,
@@ -221,118 +233,147 @@ pub const RawExpr = struct {
     }
 };
 
-fn parseError(
+/// context for parsing
+const Parser = struct {
+    const Self = @This();
+
     ally: Allocator,
+    strm: Stream(Token),
+    proj: Project,
+    file: FileRef,
+
+    fn done(self: Self) bool {
+        return self.strm.done();
+    }
+
+    fn peek(self: Self) ?Token {
+        return self.strm.peek();
+    }
+
+    fn eat(self: *Self) void {
+        self.strm.eat();
+    }
+};
+
+fn parseError(
+    p: *const Parser,
     loc: Loc,
     comptime fmt: []const u8,
     args: anytype
 ) Allocator.Error!Result {
-    return try Message.err(ally, RawExpr, loc, fmt, args);
+    return try Message.err(p.ally, RawExpr, loc, fmt, args);
 }
 
 fn streamError(
-    ally: Allocator,
-    file: FileRef,
-    strm: *const Stream(Token),
+    p: *const Parser,
     comptime fmt: []const u8,
     args: anytype
 ) Allocator.Error!Result {
     const loc =
-        if (strm.peek()) |tok| tok.loc
-        else if (strm.tokens.len == 0) Loc.of(file, 0, 0)
+        if (p.peek()) |tok| tok.loc
+        else if (p.strm.tokens.len == 0) Loc.of(p.file, 0, 0)
         else eof: {
-            const final = strm.tokens[strm.index - 1].loc;
-            break :eof Loc.of(file, final.stop, final.stop);
+            const final = p.strm.tokens[p.strm.index - 1].loc;
+            break :eof Loc.of(p.file, final.stop, final.stop);
         };
 
-    return parseError(ally, loc, fmt, args);
+    return parseError(p, loc, fmt, args);
 }
 
-fn unexpectedEof(
-    ally: Allocator,
-    file: FileRef,
-    strm: *const Stream(Token)
-) Allocator.Error!Result {
-    return streamError(ally, file, strm, "unexpected EOF", .{});
+fn unexpectedEof(p: *const Parser) Allocator.Error!Result {
+    return streamError(p, "unexpected EOF", .{});
 }
 
-fn unmatchedLParen(ally: Allocator, loc: Loc) Allocator.Error!Result {
-    return parseError(ally, loc, "unmatched `(`", .{});
+fn unmatchedLParen(p: *const Parser, loc: Loc) Allocator.Error!Result {
+    return parseError(p, loc, "unmatched `(`", .{});
 }
 
 /// try to extract an operator from a token
-fn parseOp(proj: Project, tok: Token) ?Syntax {
-    return Syntax.ofStr(tok.loc.slice(proj));
+fn parseOp(p: *const Parser, tok: Token) ?Syntax {
+    return Syntax.ofStr(tok.loc.slice(p.proj));
 }
 
 fn expectKeyword(
-    ally: Allocator,
-    proj: Project,
-    file: FileRef,
-    strm: *Stream(Token),
+    p: *Parser,
     kw: []const u8,
-) Allocator.Error!Message.Result(void) {
-    const tok = strm.peek() orelse {
-        const fmt = "expected `{s}`, found EOF";
-        return (try streamError(ally, file, strm, fmt, .{kw})).cast(void);
+) Allocator.Error!Message.Result(Token) {
+    const tok = p.peek() orelse {
+        const err = try streamError(p, "expected `{s}`, found EOF", .{kw});
+        return err.cast(Token);
     };
 
-    if (tok.tag != .keyword or !std.mem.eql(u8, kw, tok.loc.slice(proj))) {
-        const fmt = "expected `{s}`";
-        return (try streamError(ally, file, strm, fmt, .{kw})).cast(void);
+    if (tok.tag != .keyword or !std.mem.eql(u8, kw, tok.loc.slice(p.proj))) {
+        const err = try streamError(p, "expected `{s}`", .{kw});
+        return err.cast(Token);
     }
 
-    strm.eat();
+    p.eat();
 
-    return Message.Result(void).ok({});
+    return Message.Result(Token).ok(tok);
 }
 
-fn parseForm(
-    ally: Allocator,
-    proj: Project,
-    file: FileRef,
-    strm: *Stream(Token),
-) Allocator.Error!Result {
-    const tok = strm.peek().?;
-    const op = parseOp(proj, tok) orelse {
+fn parseForm(p: *Parser) Allocator.Error!Result {
+    const tok = p.peek().?;
+    const op = parseOp(p, tok) orelse {
         // keywords that don't have associated ops are either misplaced or a
         // part of another parse sequence
-        const text = tok.loc.slice(proj);
-        return streamError(ally, file, strm, "misplaced `{s}`", .{text});
+        const text = tok.loc.slice(p.proj);
+        return streamError(p, "misplaced `{s}`", .{text});
     };
-    strm.eat();
+    p.eat();
 
     // TODO I can definitely metaprogram this boilerplate somehow
     switch (op) {
         // ( <expr> )
         .parens => {
-            const res = try climb(ally, proj, file, 0, strm);
+            // look for unit literals `()`
+            switch (try expectKeyword(p, ")")) {
+                .err => |msg| msg.deinit(p.ally),
+                .ok => |rparen| {
+                    return Result.ok(RawExpr{
+                        .loc = tok.loc.span(rparen.loc),
+                        .data = .unit,
+                    });
+                },
+            }
+
+            // parens enclose sommething
+            const res = try climb(p, 0);
             const expr = res.get() orelse return res;
 
-            const rparen_res = try expectKeyword(ally, proj, file, strm, ")");
-            rparen_res.get() orelse return rparen_res.cast(RawExpr);
+            const rparen_res = try expectKeyword(p, ")");
+            const rparen = rparen_res.get() orelse {
+                return rparen_res.cast(RawExpr);
+            };
+
+            // ensure that the enclosed expr is getting called (if that was the
+            // intention of the parens)
+            if (expr.data == .symbol or expr.data == .group) {
+                const loc = tok.loc.span(rparen.loc);
+                return Result.ok(try RawExpr.initGroup(p.ally, loc, &.{expr}));
+            }
 
             return Result.ok(expr);
         },
         // if <cond> then <when> else <else>
         .@"if" => {
-            const cond_res = try climb(ally, proj, file, 0, strm);
+            const cond_res = try climb(p, 0);
             const cond = cond_res.get() orelse return cond_res;
 
-            const exp_then = try expectKeyword(ally, proj, file, strm, "then");
-            exp_then.get() orelse return exp_then.cast(RawExpr);
+            const exp_then = try expectKeyword(p, "then");
+            _ = exp_then.get() orelse return exp_then.cast(RawExpr);
 
-            const when_res = try climb(ally, proj, file, 0, strm);
+            const when_res = try climb(p, 0);
             const when = when_res.get() orelse return when_res;
 
-            const exp_else = try expectKeyword(ally, proj, file, strm, "else");
-            exp_else.get() orelse return exp_else.cast(RawExpr);
+            const exp_else = try expectKeyword(p, "else");
+            _ = exp_else.get() orelse return exp_else.cast(RawExpr);
 
-            const else_res = try climb(ally, proj, file, 0, strm);
+            const else_res = try climb(p, 0);
             const @"else" = else_res.get() orelse return else_res;
 
             const loc = tok.loc.span(@"else".loc);
-            const expr = try RawExpr.initForm(ally, loc, .@"if", &.{
+            const expr = try RawExpr.initForm(p.ally, loc, .@"if", &.{
                 cond, when, @"else"
             });
 
@@ -342,46 +383,39 @@ fn parseForm(
     }
 }
 
-fn parseAtom(
-    ally: Allocator,
-    proj: Project,
-    file: FileRef,
-    strm: *Stream(Token)
-) Allocator.Error!Result {
-    const tok = strm.peek() orelse {
-        return unexpectedEof(ally, file, strm);
-    };
+fn parseAtom(p: *Parser) Allocator.Error!Result {
+    const tok = p.peek() orelse return unexpectedEof(p);
 
     return switch (tok.tag) {
+        .keyword => try parseForm(p),
         inline .number, .string => |tag| lit: {
-            strm.eat();
+            p.eat();
             break :lit Result.ok(RawExpr{
                 .loc = tok.loc,
                 .data = @unionInit(RawExpr.Data, @tagName(tag), {}),
             });
         },
-        .keyword => try parseForm(ally, proj, file, strm),
         .symbol => sym: {
             // operators have special logic
-            if (parseOp(proj, tok)) |op| switch (op.getPrec()) {
+            if (parseOp(p, tok)) |op| switch (op.getPrec()) {
                 .unary => |un| {
-                    strm.eat();
+                    p.eat();
 
-                    const sub_res = try climb(ally, proj, file, un.power, strm);
+                    const sub_res = try climb(p, un.power);
                     const sub = sub_res.get() orelse return sub_res;
 
                     const loc = tok.loc.span(sub.loc);
-                    const expr = try RawExpr.initForm(ally, loc, op, &.{sub});
+                    const expr = try RawExpr.initForm(p.ally, loc, op, &.{sub});
                     break :sym Result.ok(expr);
                 },
                 .binary => {
                     const fmt = "expected expr, found binary op";
-                    break :sym try streamError(ally, file, strm, fmt, .{});
+                    break :sym try streamError(p, fmt, .{});
                 },
             };
 
             // regular symbol
-            strm.eat();
+            p.eat();
             break :sym Result.ok(RawExpr{
                 .loc = tok.loc,
                 .data = .symbol
@@ -390,25 +424,18 @@ fn parseAtom(
     };
 }
 
-fn climb(
-    ally: Allocator,
-    proj: Project,
-    file: FileRef,
-    power: usize,
-    strm: *Stream(Token),
-) Allocator.Error!Result {
-    const head_res = try parseAtom(ally, proj, file, strm);
+fn climb(p: *Parser, power: usize) Allocator.Error!Result {
+    const head_res = try parseAtom(p);
     var expr = head_res.get() orelse return head_res;
 
     // parse any parameters passed to head
-    var group = std.ArrayList(RawExpr).init(ally);
+    var group = std.ArrayList(RawExpr).init(p.ally);
     defer group.deinit();
 
     try group.append(expr);
 
     while (true) {
-        const param_res = try parseAtom(ally, proj, file, strm);
-        const param = param_res.get() orelse break;
+        const param = (try parseAtom(p)).get() orelse break;
         try group.append(param);
     }
 
@@ -424,20 +451,20 @@ fn climb(
 
     // parse binary ops
     while (true) {
-        const next = strm.peek() orelse break;
-        const op = parseOp(proj, next) orelse break;
+        const next = p.peek() orelse break;
+        const op = parseOp(p, next) orelse break;
 
         const prec = op.getPrec();
         if (prec != .binary or prec.binary.power < power) break;
-        strm.eat();
+        p.eat();
 
         // token is a binary operator, dispatch climb
         const climb_power = prec.binary.power + @boolToInt(!prec.binary.right);
-        const rhs_res = try climb(ally, proj, file, climb_power, strm);
+        const rhs_res = try climb(p, climb_power);
         const rhs = rhs_res.get() orelse return rhs_res;
 
         const loc = expr.loc.span(rhs.loc);
-        expr = try RawExpr.initForm(ally, loc, op, &.{expr, rhs});
+        expr = try RawExpr.initForm(p.ally, loc, op, &.{expr, rhs});
     }
 
     return Result.ok(expr);
@@ -459,11 +486,16 @@ pub fn parse(
     defer ally.free(tokens);
 
     // parse
-    var stream = Stream(Token).init(tokens, 0);
+    var parser = Parser{
+        .ally = ally,
+        .strm = Stream(Token).init(tokens, 0),
+        .proj = proj,
+        .file = file,
+    };
 
-    if (stream.done()) {
+    if (parser.done()) {
         return switch (what) {
-            .file => try streamError(ally, file, &stream, "empty file", .{}),
+            .file => try streamError(&parser, "empty file", .{}),
             .expr => Result.ok(RawExpr{
                 .loc = Loc.of(file, 0, 0),
                 .data = .unit,
@@ -472,12 +504,12 @@ pub fn parse(
     }
 
     // handle parse result
-    const res = try climb(ally, proj, file, 0, &stream);
+    const res = try climb(&parser, 0);
 
     // check for leftover input
-    if (res == .ok and !stream.done()) {
+    if (res == .ok and !parser.done()) {
         const fmt = "leftover tokens after parsing";
-        return try streamError(ally, file, &stream, fmt, .{});
+        return try streamError(&parser, fmt, .{});
     }
 
     if (what == .file and res == .ok) {
