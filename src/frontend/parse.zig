@@ -75,6 +75,7 @@ pub const Syntax = enum {
         .{">=", .ge},
         .{"<=", .le},
         .{"(", .parens},
+        .{"[", .list},
         .{";", .stmt},
         .{"if", .@"if"},
     });
@@ -305,7 +306,7 @@ fn parseForm(
     switch (op) {
         // ( <expr> )
         .parens => {
-            const res = try climb(ally, proj, file, 0, strm, true);
+            const res = try climb(ally, proj, file, 0, strm);
             const expr = res.get() orelse return res;
 
             const rparen_res = try expectKeyword(ally, proj, file, strm, ")");
@@ -315,19 +316,19 @@ fn parseForm(
         },
         // if <cond> then <when> else <else>
         .@"if" => {
-            const cond_res = try climb(ally, proj, file, 0, strm, false);
+            const cond_res = try climb(ally, proj, file, 0, strm);
             const cond = cond_res.get() orelse return cond_res;
 
             const exp_then = try expectKeyword(ally, proj, file, strm, "then");
             exp_then.get() orelse return exp_then.cast(RawExpr);
 
-            const when_res = try climb(ally, proj, file, 0, strm, false);
+            const when_res = try climb(ally, proj, file, 0, strm);
             const when = when_res.get() orelse return when_res;
 
             const exp_else = try expectKeyword(ally, proj, file, strm, "else");
             exp_else.get() orelse return exp_else.cast(RawExpr);
 
-            const else_res = try climb(ally, proj, file, 0, strm, false);
+            const else_res = try climb(ally, proj, file, 0, strm);
             const @"else" = else_res.get() orelse return else_res;
 
             const loc = tok.loc.span(@"else".loc);
@@ -366,8 +367,7 @@ fn parseAtom(
                 .unary => |un| {
                     strm.eat();
 
-                    const sub_res =
-                        try climb(ally, proj, file, un.power, strm, false);
+                    const sub_res = try climb(ally, proj, file, un.power, strm);
                     const sub = sub_res.get() orelse return sub_res;
 
                     const loc = tok.loc.span(sub.loc);
@@ -390,69 +390,50 @@ fn parseAtom(
     };
 }
 
-fn parseGroup(
-    ally: Allocator,
-    proj: Project,
-    file: FileRef,
-    strm: *Stream(Token),
-    force_call: bool
-) Allocator.Error!Result {
-    // parse at least one atom
-    var exprs = std.ArrayList(RawExpr).init(ally);
-
-    const head_res = try parseAtom(ally, proj, file, strm);
-    const head = head_res.get() orelse return head_res;
-    try exprs.append(head);
-
-    while (true) {
-        switch (try parseAtom(ally, proj, file, strm)) {
-            .ok => |expr| try exprs.append(expr),
-            .err => |msg| {
-                msg.deinit(ally);
-                break;
-            }
-        }
-    }
-
-    // based on the number of exprs, extract final result
-    if (!force_call and exprs.items.len == 1) {
-        defer exprs.deinit();
-        return Result.ok(exprs.items[0]);
-    }
-
-    const first = exprs.items[0];
-    const last = exprs.items[exprs.items.len - 1];
-
-    return Result.ok(RawExpr{
-        .loc = first.loc.span(last.loc),
-        .data = .{ .group = exprs.toOwnedSlice() },
-    });
-}
-
 fn climb(
     ally: Allocator,
     proj: Project,
     file: FileRef,
     power: usize,
     strm: *Stream(Token),
-    force_call: bool,
 ) Allocator.Error!Result {
-    const head_res = try parseGroup(ally, proj, file, strm, force_call);
+    const head_res = try parseAtom(ally, proj, file, strm);
     var expr = head_res.get() orelse return head_res;
 
+    // parse any parameters passed to head
+    var group = std.ArrayList(RawExpr).init(ally);
+    defer group.deinit();
+
+    try group.append(expr);
+
     while (true) {
-        // look for binary operators
+        const param_res = try parseAtom(ally, proj, file, strm);
+        const param = param_res.get() orelse break;
+        try group.append(param);
+    }
+
+    if (group.items.len > 1) {
+        const last = group.items[group.items.len - 1];
+        const loc = group.items[0].loc.span(last.loc);
+
+        expr = RawExpr{
+            .loc = loc,
+            .data = .{ .group = group.toOwnedSlice() },
+        };
+    }
+
+    // parse binary ops
+    while (true) {
         const next = strm.peek() orelse break;
         const op = parseOp(proj, next) orelse break;
 
         const prec = op.getPrec();
         if (prec != .binary or prec.binary.power < power) break;
-
         strm.eat();
 
         // token is a binary operator, dispatch climb
         const climb_power = prec.binary.power + @boolToInt(!prec.binary.right);
-        const rhs_res = try climb(ally, proj, file, climb_power, strm, false);
+        const rhs_res = try climb(ally, proj, file, climb_power, strm);
         const rhs = rhs_res.get() orelse return rhs_res;
 
         const loc = expr.loc.span(rhs.loc);
@@ -491,7 +472,7 @@ pub fn parse(
     }
 
     // handle parse result
-    const res = try climb(ally, proj, file, 0, &stream, false);
+    const res = try climb(ally, proj, file, 0, &stream);
 
     // check for leftover input
     if (res == .ok and !stream.done()) {

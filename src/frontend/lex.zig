@@ -67,7 +67,7 @@ fn classify(ch: u8) Error!CharClass {
     return switch (ch) {
         '0'...'9' => .digit,
         ' ', '\n' => .whitespace,
-        '.', ';' => .separator,
+        '.', ';', '(', ')', '[', ']' => .separator,
         else => if (std.ascii.isPrint(ch)) .lexical else Error.InvalidCharacter
     };
 }
