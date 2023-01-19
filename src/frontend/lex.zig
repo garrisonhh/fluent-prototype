@@ -7,6 +7,7 @@ const FileRef = util.FileRef;
 const Project = util.Project;
 const kz = @import("kritzler");
 const Stream = @import("stream.zig").Stream;
+const auto = @import("auto.zig");
 
 pub const Token = struct {
     const Self = @This();
@@ -27,29 +28,6 @@ pub const Token = struct {
             .loc = loc,
         };
     }
-};
-
-const KEYWORDS = kw: {
-    const list = [_][]const u8{
-        // parens
-        "(", ")",
-        // lists
-        "[", "]",
-        // if
-        "if", "then", "else"
-    };
-
-    // manipulate so it's consumable by ComptimeStringMap
-    const KV = struct {
-        @"0": []const u8,
-        @"1": void = {},
-    };
-    var kvs: [list.len]KV = undefined;
-    for (list) |keyword, i| {
-        kvs[i] = KV{ .@"0" = keyword };
-    }
-
-    break :kw std.ComptimeStringMap(void, kvs);
 };
 
 const CharClass = enum {
@@ -112,7 +90,8 @@ fn lexNumber(lexer: *Lexer, loc: Loc) Error!Token {
 
 fn tokenOfIdent(loc: Loc, slice: []const u8) Token {
     const tag: Token.Tag =
-        if (KEYWORDS.get(slice) != null) .keyword else .symbol;
+        if (auto.KEYWORDS.get(slice) != null) .keyword
+        else .symbol;
 
     return Token.of(tag, loc);
 }

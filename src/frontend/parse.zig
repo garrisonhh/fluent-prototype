@@ -10,228 +10,10 @@ const Message = util.Message;
 const lex = @import("lex.zig");
 const Token = lex.Token;
 const Stream = @import("stream.zig").Stream;
-
-const Precedence = union(enum) {
-    const Self = @This();
-
-    unary: struct {
-        power: usize,
-    },
-    binary: struct {
-        power: usize,
-        right: bool = false,
-    },
-
-    const STATEMENT      = Self{ .binary = .{ .power = 0, .right = true } };
-    const ASSIGNMENT     = Self{ .binary = .{ .power = 1 } };
-    const COMPARISON     = Self{ .binary = .{ .power = 2 } };
-    const ADDITIVE       = Self{ .binary = .{ .power = 3 } };
-    const MULTIPLICATIVE = Self{ .binary = .{ .power = 4 } };
-    const NEGATION       = Self{ .unary  = .{ .power = 5 } };
-    const FIELD_ACCESS   = Self{ .binary = .{ .power = 6, .right = true } };
-};
-
-pub const Syntax = enum {
-    const Self = @This();
-
-    // special
-    file,
-    list,
-    parens,
-
-    // general ops
-    dot,
-
-    // math
-    add,
-    sub,
-    mul,
-    div,
-    mod,
-
-    // conditions
-    eq,
-    gt,
-    lt,
-    ge,
-    le,
-
-    // flow
-    stmt,
-    @"if",
-
-    // if a syntax form has multiple symbols, only the first is included. the
-    // rest are checked manually.
-    const symbols = std.ComptimeStringMap(Self, .{
-        .{".", .dot},
-        .{"+", .add},
-        .{"-", .sub},
-        .{"*", .mul},
-        .{"/", .div},
-        .{"%", .mod},
-        .{"==", .eq},
-        .{">", .gt},
-        .{"<", .lt},
-        .{">=", .ge},
-        .{"<=", .le},
-        .{"(", .parens},
-        .{"[", .list},
-        .{";", .stmt},
-        .{"if", .@"if"},
-    });
-
-    const precs = map: {
-        var map = std.EnumArray(Self, Precedence).initUndefined();
-
-        inline for (std.enums.values(Self)) |tag| {
-            const prec: ?Precedence = switch (tag) {
-                .dot => Precedence.FIELD_ACCESS,
-                .add, .sub => Precedence.ADDITIVE,
-                .mul, .div, .mod => Precedence.MULTIPLICATIVE,
-                .eq, .gt, .lt, .ge, .le => Precedence.COMPARISON,
-                .stmt => Precedence.STATEMENT,
-                .file, .list, .parens, .@"if" => null,
-            };
-
-            if (prec) |got| {
-                map.set(tag, got);
-            }
-        }
-
-        break :map map;
-    };
-
-    fn ofStr(sym: []const u8) ?Self {
-        return symbols.get(sym);
-    }
-
-    fn getPrec(self: Self) Precedence {
-        std.debug.assert(self != .file);
-        return precs.get(self);
-    }
-};
-
-pub const RawExpr = struct {
-    const Self = @This();
-
-    pub const Form = struct {
-        kind: Syntax,
-        exprs: []RawExpr,
-    };
-
-    pub const Data = union(enum) {
-        unit,
-        number,
-        string,
-        symbol,
-        group: []RawExpr,
-        form: Form,
-    };
-
-    loc: Loc,
-    data: Data,
-
-    /// create a group expr by shallow cloning slice
-    pub fn initGroup(
-        ally: Allocator,
-        loc: Loc,
-        exprs: []const RawExpr
-    ) Allocator.Error!Self {
-        return Self{
-            .loc = loc,
-            .data = .{ .group = try ally.dupe(RawExpr, exprs) },
-        };
-    }
-
-    /// create a form expr by shallow cloning slice
-    pub fn initForm(
-        ally: Allocator,
-        loc: Loc,
-        kind: Syntax,
-        exprs: []const RawExpr
-    ) Allocator.Error!Self {
-        return Self{
-            .loc = loc,
-            .data = .{
-                .form = .{
-                    .kind = kind,
-                    .exprs = try ally.dupe(Self, exprs),
-                }
-            },
-        };
-    }
-
-    pub fn deinit(self: Self, ally: Allocator) void {
-        switch (self.data) {
-            .group => |group| {
-                for (group) |child| child.deinit(ally);
-                ally.free(group);
-            },
-            .form => |form| {
-                for (form.exprs) |child| child.deinit(ally);
-                ally.free(form.exprs);
-            },
-            else => {}
-        }
-    }
-
-    pub fn render(
-        self: Self,
-        ctx: *kz.Context,
-        proj: Project
-    ) Allocator.Error!kz.Ref {
-        const INDENT = 2;
-        return switch (self.data) {
-            .unit => try ctx.print(.{}, "()", .{}),
-            .number, .string, .symbol => lit: {
-                const color: kz.Color = switch (self.data) {
-                    .number => .magenta,
-                    .string => .green,
-                    .symbol => .red,
-                    else => unreachable
-                };
-
-                const slice = self.loc.slice(proj);
-                break :lit try ctx.print(.{ .fg = color }, "{s}", .{slice});
-            },
-            .group => |exprs| group: {
-                const faint = kz.Style{ .special = .faint };
-                const head = try ctx.print(faint, "group", .{});
-
-                var children = std.ArrayList(kz.Ref).init(ctx.ally);
-                defer children.deinit();
-
-                for (exprs) |expr| {
-                    try children.append(try expr.render(ctx, proj));
-                }
-
-                break :group try ctx.unify(
-                    head,
-                    try ctx.stack(children.items, .bottom, .{}),
-                    .{INDENT, 1},
-                );
-            },
-            .form => |form| form: {
-                const yellow = kz.Style{ .fg = .yellow };
-                const name = @tagName(form.kind);
-                const head = try ctx.print(yellow, "{s}", .{name});
-
-                var children = std.ArrayList(kz.Ref).init(ctx.ally);
-                defer children.deinit();
-
-                for (form.exprs) |expr| {
-                    try children.append(try expr.render(ctx, proj));
-                }
-
-                break :form try ctx.unify(
-                    head,
-                    try ctx.stack(children.items, .bottom, .{}),
-                    .{INDENT, 1},
-                );
-            },
-        };
-    }
-};
+const RawExpr = @import("raw_expr.zig");
+const auto = @import("auto.zig");
+const Form = auto.Form;
+const FormExpr = auto.FormExpr;
 
 /// context for parsing
 const Parser = struct {
@@ -284,11 +66,6 @@ fn unexpectedEof(p: *const Parser) Allocator.Error!Result {
     return streamError(p, "unexpected EOF", .{});
 }
 
-/// try to extract an operator from a token
-fn parseOp(p: *const Parser, tok: Token) ?Syntax {
-    return Syntax.ofStr(tok.loc.slice(p.proj));
-}
-
 fn expectKeyword(
     p: *Parser,
     kw: []const u8,
@@ -308,64 +85,25 @@ fn expectKeyword(
     return Message.Result(Token).ok(tok);
 }
 
-/// used by parseForm to encode syntax
-const FormExpr = union(enum) {
-    const Self = @This();
+const ExpResult = Message.Result(?RawExpr);
 
-    expr,
-    keyword: []const u8,
-
-    const ExpResult = Message.Result(?RawExpr);
-
-    /// expect a single formexpr
-    fn expect(self: Self, p: *Parser) Allocator.Error!ExpResult {
-        return switch (self) {
-            .expr => switch (try climb(p, 0)) {
-                .ok => |expr| ExpResult.ok(expr),
-                .err => |msg| ExpResult.err(msg),
-            },
-            .keyword => |kw| switch (try expectKeyword(p, kw)) {
-                .ok => ExpResult.ok(null),
-                .err => |msg| ExpResult.err(msg),
-            },
-        };
-    }
-};
-
-fn countFormExprs(comptime str: []const u8) usize {
-    comptime {
-        var count: usize = 0;
-        var iter = std.mem.tokenize(u8, str, " ");
-        while (iter.next() != null) {
-            count += 1;
-        }
-
-        return count;
-    }
-}
-
-/// parses a formexpr at comptime.
-/// this is a series of keywords and `<exprs>`
-fn series(comptime str: []const u8) [countFormExprs(str)]FormExpr {
-    comptime {
-        var fexprs = std.BoundedArray(FormExpr, countFormExprs(str)){};
-
-        var iter = std.mem.tokenize(u8, str, " ");
-        while (iter.next()) |tok| {
-            if (tok[0] == '<' and tok[tok.len - 1] == '>') {
-                fexprs.appendAssumeCapacity(.expr);
-            } else {
-                fexprs.appendAssumeCapacity(.{ .keyword = tok });
-            }
-        }
-
-        return fexprs.buffer;
-    }
+/// expect a single formexpr
+fn expectFormExpr(p: *Parser, fexpr: FormExpr) Allocator.Error!ExpResult {
+    return switch (fexpr) {
+        .expr => switch (try climb(p, 0)) {
+            .ok => |expr| ExpResult.ok(expr),
+            .err => |msg| ExpResult.err(msg),
+        },
+        .keyword => |kw| switch (try expectKeyword(p, kw)) {
+            .ok => ExpResult.ok(null),
+            .err => |msg| ExpResult.err(msg),
+        },
+    };
 }
 
 fn parseSeries(
     p: *Parser,
-    kind: Syntax,
+    kind: Form,
     fexprs: []const FormExpr
 ) Allocator.Error!Result {
     // parse each FormExpr in order
@@ -475,7 +213,7 @@ fn parseAtom(p: *Parser) Allocator.Error!Result {
                     break :sym Result.ok(expr);
                 },
                 .binary => {
-                    const fmt = "expected expr, found binary op";
+                    const fmt = "expected expression, found binary operator";
                     break :sym try streamError(p, fmt, .{});
                 },
             };
