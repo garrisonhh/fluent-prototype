@@ -76,32 +76,35 @@ pub fn crucify(env: Env, texpr: TExpr) CrucifyError!Value {
 pub const ResError = Allocator.Error || error { Unresurrectable };
 
 fn valueToNumber(value: Value, bits: u8, layout: Number.Layout) Number {
-    // TODO could I make this more maintanable with inline else?
     const concrete: Number.Concrete = switch (layout) {
-        .int => .{
-            .int = switch (bits) {
-                64 => value.as(i64),
-                32 => value.as(i32),
-                16 => value.as(i16),
-                8 => value.as(i8),
-                else => unreachable
-             }
-         },
-        .uint => .{
-            .uint = switch (bits) {
-                64 => value.as(u64),
-                32 => value.as(u32),
-                16 => value.as(u16),
-                8 => value.as(u8),
-                else => unreachable
-             }
-         },
-        .float => .{
-            .float = switch (bits) {
-                64 => value.as(f64),
-                32 => value.as(f32),
-                else => unreachable
-             }
+        inline .int, .uint => |tag| switch (bits) {
+            inline 8, 16, 32, 64 => |known_bits| res: {
+                const T = @Type(.{
+                    .Int = .{
+                        .signedness = switch (tag) {
+                            .int => .signed,
+                            .uint => .unsigned,
+                            else => unreachable
+                        },
+                        .bits = known_bits,
+                    },
+                });
+
+                break :res @unionInit(
+                    Number.Concrete,
+                    @tagName(tag),
+                    value.as(T)
+                );
+            },
+            else => unreachable
+        },
+        .float => switch (bits) {
+            inline 32, 64 => |known_bits| res: {
+                const T = @Type(.{ .Float = .{ .bits = known_bits } });
+
+                break :res .{ .float = value.as(T) };
+            },
+            else => unreachable
         },
     };
 
@@ -130,7 +133,7 @@ pub fn resurrect(
         .number => |num| num: {
             const bits = num.bits orelse 64;
             break :num .{
-                .number = canon.valueToNumber(value, bits, num.layout)
+                .number = valueToNumber(value, bits, num.layout)
             };
         },
         .ty => ty: {

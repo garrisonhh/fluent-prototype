@@ -1,18 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-// check compiler version
-comptime {
-    const desired = std.SemanticVersion.parse("0.10.0") catch unreachable;
-    const version = builtin.zig_version;
-    if (version.order(desired).compare(.neq)) {
-        const msg = std.fmt.comptimePrint(
-            "expected zig version {}, found {}",
-            .{desired, version}
-        );
-        @compileError(msg);
-    }
-}
 
 fn addPackages(step: *std.build.LibExeObjStep) void {
     const Pkg = std.build.Pkg;
@@ -38,6 +26,19 @@ fn addPackages(step: *std.build.LibExeObjStep) void {
 }
 
 pub fn build(b: *std.build.Builder) void {
+    // check compiler version
+    comptime {
+        const desired = try std.SemanticVersion.parse("0.10.1");
+        const version = builtin.zig_version;
+        if (version.order(desired).compare(.neq)) {
+            const msg = std.fmt.comptimePrint(
+                "expected zig version {}, found {}",
+                .{desired, version}
+            );
+            @compileError(msg);
+        }
+    }
+
     const target = b.standardTargetOptions(.{});
     const mode = b.standardReleaseOptions();
 
