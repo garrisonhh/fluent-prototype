@@ -90,7 +90,7 @@ fn lexNumber(lexer: *Lexer, loc: Loc) Error!Token {
 
 fn tokenOfIdent(loc: Loc, slice: []const u8) Token {
     const tag: Token.Tag =
-        if (auto.KEYWORDS.get(slice) != null) .keyword
+        if (auto.KEYWORDS.has(slice)) .keyword
         else .symbol;
 
     return Token.of(tag, loc);

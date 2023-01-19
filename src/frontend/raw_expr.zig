@@ -40,7 +40,7 @@ pub fn initGroup(
 pub fn initForm(
     ally: Allocator,
     loc: Loc,
-    kind: Form,
+    kind: auto.Form,
     exprs: []const Self
 ) Allocator.Error!Self {
     return Self{

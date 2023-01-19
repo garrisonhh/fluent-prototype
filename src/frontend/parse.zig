@@ -14,6 +14,7 @@ const RawExpr = @import("raw_expr.zig");
 const auto = @import("auto.zig");
 const Form = auto.Form;
 const FormExpr = auto.FormExpr;
+const Syntax = auto.Syntax;
 
 /// context for parsing
 const Parser = struct {
@@ -101,17 +102,13 @@ fn expectFormExpr(p: *Parser, fexpr: FormExpr) Allocator.Error!ExpResult {
     };
 }
 
-fn parseSeries(
-    p: *Parser,
-    kind: Form,
-    fexprs: []const FormExpr
-) Allocator.Error!Result {
+fn parseSyntax(p: *Parser, syntax: Syntax) Allocator.Error!Result {
     // parse each FormExpr in order
     var group = std.ArrayList(RawExpr).init(p.ally);
     defer group.deinit();
 
-    for (fexprs) |fexpr, i| {
-        const res = try fexpr.expect(p);
+    for (syntax.fexprs) |fexpr, i| {
+        const res = try expectFormExpr(p, fexpr);
         switch (res) {
             .err => |msg| {
                 // early failure
@@ -133,65 +130,25 @@ fn parseSeries(
         .loc = first.loc.span(last.loc),
         .data = .{
             .form = .{
-                .kind = kind,
+                .kind = syntax.form,
                 .exprs = group.toOwnedSlice(),
             }
         },
     });
 }
 
-fn parseForm(p: *Parser) Allocator.Error!Result {
-    const tok = p.peek().?;
-    const op = parseOp(p, tok) orelse {
-        // keywords that don't have associated ops are either misplaced or a
-        // part of another parse sequence
-        const text = tok.loc.slice(p.proj);
-        return streamError(p, "misplaced `{s}`", .{text});
-    };
-
-    // TODO I can definitely metaprogram this boilerplate somehow
-    return switch (op) {
-        // ( <expr> )
-        .parens => parens: {
-            // look for unit literals `()`
-            switch (try expectKeyword(p, ")")) {
-                .err => |msg| msg.deinit(p.ally),
-                .ok => |rparen| {
-                    break :parens Result.ok(RawExpr{
-                        .loc = tok.loc.span(rparen.loc),
-                        .data = .unit,
-                    });
-                },
-            }
-
-            // parens enclose sommething
-            const res = try climb(p, 0);
-            const expr = res.get() orelse return res;
-
-            const rparen_res = try expectKeyword(p, ")");
-            const rparen = rparen_res.get() orelse {
-                break :parens rparen_res.cast(RawExpr);
-            };
-
-            // ensure that the enclosed expr is getting called (if that was the
-            // intention of the parens)
-            if (expr.data == .symbol or expr.data == .group) {
-                const loc = tok.loc.span(rparen.loc);
-                return Result.ok(try RawExpr.initGroup(p.ally, loc, &.{expr}));
-            }
-
-            break :parens Result.ok(expr);
-        },
-        .@"if" => try parseSeries(p, .@"if", &series("if <> then <> else <>")),
-        else => unreachable
-    };
-}
-
 fn parseAtom(p: *Parser) Allocator.Error!Result {
     const tok = p.peek() orelse return unexpectedEof(p);
 
     return switch (tok.tag) {
-        .keyword => try parseForm(p),
+        .keyword => kw: {
+            const slice = tok.loc.slice(p.proj);
+            const syntax = auto.PREFIXED_SYNTAX.get(slice) orelse {
+                break :kw streamError(p, "misplaced `{s}`", .{slice});
+            };
+
+            break :kw try parseSyntax(p, syntax);
+        },
         inline .number, .string => |tag| lit: {
             p.eat();
             break :lit Result.ok(RawExpr{
@@ -200,25 +157,6 @@ fn parseAtom(p: *Parser) Allocator.Error!Result {
             });
         },
         .symbol => sym: {
-            // operators have special logic
-            if (parseOp(p, tok)) |op| switch (op.getPrec()) {
-                .unary => |un| {
-                    p.eat();
-
-                    const sub_res = try climb(p, un.power);
-                    const sub = sub_res.get() orelse return sub_res;
-
-                    const loc = tok.loc.span(sub.loc);
-                    const expr = try RawExpr.initForm(p.ally, loc, op, &.{sub});
-                    break :sym Result.ok(expr);
-                },
-                .binary => {
-                    const fmt = "expected expression, found binary operator";
-                    break :sym try streamError(p, fmt, .{});
-                },
-            };
-
-            // regular symbol
             p.eat();
             break :sym Result.ok(RawExpr{
                 .loc = tok.loc,
@@ -256,19 +194,24 @@ fn climb(p: *Parser, power: usize) Allocator.Error!Result {
     // parse binary ops
     while (true) {
         const next = p.peek() orelse break;
-        const op = parseOp(p, next) orelse break;
 
-        const prec = op.getPrec();
-        if (prec != .binary or prec.binary.power < power) break;
+        // check if this is a binary op where precedence.power >= power
+        if (next.tag != .keyword) break;
+
+        const keyword = next.loc.slice(p.proj);
+        const syntax = auto.BINARY_SYNTAX.get(keyword) orelse break;
+
+        if (syntax.prec.power < power) break;
+
         p.eat();
 
         // token is a binary operator, dispatch climb
-        const climb_power = prec.binary.power + @boolToInt(!prec.binary.right);
+        const climb_power = syntax.prec.power + @boolToInt(!syntax.prec.right);
         const rhs_res = try climb(p, climb_power);
         const rhs = rhs_res.get() orelse return rhs_res;
 
         const loc = expr.loc.span(rhs.loc);
-        expr = try RawExpr.initForm(p.ally, loc, op, &.{expr, rhs});
+        expr = try RawExpr.initForm(p.ally, loc, syntax.form, &.{expr, rhs});
     }
 
     return Result.ok(expr);
@@ -302,7 +245,12 @@ pub fn parse(
             .file => try streamError(&parser, "empty file", .{}),
             .expr => Result.ok(RawExpr{
                 .loc = Loc.of(file, 0, 0),
-                .data = .unit,
+                .data = .{
+                    .form = .{
+                        .kind = .unit,
+                        .exprs = &.{},
+                    }
+                },
             }),
         };
     }
