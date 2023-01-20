@@ -100,14 +100,10 @@ fn expectSingleExpr(
         const expr = res.get() orelse return res;
 
         // if a form is provided, check it
-        if (expr.data != .form) {
-            const fmt = "expected {s}";
-            const name = form.name();
-            return try parseError(p, expr.loc, fmt, .{name});
-        } else if (expr.data == .form) {
+        if (expr.form == form) {
             const fmt = "expected {s}, found {s}";
             const exp = form.name();
-            const found = expr.data.form.kind.name();
+            const found = expr.form.name();
             return try parseError(p, expr.loc, fmt, .{exp, found});
         }
 
@@ -177,12 +173,12 @@ fn parseSyntax(p: *Parser, syntax: Syntax) Allocator.Error!Result {
 
     const fst_loc = p.peek().?.loc;
 
-    for (syntax.fexprs) |fexpr, i| {
+    for (syntax.fexprs) |fexpr| {
         const res = try expectFormExpr(p, syntax.prec.power, fexpr);
         switch (res) {
             .err => |msg| {
                 // early failure
-                for (group.items[0..i]) |parsed| parsed.deinit(p.ally);
+                for (group.items) |parsed| parsed.deinit(p.ally);
                 p.strm.index = start_index;
                 return Result.err(msg);
             },
@@ -199,7 +195,11 @@ fn parseSyntax(p: *Parser, syntax: Syntax) Allocator.Error!Result {
     const loc = fst_loc.span(last_loc);
     const exprs = group.toOwnedSlice();
 
-    return Result.ok(RawExpr.initOwnedForm(loc, syntax.form, exprs));
+    return Result.ok(RawExpr{
+        .loc = loc,
+        .form = syntax.form,
+        .exprs = exprs,
+});
 }
 
 /// parens require special logic with unit, forced calls, etc. and I don't want
@@ -215,7 +215,7 @@ fn parseParens(p: *Parser) Allocator.Error!Result {
     switch (try expectKeyword(p, ")")) {
         .ok => |rparen| return Result.ok(RawExpr{
             .loc = tok.loc.span(rparen.loc),
-            .data = .unit,
+            .form = .unit,
         }),
         .err => |msg| msg.deinit(p.ally),
     }
@@ -234,12 +234,9 @@ fn parseParens(p: *Parser) Allocator.Error!Result {
     };
 
     // construct child, forcing calls if necessary
-    const force_call = child.data == .symbol
-                    or child.data == .form and child.data.form.kind == .dot;
-
-    if (force_call) {
+    if (child.form == .symbol or child.form == .dot) {
         const loc = tok.loc.span(rparen.loc);
-        return Result.ok(try RawExpr.initForm(p.ally, loc, .call, &.{child}));
+        return Result.ok(try RawExpr.init(p.ally, loc, .call, &.{child}));
     }
 
     return Result.ok(child);
@@ -264,7 +261,7 @@ fn parseAtom(p: *Parser) Allocator.Error!Result {
             p.eat();
             break :lit Result.ok(RawExpr{
                 .loc = tok.loc,
-                .data = @unionInit(RawExpr.Data, @tagName(tag), {}),
+                .form = @field(Form, @tagName(tag)),
             });
         },
         .symbol => sym: {
@@ -273,7 +270,7 @@ fn parseAtom(p: *Parser) Allocator.Error!Result {
 
             var expr = RawExpr{
                 .loc = tok.loc,
-                .data = .symbol
+                .form = .symbol
             };
 
             // parse `dot` (field access)
@@ -302,11 +299,11 @@ fn parseAtom(p: *Parser) Allocator.Error!Result {
 
                 const field = RawExpr{
                     .loc = field_tok.loc,
-                    .data = .symbol,
+                    .form = .symbol,
                 };
 
                 const loc = expr.loc.span(field.loc);
-                expr = try RawExpr.initForm(p.ally, loc, .dot, &.{expr, field});
+                expr = try RawExpr.init(p.ally, loc, .dot, &.{expr, field});
             }
 
             break :sym Result.ok(expr);
@@ -341,7 +338,11 @@ fn climb(p: *Parser, power: usize) Allocator.Error!Result {
     if (group.items.len > 1) {
         const last = group.items[group.items.len - 1];
         const loc = group.items[0].loc.span(last.loc);
-        expr = RawExpr.initOwnedForm(loc, .call, group.toOwnedSlice());
+        expr = RawExpr{
+            .loc = loc,
+            .form = .call,
+            .exprs = group.toOwnedSlice(),
+        };
     }
 
     // parse non-prefix ops
@@ -366,7 +367,7 @@ fn climb(p: *Parser, power: usize) Allocator.Error!Result {
         };
 
         const loc = expr.loc.span(rhs.loc);
-        expr = try RawExpr.initForm(p.ally, loc, syntax.form, &.{expr, rhs});
+        expr = try RawExpr.init(p.ally, loc, syntax.form, &.{expr, rhs});
     }
 
     return Result.ok(expr);
@@ -401,7 +402,7 @@ pub fn parse(
             .file => try streamError(&parser, "empty file", .{}),
             .expr => Result.ok(RawExpr{
                 .loc = Loc.of(file, 0, 0),
-                .data = .unit,
+                .form = .unit,
             }),
         };
     }
@@ -417,9 +418,8 @@ pub fn parse(
 
     if (what == .file and res == .ok) {
         // files need to be wrapped in a file expr
-        const expr = res.ok;
-        const formed = try RawExpr.initForm(ally, expr.loc, .file, &.{expr});
-        return Result.ok(formed);
+        const wrapped = try RawExpr.init(ally, res.ok.loc, .file, &.{res.ok});
+        return Result.ok(wrapped);
     }
 
     return res;

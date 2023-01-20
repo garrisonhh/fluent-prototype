@@ -3,54 +3,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-pub const Form = enum {
-    // special
-    file,
-    call,
-    list,
-
-    // general ops
-    dot,
-
-    // math
-    add,
-    sub,
-    mul,
-    div,
-    mod,
-
-    // conditions
-    eq,
-    gt,
-    lt,
-    ge,
-    le,
-
-    // flow
-    stmt,
-    @"if",
-
-    /// used for generating error messages etc.
-    pub fn name(self: Form) []const u8 {
-        return switch (self) {
-            .file, .call, .list => @tagName(self),
-            .dot => "field access (`.`) operator",
-            .add => "addition",
-            .sub => "subtraction",
-            .mul => "multiplication",
-            .div => "division",
-            .mod => "modulus",
-            .eq => "equality",
-            .gt => "greater than operator",
-            .lt => "less than operator",
-            .ge => "greater than or equals operator",
-            .le => "less than or equals operator",
-            .stmt => "statement expression",
-            .@"if" => "if expression",
-        };
-    }
-};
-
 pub const Precedence = struct {
     power: usize,
     /// for binary ops
@@ -111,36 +63,6 @@ pub const Syntax = struct {
     }
 };
 
-pub const KEYWORDS = kw: {
-    const list = [_][]const u8{
-        ".", ";", "=", ":",
-        // math
-        "+", "-", "*", "/", "%",
-        // comparisons
-        "==", ">", "<", ">=", "<=",
-        // parens
-        "(", ")",
-        // lists
-        "[", "]",
-        // dicts
-        "{", "}",
-        // if
-        "if", "then", "else"
-    };
-
-    // manipulate so it's consumable by ComptimeStringMap
-    const KV = struct {
-        @"0": []const u8,
-        @"1": void = {},
-    };
-    var kvs: [list.len]KV = undefined;
-    for (list) |keyword, i| {
-        kvs[i] = KV{ .@"0" = keyword };
-    }
-
-    break :kw std.ComptimeStringMap(void, kvs);
-};
-
 fn countFormExprs(comptime str: []const u8) usize {
     comptime {
         var count: usize = 0;
@@ -170,9 +92,7 @@ fn badFormExpr(comptime str: [] const u8) noreturn {
 /// see SYNTAX_TABLE for examples
 fn parseFormExprs(comptime str: []const u8) [countFormExprs(str)]FormExpr {
     comptime {
-        _ = KEYWORDS;
-
-        @setEvalBranchQuota(10_000);
+        @setEvalBranchQuota(100_000);
 
         var fexprs: [countFormExprs(str)]FormExpr = undefined;
         var i: usize = 0;
@@ -197,9 +117,10 @@ fn parseFormExprs(comptime str: []const u8) [countFormExprs(str)]FormExpr {
                 const inner = tok[1..tok.len - 1 - @boolToInt(flag != .one)];
 
                 // parse inner expr
-                const form =
+                const form: ?Form =
                     if (inner.len == 0) null
-                    else std.meta.stringToEnum(Form, inner) orelse {
+                    else if (Form.map.get(inner)) |tag| tag
+                    else {
                         badFormExpr(inner);
                     };
 
@@ -211,44 +132,8 @@ fn parseFormExprs(comptime str: []const u8) [countFormExprs(str)]FormExpr {
     }
 }
 
-/// the definition of fluent syntax
-/// (this is a [_]Syntax)
-pub const SYNTAX_TABLE = table: {
-    // precedences
-    const P = Precedence;
-
-    const LOWEST         = P{ .power = 0 };
-    const STATEMENT      = P{ .power = 1, .right = true };
-    const COMPARISON     = P{ .power = 2 };
-    const ADDITIVE       = P{ .power = 3 };
-    const MULTIPLICATIVE = P{ .power = 4 };
-
-    // syntax definitions
-    const x = Syntax.init;
-    break :table [_]Syntax{
-        x(.@"if", LOWEST,         "if <> then <> else <>"),
-
-        x(.stmt,  STATEMENT,      "<> ; <>"),
-
-        x(.eq,    COMPARISON,     "<> == <>"),
-        x(.gt,    COMPARISON,     "<> > <>"),
-        x(.lt,    COMPARISON,     "<> < <>"),
-        x(.ge,    COMPARISON,     "<> >= <>"),
-        x(.le,    COMPARISON,     "<> <= <>"),
-
-        x(.add,   ADDITIVE,       "<> + <>"),
-        x(.sub,   ADDITIVE,       "<> - <>"),
-
-        x(.mul,   MULTIPLICATIVE, "<> * <>"),
-        x(.div,   MULTIPLICATIVE, "<> / <>"),
-        x(.mod,   MULTIPLICATIVE, "<> % <>"),
-    };
-};
-
 fn tableWhereCount(comptime kind: Syntax.Kind) usize {
     comptime {
-        _ = SYNTAX_TABLE;
-
         // count entries
         var count: usize = 0;
         for (SYNTAX_TABLE) |syntax| {
@@ -261,8 +146,6 @@ fn tableWhereCount(comptime kind: Syntax.Kind) usize {
 
 fn tableWhere(comptime kind: Syntax.Kind) [tableWhereCount(kind)]Syntax {
     comptime {
-        _ = SYNTAX_TABLE;
-
         const count = tableWhereCount(kind);
 
         var arr: [count]Syntax = undefined;
@@ -277,6 +160,161 @@ fn tableWhere(comptime kind: Syntax.Kind) [tableWhereCount(kind)]Syntax {
         return arr;
     }
 }
+
+// tables ======================================================================
+
+pub const Form = enum {
+    // special
+    file,
+    call,
+    list,
+
+    // no children
+    unit,
+    number,
+    string,
+    symbol,
+
+    // general ops
+    dot,
+    anno,
+
+    // math
+    add,
+    sub,
+    mul,
+    div,
+    mod,
+
+    // conditions
+    eq,
+    gt,
+    lt,
+    ge,
+    le,
+
+    // ptrs
+    addr,
+
+    // flow
+    stmt,
+    @"if",
+
+    /// maps tagName to enum value. used for parsing form exprs.
+    const map = map: {
+        const arr = std.enums.values(Form);
+
+        const KV = struct {
+            @"0": []const u8,
+            @"1": Form,
+        };
+
+        var kvs: [arr.len]KV = undefined;
+        for (arr) |tag, i| {
+            kvs[i] = KV{
+                .@"0" = @tagName(tag),
+                .@"1" = tag,
+            };
+        }
+
+        break :map std.ComptimeStringMap(Form, kvs);
+    };
+
+    /// used for generating error messages etc.
+    pub fn name(self: Form) []const u8 {
+        return switch (self) {
+            .file, .call, .list, .unit, .symbol, .string, .number
+                => @tagName(self),
+            .anno => "annotation",
+            .dot => "field access (`.`) operator",
+            .add => "addition",
+            .sub => "subtraction",
+            .mul => "multiplication",
+            .div => "division",
+            .mod => "modulus",
+            .eq => "equality",
+            .gt => "greater than operator",
+            .lt => "less than operator",
+            .ge => "greater than or equals operator",
+            .le => "less than or equals operator",
+            .addr => "address operator",
+            .stmt => "statement expression",
+            .@"if" => "if expression",
+        };
+    }
+};
+
+pub const KEYWORDS = kw: {
+    const list = [_][]const u8{
+        ".", ";", "=", ":",
+        // math
+        "+", "-", "*", "/", "%",
+        // comparisons
+        "==", ">", "<", ">=", "<=",
+        // ptrs
+        "&",
+        // parens
+        "(", ")",
+        // lists
+        "[", "]",
+        // dicts
+        "{", "}",
+        // if
+        "if", "then", "else"
+    };
+
+    // manipulate so it's consumable by ComptimeStringMap
+    const KV = struct {
+        @"0": []const u8,
+        @"1": void = {},
+    };
+    var kvs: [list.len]KV = undefined;
+    for (list) |keyword, i| {
+        kvs[i] = KV{ .@"0" = keyword };
+    }
+
+    break :kw std.ComptimeStringMap(void, kvs);
+};
+
+/// the definition of fluent syntax
+/// (this is a [_]Syntax)
+pub const SYNTAX_TABLE = table: {
+    // precedences
+    const P = Precedence;
+
+    const LOWEST         = P{ .power = 0 };
+    const STATEMENT      = P{ .power = 1, .right = true };
+    const ANNOTATION     = P{ .power = 2 };
+    const COMPARISON     = P{ .power = 3 };
+    const ADDITIVE       = P{ .power = 4 };
+    const MULTIPLICATIVE = P{ .power = 5 };
+    const POINTER        = P{ .power = 6 };
+
+    // syntax definitions
+    const x = Syntax.init;
+    break :table [_]Syntax{
+        x(.@"if", LOWEST,         "if <> then <> else <>"),
+
+        x(.stmt,  STATEMENT,      "<symbol> ; <>"),
+
+        x(.anno,  ANNOTATION,     "<> : <>"),
+
+        x(.eq,    COMPARISON,     "<> == <>"),
+        x(.gt,    COMPARISON,     "<> > <>"),
+        x(.lt,    COMPARISON,     "<> < <>"),
+        x(.ge,    COMPARISON,     "<> >= <>"),
+        x(.le,    COMPARISON,     "<> <= <>"),
+
+        x(.add,   ADDITIVE,       "<> + <>"),
+        x(.sub,   ADDITIVE,       "<> - <>"),
+
+        x(.mul,   MULTIPLICATIVE, "<> * <>"),
+        x(.div,   MULTIPLICATIVE, "<> / <>"),
+        x(.mod,   MULTIPLICATIVE, "<> % <>"),
+
+        x(.addr,  POINTER,        "& <>"),
+    };
+};
 
 /// a ComptimeStringMap(Syntax) where the key is the prefix keyword
 pub const PREFIXED_SYNTAX = map: {

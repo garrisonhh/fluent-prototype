@@ -5,55 +5,31 @@ const util = @import("util");
 const Loc = util.Loc;
 const Project = util.Project;
 const auto = @import("auto.zig");
+const Form = auto.Form;
 
 const Self = @This();
 
-pub const Form = struct {
-    kind: auto.Form,
-    exprs: []Self,
-};
-
-pub const Data = union(enum) {
-    unit,
-    number,
-    string,
-    symbol,
-    form: Form,
-};
-
 loc: Loc,
-data: Data,
+form: Form,
+exprs: []Self = &.{},
 
-pub fn initOwnedForm(loc: Loc, kind: auto.Form, exprs: []Self) Self {
+/// create an expr by shallow cloning slice
+pub fn init(
+    ally: Allocator,
+    loc: Loc,
+    form: Form,
+    exprs: []const Self
+) Allocator.Error!Self {
     return Self{
         .loc = loc,
-        .data = .{
-            .form = .{
-                .kind = kind,
-                .exprs = exprs,
-            }
-        },
+        .form = form,
+        .exprs = try ally.dupe(Self, exprs),
     };
 }
 
-/// create a form expr by shallow cloning slice
-pub fn initForm(
-    ally: Allocator,
-    loc: Loc,
-    kind: auto.Form,
-    exprs: []const Self
-) Allocator.Error!Self {
-    return Self.initOwnedForm(loc, kind, try ally.dupe(Self, exprs));
-}
-
 pub fn deinit(self: Self, ally: Allocator) void {
-    switch (self.data) {
-        .form => |form| {
-            for (form.exprs) |child| child.deinit(ally);
-            ally.free(form.exprs);
-        },
-        else => {}
-    }
+    for (self.exprs) |child| child.deinit(ally);
+    ally.free(self.exprs);
 }
 
 pub fn render(
@@ -62,36 +38,48 @@ pub fn render(
     proj: Project
 ) Allocator.Error!kz.Ref {
     const INDENT = 2;
-    return switch (self.data) {
-        .unit => try ctx.print(.{}, "()", .{}),
-        .number, .string, .symbol => lit: {
-            const color: kz.Color = switch (self.data) {
-                .number => .magenta,
-                .string => .green,
-                .symbol => .red,
-                else => unreachable
-            };
+    const head_sty = kz.Style{};
+    const arm_sty = kz.Style{ .special = .faint };
 
-            const slice = self.loc.slice(proj);
-            break :lit try ctx.print(.{ .fg = color }, "{s}", .{slice});
-        },
-        .form => |form| form: {
-            const yellow = kz.Style{ .fg = .yellow };
-            const name = @tagName(form.kind);
-            const head = try ctx.print(yellow, "{s}", .{name});
+    if (self.exprs.len == 0) {
+        // no child
+        const slice = self.loc.slice(proj);
 
-            var children = std.ArrayList(kz.Ref).init(ctx.ally);
-            defer children.deinit();
+        const color: kz.Color = switch (self.form) {
+            .unit => .white,
+            .number => .magenta,
+            .symbol => .red,
+            .string => .green,
+            else => unreachable,
+        };
 
-            for (form.exprs) |expr| {
-                try children.append(try expr.render(ctx, proj));
-            }
+        return try ctx.print(.{ .fg = color }, "{s}", .{slice});
+    }
 
-            break :form try ctx.unify(
-                head,
-                try ctx.stack(children.items, .bottom, .{}),
-                .{INDENT, 1},
-            );
-        },
-    };
+    const head = try ctx.print(head_sty, "{s}", .{@tagName(self.form)});
+
+    // indented body
+    var children = std.ArrayList(kz.Ref).init(ctx.ally);
+    defer children.deinit();
+
+    for (self.exprs) |expr, i| {
+        const child = try expr.render(ctx, proj);
+
+        var arm = try ctx.block(.{INDENT - 1, 1}, arm_sty, ' ');
+
+        const star = try ctx.block(.{1, 1}, arm_sty, '-');
+        arm = try ctx.slap(arm, star, .left, .{});
+
+        if (i < self.exprs.len - 1) {
+            const height = ctx.getSize(child)[1];
+            const bar = try ctx.block(.{1, height - 1}, arm_sty, '|');
+            arm = try ctx.slap(bar, arm, .top, .{});
+        }
+
+        try children.append(try ctx.slap(child, arm, .left, .{}));
+    }
+
+    const body = try ctx.stack(children.items, .bottom, .{});
+
+    return try ctx.slap(head, body, .bottom, .{});
 }
