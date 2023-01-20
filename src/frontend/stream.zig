@@ -31,5 +31,10 @@ pub fn Stream(comptime T: type) type {
             std.debug.assert(self.index < self.tokens.len);
             self.index += 1;
         }
+
+        pub fn prev(self: Self) T {
+            std.debug.assert(self.index > 0);
+            return self.tokens[self.index - 1];
+        }
     };
 }

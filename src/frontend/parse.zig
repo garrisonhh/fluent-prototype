@@ -36,6 +36,10 @@ const Parser = struct {
     fn eat(self: *Self) void {
         self.strm.eat();
     }
+
+    fn prev(self: Self) Token {
+        return self.strm.prev();
+    }
 };
 
 fn parseError(
@@ -86,68 +90,175 @@ fn expectKeyword(
     return Message.Result(Token).ok(tok);
 }
 
-const ExpResult = Message.Result(?RawExpr);
+fn expectSingleExpr(
+    p: *Parser,
+    power: usize,
+    maybe_form: ?Form
+) Allocator.Error!Result {
+    if (maybe_form) |form| {
+        const res = try climb(p, power);
+        const expr = res.get() orelse return res;
+
+        // if a form is provided, check it
+        if (expr.data != .form) {
+            const fmt = "expected {s}";
+            const name = form.name();
+            return try parseError(p, expr.loc, fmt, .{name});
+        } else if (expr.data == .form) {
+            const fmt = "expected {s}, found {s}";
+            const exp = form.name();
+            const found = expr.data.form.kind.name();
+            return try parseError(p, expr.loc, fmt, .{exp, found});
+        }
+
+        return Result.ok(expr);
+    } else {
+        return try climb(p, power);
+    }
+}
+
+const ExpResult = Message.Result([]RawExpr);
 
 /// expect a single formexpr
-fn expectFormExpr(p: *Parser, fexpr: FormExpr) Allocator.Error!ExpResult {
+fn expectFormExpr(
+    p: *Parser,
+    power: usize,
+    fexpr: FormExpr
+) Allocator.Error!ExpResult {
     return switch (fexpr) {
-        .expr => switch (try climb(p, 0)) {
-            .ok => |expr| ExpResult.ok(expr),
-            .err => |msg| ExpResult.err(msg),
+        .expr => |meta| switch (meta.flag) {
+            .any, .multi => coll: {
+                var list = std.ArrayList(RawExpr).init(p.ally);
+                defer list.deinit();
+
+                while (true) {
+                    const el_res = try expectSingleExpr(p, power, meta.form);
+                    const el = switch (el_res) {
+                        .ok => |expr| expr,
+                        .err => |msg| {
+                            if (meta.flag == .multi and list.items.len == 0) {
+                                break :coll ExpResult.err(msg);
+                            }
+
+                            msg.deinit(p.ally);
+                            break;
+                        }
+                    };
+
+                    try list.append(el);
+                }
+
+                break :coll ExpResult.ok(list.toOwnedSlice());
+            },
+            .one => one: {
+                const sg_res = try expectSingleExpr(p, power, meta.form);
+                const sg = sg_res.get() orelse return sg_res.cast([]RawExpr);
+
+                const list = try p.ally.alloc(RawExpr, 1);
+                list[0] = sg;
+
+                break :one ExpResult.ok(list);
+            },
         },
         .keyword => |kw| switch (try expectKeyword(p, kw)) {
-            .ok => ExpResult.ok(null),
+            .ok => ExpResult.ok(&.{}),
             .err => |msg| ExpResult.err(msg),
         },
     };
 }
 
+/// parse syntax where power is >= a certain power
 fn parseSyntax(p: *Parser, syntax: Syntax) Allocator.Error!Result {
+    const start_index = p.strm.index;
+
     // parse each FormExpr in order
     var group = std.ArrayList(RawExpr).init(p.ally);
     defer group.deinit();
 
+    const fst_loc = p.peek().?.loc;
+
     for (syntax.fexprs) |fexpr, i| {
-        const res = try expectFormExpr(p, fexpr);
+        const res = try expectFormExpr(p, syntax.prec.power, fexpr);
         switch (res) {
             .err => |msg| {
                 // early failure
                 for (group.items[0..i]) |parsed| parsed.deinit(p.ally);
+                p.strm.index = start_index;
                 return Result.err(msg);
             },
-            .ok => |maybe| {
-                // parsing was successful
-                if (maybe) |got| try group.append(got);
+            .ok => |got| {
+                defer p.ally.free(got);
+                try group.appendSlice(got);
             },
         }
     }
 
-    // make form expr
-    const first = group.items[0];
-    const last = group.items[group.items.len - 1];
+    const last_loc = p.prev().loc;
 
-    return Result.ok(RawExpr{
-        .loc = first.loc.span(last.loc),
-        .data = .{
-            .form = .{
-                .kind = syntax.form,
-                .exprs = group.toOwnedSlice(),
-            }
-        },
-    });
+    // make form expr
+    const loc = fst_loc.span(last_loc);
+    const exprs = group.toOwnedSlice();
+
+    return Result.ok(RawExpr.initOwnedForm(loc, syntax.form, exprs));
+}
+
+/// parens require special logic with unit, forced calls, etc. and I don't want
+/// them to have their own ast form
+fn parseParens(p: *Parser) Allocator.Error!Result {
+    const start_index = p.strm.index;
+    const tok = p.peek().?;
+    p.eat();
+
+    std.debug.assert(std.mem.eql(u8, tok.loc.slice(p.proj), "("));
+
+    // check for unit
+    switch (try expectKeyword(p, ")")) {
+        .ok => |rparen| return Result.ok(RawExpr{
+            .loc = tok.loc.span(rparen.loc),
+            .data = .unit,
+        }),
+        .err => |msg| msg.deinit(p.ally),
+    }
+
+    // parse `( <> )` form
+    const child_res = try climb(p, 0);
+    const child = child_res.get() orelse {
+        p.strm.index = start_index;
+        return child_res;
+    };
+
+    const rparen_res = try expectKeyword(p, ")");
+    const rparen = rparen_res.get() orelse {
+        p.strm.index = start_index;
+        return rparen_res.cast(RawExpr);
+    };
+
+    // construct child, forcing calls if necessary
+    const force_call = child.data == .symbol
+                    or child.data == .form and child.data.form.kind == .dot;
+
+    if (force_call) {
+        const loc = tok.loc.span(rparen.loc);
+        return Result.ok(try RawExpr.initForm(p.ally, loc, .call, &.{child}));
+    }
+
+    return Result.ok(child);
 }
 
 fn parseAtom(p: *Parser) Allocator.Error!Result {
     const tok = p.peek() orelse return unexpectedEof(p);
-
     return switch (tok.tag) {
         .keyword => kw: {
             const slice = tok.loc.slice(p.proj);
+            if (std.mem.eql(u8, slice, "(")) {
+                break :kw parseParens(p);
+            }
+
             const syntax = auto.PREFIXED_SYNTAX.get(slice) orelse {
-                break :kw streamError(p, "misplaced `{s}`", .{slice});
+                return streamError(p, "misplaced `{s}`", .{slice});
             };
 
-            break :kw try parseSyntax(p, syntax);
+            break :kw parseSyntax(p, syntax);
         },
         inline .number, .string => |tag| lit: {
             p.eat();
@@ -157,16 +268,56 @@ fn parseAtom(p: *Parser) Allocator.Error!Result {
             });
         },
         .symbol => sym: {
+            const start_index = p.strm.index;
             p.eat();
-            break :sym Result.ok(RawExpr{
+
+            var expr = RawExpr{
                 .loc = tok.loc,
                 .data = .symbol
-            });
+            };
+
+            // parse `dot` (field access)
+            while (true) {
+                // check dot
+                const dot_tok = p.peek() orelse break;
+                if (dot_tok.tag != .keyword) break;
+
+                const slice = dot_tok.loc.slice(p.proj);
+                if (!std.mem.eql(u8, slice, ".")) break;
+
+                p.eat();
+
+                // check field
+                const field_tok = p.peek() orelse {
+                    p.strm.index = start_index;
+                    break :sym streamError(p, "expected field, found EOF", .{});
+                };
+
+                if (field_tok.tag != .symbol) {
+                    p.strm.index = start_index;
+                    break :sym streamError(p, "expected field", .{});
+                }
+
+                p.eat();
+
+                const field = RawExpr{
+                    .loc = field_tok.loc,
+                    .data = .symbol,
+                };
+
+                const loc = expr.loc.span(field.loc);
+                expr = try RawExpr.initForm(p.ally, loc, .dot, &.{expr, field});
+            }
+
+            break :sym Result.ok(expr);
         },
     };
 }
 
 fn climb(p: *Parser, power: usize) Allocator.Error!Result {
+    const start_index = p.strm.index;
+
+    // parse head
     const head_res = try parseAtom(p);
     var expr = head_res.get() orelse return head_res;
 
@@ -177,21 +328,23 @@ fn climb(p: *Parser, power: usize) Allocator.Error!Result {
     try group.append(expr);
 
     while (true) {
-        const param = (try parseAtom(p)).get() orelse break;
+        const param = switch (try parseAtom(p)) {
+            .ok => |got| got,
+            .err => |msg| {
+                msg.deinit(p.ally);
+                break;
+            }
+        };
         try group.append(param);
     }
 
     if (group.items.len > 1) {
         const last = group.items[group.items.len - 1];
         const loc = group.items[0].loc.span(last.loc);
-
-        expr = RawExpr{
-            .loc = loc,
-            .data = .{ .group = group.toOwnedSlice() },
-        };
+        expr = RawExpr.initOwnedForm(loc, .call, group.toOwnedSlice());
     }
 
-    // parse binary ops
+    // parse non-prefix ops
     while (true) {
         const next = p.peek() orelse break;
 
@@ -202,13 +355,15 @@ fn climb(p: *Parser, power: usize) Allocator.Error!Result {
         const syntax = auto.BINARY_SYNTAX.get(keyword) orelse break;
 
         if (syntax.prec.power < power) break;
-
         p.eat();
 
         // token is a binary operator, dispatch climb
         const climb_power = syntax.prec.power + @boolToInt(!syntax.prec.right);
         const rhs_res = try climb(p, climb_power);
-        const rhs = rhs_res.get() orelse return rhs_res;
+        const rhs = rhs_res.get() orelse {
+            p.strm.index = start_index;
+            return rhs_res;
+        };
 
         const loc = expr.loc.span(rhs.loc);
         expr = try RawExpr.initForm(p.ally, loc, syntax.form, &.{expr, rhs});
@@ -241,16 +396,12 @@ pub fn parse(
     };
 
     if (parser.done()) {
+        // empty exprs are fine, empty files are not
         return switch (what) {
             .file => try streamError(&parser, "empty file", .{}),
             .expr => Result.ok(RawExpr{
                 .loc = Loc.of(file, 0, 0),
-                .data = .{
-                    .form = .{
-                        .kind = .unit,
-                        .exprs = &.{},
-                    }
-                },
+                .data = .unit,
             }),
         };
     }

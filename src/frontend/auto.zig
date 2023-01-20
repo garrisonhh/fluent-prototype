@@ -6,9 +6,8 @@ const builtin = @import("builtin");
 pub const Form = enum {
     // special
     file,
+    call,
     list,
-    unit,
-    parens,
 
     // general ops
     dot,
@@ -30,6 +29,26 @@ pub const Form = enum {
     // flow
     stmt,
     @"if",
+
+    /// used for generating error messages etc.
+    pub fn name(self: Form) []const u8 {
+        return switch (self) {
+            .file, .call, .list => @tagName(self),
+            .dot => "field access (`.`) operator",
+            .add => "addition",
+            .sub => "subtraction",
+            .mul => "multiplication",
+            .div => "division",
+            .mod => "modulus",
+            .eq => "equality",
+            .gt => "greater than operator",
+            .lt => "less than operator",
+            .ge => "greater than or equals operator",
+            .le => "less than or equals operator",
+            .stmt => "statement expression",
+            .@"if" => "if expression",
+        };
+    }
 };
 
 pub const Precedence = struct {
@@ -40,14 +59,29 @@ pub const Precedence = struct {
 
 /// used by parseForm to encode syntax
 pub const FormExpr = union(enum) {
-    expr,
+    pub const Flag = enum { one, any, multi };
+
+    pub const Expr = struct {
+        form: ?Form,
+        flag: Flag,
+    };
+
+    expr: Expr,
     keyword: []const u8,
+
+    fn expr(form: ?Form, flag: Flag) @This() {
+        return .{ .expr = .{ .form = form, .flag = flag } };
+    }
 };
 
 pub const Syntax = struct {
     const Self = @This();
 
-    pub const Kind = enum { prefixed, binary };
+    pub const Kind = enum {
+        prefixed, // begins with a keyword
+        binary,
+        unfixed, // begins + ends with exprs
+    };
 
     form: Form,
     prec: Precedence,
@@ -63,23 +97,23 @@ pub const Syntax = struct {
                       and fexprs[1] == .keyword
                       and fexprs[2] == .expr;
 
-        // otherwise, must be prefixed
-        if (!is_binary and fexprs[0] != .keyword) {
-            @compileError("I don't understand this syntax: `" ++ str ++ "`");
-        }
+        const kind: Kind =
+            if (is_binary) .binary
+            else if (fexprs[0] == .keyword) .prefixed
+            else .unfixed;
 
         return Self{
             .form = form,
             .prec = prec,
             .fexprs = fexprs,
-            .kind = if (is_binary) .binary else .prefixed,
+            .kind = kind
         };
     }
 };
 
 pub const KEYWORDS = kw: {
     const list = [_][]const u8{
-        ".", ";", "=",
+        ".", ";", "=", ":",
         // math
         "+", "-", "*", "/", "%",
         // comparisons
@@ -88,6 +122,8 @@ pub const KEYWORDS = kw: {
         "(", ")",
         // lists
         "[", "]",
+        // dicts
+        "{", "}",
         // if
         "if", "then", "else"
     };
@@ -117,8 +153,21 @@ fn countFormExprs(comptime str: []const u8) usize {
     }
 }
 
+fn badFormExpr(comptime str: [] const u8) noreturn {
+    @compileError("`" ++ str ++ "` is not a form expr");
+}
+
 /// parses a formexpr at comptime.
-/// this is a series of keywords and `<exprs>`
+///
+/// str is a series of tokens separated by spaces. each token can be:
+/// - a keyword
+/// - `<>` -- parses any expression
+/// - `<form-name>` -- parses an expression which must be the form form-name
+///
+/// `<>` forms can be followed by `*` to indicate zero or more, and `+` to
+/// indicate one or more
+///
+/// see SYNTAX_TABLE for examples
 fn parseFormExprs(comptime str: []const u8) [countFormExprs(str)]FormExpr {
     comptime {
         _ = KEYWORDS;
@@ -130,14 +179,31 @@ fn parseFormExprs(comptime str: []const u8) [countFormExprs(str)]FormExpr {
 
         var iter = std.mem.tokenize(u8, str, " ");
         while (iter.next()) |tok| : (i += 1) {
-            if (tok[0] == '<' and tok[tok.len - 1] == '>') {
-                fexprs[i] = .expr;
+            if (KEYWORDS.has(tok)) {
+                fexprs[i] = .{ .keyword = tok };
             } else {
-                if (!KEYWORDS.has(tok)) {
-                    @compileError("`" ++ tok ++ "`is not a  keyword");
+                // get flag and inner expr
+                const flag: FormExpr.Flag = switch (tok[tok.len - 1]) {
+                    '*' => .any,
+                    '+' => .multi,
+                    '>' => .one,
+                    else => badFormExpr(tok)
+                };
+
+                if (flag != .one and tok[tok.len - 2] != '>') {
+                    badFormExpr(tok);
                 }
 
-                fexprs[i] = .{ .keyword = tok };
+                const inner = tok[1..tok.len - 1 - @boolToInt(flag != .one)];
+
+                // parse inner expr
+                const form =
+                    if (inner.len == 0) null
+                    else std.meta.stringToEnum(Form, inner) orelse {
+                        badFormExpr(inner);
+                    };
+
+                fexprs[i] = FormExpr.expr(form, flag);
             }
         }
 
@@ -151,18 +217,16 @@ pub const SYNTAX_TABLE = table: {
     // precedences
     const P = Precedence;
 
-    const NONE           = P{ .power = 0 };
+    const LOWEST         = P{ .power = 0 };
     const STATEMENT      = P{ .power = 1, .right = true };
     const COMPARISON     = P{ .power = 2 };
     const ADDITIVE       = P{ .power = 3 };
     const MULTIPLICATIVE = P{ .power = 4 };
-    const FIELD_ACCESS   = P{ .power = 5, .right = true };
 
     // syntax definitions
     const x = Syntax.init;
     break :table [_]Syntax{
-        x(.unit,  NONE,           "( )"),
-        x(.@"if", NONE,           "if <> then <> else <>"),
+        x(.@"if", LOWEST,         "if <> then <> else <>"),
 
         x(.stmt,  STATEMENT,      "<> ; <>"),
 
@@ -178,8 +242,6 @@ pub const SYNTAX_TABLE = table: {
         x(.mul,   MULTIPLICATIVE, "<> * <>"),
         x(.div,   MULTIPLICATIVE, "<> / <>"),
         x(.mod,   MULTIPLICATIVE, "<> % <>"),
-
-        x(.dot,   FIELD_ACCESS,   "<> . <>"),
     };
 };
 
