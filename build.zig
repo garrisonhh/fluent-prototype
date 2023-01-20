@@ -54,9 +54,18 @@ pub fn build(b: *std.build.Builder) void {
     const tests = b.addTest("src/main.zig");
     tests.setTarget(target);
     tests.setBuildMode(mode);
-    tests.setOutputDir(".");
     addPackages(tests);
 
     const test_step = b.step("test", "run fluent tests");
     test_step.dependOn(&tests.step);
+
+    // docs
+    const docs = b.addTest("src/main.zig");
+    docs.setTarget(target);
+    docs.setBuildMode(mode);
+    addPackages(docs);
+    docs.emit_docs = .emit;
+
+    const docs_step = b.step("docs", "generate compiler documentation");
+    docs_step.dependOn(&docs.step);
 }
