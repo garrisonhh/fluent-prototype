@@ -11,18 +11,21 @@ pub const Precedence = struct {
 
 /// used by parseForm to encode syntax
 pub const FormExpr = union(enum) {
-    pub const Flag = enum { one, any, multi };
+    pub const Flag = enum { one, maybe, any, multi };
+
+    const Allowed = std.BoundedArray(Form, 4);
 
     pub const Expr = struct {
-        form: ?Form,
+        // a number of allowed forms
+        allowed: Allowed,
         flag: Flag,
     };
 
     expr: Expr,
     keyword: []const u8,
 
-    fn expr(form: ?Form, flag: Flag) @This() {
-        return .{ .expr = .{ .form = form, .flag = flag } };
+    fn expr(allowed: Allowed, flag: Flag) @This() {
+        return .{ .expr = .{ .allowed = allowed, .flag = flag } };
     }
 };
 
@@ -84,10 +87,12 @@ fn badFormExpr(comptime str: [] const u8) noreturn {
 /// str is a series of tokens separated by spaces. each token can be:
 /// - a keyword
 /// - `<>` -- parses any expression
-/// - `<form-name>` -- parses an expression which must be the form form-name
+/// - `<form0 form1 ... formN>` -- pases a
 ///
-/// `<>` forms can be followed by `*` to indicate zero or more, and `+` to
-/// indicate one or more
+/// `<>` forms can be followed by a flag:
+/// - `?` -- zero or one expr
+/// - `*` -- zero or more exprs
+/// - `+` -- one or more exprs
 ///
 /// see SYNTAX_TABLE for examples
 fn parseFormExprs(comptime str: []const u8) [countFormExprs(str)]FormExpr {
@@ -107,6 +112,7 @@ fn parseFormExprs(comptime str: []const u8) [countFormExprs(str)]FormExpr {
                     '*' => .any,
                     '+' => .multi,
                     '>' => .one,
+                    '?' => .maybe,
                     else => badFormExpr(tok)
                 };
 
@@ -117,14 +123,18 @@ fn parseFormExprs(comptime str: []const u8) [countFormExprs(str)]FormExpr {
                 const inner = tok[1..tok.len - 1 - @boolToInt(flag != .one)];
 
                 // parse inner expr
-                const form: ?Form =
-                    if (inner.len == 0) null
-                    else if (Form.map.get(inner)) |tag| tag
-                    else {
-                        badFormExpr(inner);
+                var forms = FormExpr.Allowed{};
+
+                var inner_iter = std.mem.tokenize(u8, inner, " ");
+                while (inner_iter.next()) |name| {
+                    const form = Form.map.get(name) orelse {
+                        @compileError("unknown form `" ++ name ++ "`");
                     };
 
-                fexprs[i] = FormExpr.expr(form, flag);
+                    forms.appendAssumeCapacity(form);
+                }
+
+                fexprs[i] = FormExpr.expr(forms, flag);
             }
         }
 
@@ -164,20 +174,19 @@ fn tableWhere(comptime kind: Syntax.Kind) [tableWhereCount(kind)]Syntax {
 // tables ======================================================================
 
 pub const Form = enum {
-    // special
     file,
     call,
     list,
+
+    dot,
+    anno,
+    dict,
 
     // no children
     unit,
     number,
     string,
     symbol,
-
-    // general ops
-    dot,
-    anno,
 
     // math
     add,
@@ -225,6 +234,7 @@ pub const Form = enum {
         return switch (self) {
             .file, .call, .list, .unit, .symbol, .string, .number
                 => @tagName(self),
+            .dict => "dictionary literal",
             .anno => "annotation",
             .dot => "field access (`.`) operator",
             .add => "addition",
@@ -276,43 +286,49 @@ pub const KEYWORDS = kw: {
     break :kw std.ComptimeStringMap(void, kvs);
 };
 
-/// the definition of fluent syntax
-/// (this is a [_]Syntax)
-pub const SYNTAX_TABLE = table: {
-    // precedences
+pub const PRECEDENCES = struct {
     const P = Precedence;
 
-    const LOWEST         = P{ .power = 0 };
-    const STATEMENT      = P{ .power = 1, .right = true };
-    const ANNOTATION     = P{ .power = 2 };
-    const COMPARISON     = P{ .power = 3 };
-    const ADDITIVE       = P{ .power = 4 };
-    const MULTIPLICATIVE = P{ .power = 5 };
-    const POINTER        = P{ .power = 6 };
+    pub const LOWEST         = P{ .power = 0 };
+    pub const STATEMENT      = P{ .power = 1, .right = true };
+    pub const ANNOTATION     = P{ .power = 2 };
+    pub const COMPARISON     = P{ .power = 3 };
+    pub const ADDITIVE       = P{ .power = 4 };
+    pub const MULTIPLICATIVE = P{ .power = 5 };
+    pub const CALL           = P{ .power = 6 };
+    pub const POINTER        = P{ .power = 7 };
+    pub const FIELD_ACCESS   = P{ .power = 8 };
+};
 
-    // syntax definitions
+/// the definition of fluent syntax
+pub const SYNTAX_TABLE = table: {
+    const P = PRECEDENCES;
     const x = Syntax.init;
+
     break :table [_]Syntax{
-        x(.@"if", LOWEST,         "if <> then <> else <>"),
+        x(.@"if", P.LOWEST,         "if <> then <> else <>"),
+        x(.dict,  P.LOWEST,         "{ <anno>* }"),
 
-        x(.stmt,  STATEMENT,      "<symbol> ; <>"),
+        x(.stmt,  P.STATEMENT,      "<> ; <>"),
 
-        x(.anno,  ANNOTATION,     "<> : <>"),
+        x(.anno,  P.ANNOTATION,     "<symbol> : <>"),
 
-        x(.eq,    COMPARISON,     "<> == <>"),
-        x(.gt,    COMPARISON,     "<> > <>"),
-        x(.lt,    COMPARISON,     "<> < <>"),
-        x(.ge,    COMPARISON,     "<> >= <>"),
-        x(.le,    COMPARISON,     "<> <= <>"),
+        x(.eq,    P.COMPARISON,     "<> == <>"),
+        x(.gt,    P.COMPARISON,     "<> > <>"),
+        x(.lt,    P.COMPARISON,     "<> < <>"),
+        x(.ge,    P.COMPARISON,     "<> >= <>"),
+        x(.le,    P.COMPARISON,     "<> <= <>"),
 
-        x(.add,   ADDITIVE,       "<> + <>"),
-        x(.sub,   ADDITIVE,       "<> - <>"),
+        x(.add,   P.ADDITIVE,       "<> + <>"),
+        x(.sub,   P.ADDITIVE,       "<> - <>"),
 
-        x(.mul,   MULTIPLICATIVE, "<> * <>"),
-        x(.div,   MULTIPLICATIVE, "<> / <>"),
-        x(.mod,   MULTIPLICATIVE, "<> % <>"),
+        x(.mul,   P.MULTIPLICATIVE, "<> * <>"),
+        x(.div,   P.MULTIPLICATIVE, "<> / <>"),
+        x(.mod,   P.MULTIPLICATIVE, "<> % <>"),
 
-        x(.addr,  POINTER,        "& <>"),
+        x(.addr,  P.POINTER,        "& <>"),
+
+        x(.dot,   P.FIELD_ACCESS,   "<> . <>"),
     };
 };
 

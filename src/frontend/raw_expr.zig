@@ -41,18 +41,17 @@ pub fn render(
     const head_sty = kz.Style{};
     const arm_sty = kz.Style{ .special = .faint };
 
-    if (self.exprs.len == 0) {
-        // no child
-        const slice = self.loc.slice(proj);
-
+    if (self.exprs.len == 0) lit: {
+        // literals
         const color: kz.Color = switch (self.form) {
             .unit => .white,
             .number => .magenta,
             .symbol => .red,
             .string => .green,
-            else => unreachable,
+            else => break :lit,
         };
 
+        const slice = self.loc.slice(proj);
         return try ctx.print(.{ .fg = color }, "{s}", .{slice});
     }
 

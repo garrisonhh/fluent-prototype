@@ -93,16 +93,28 @@ fn expectKeyword(
 fn expectSingleExpr(
     p: *Parser,
     power: usize,
-    maybe_form: ?Form
+    allowed: []const Form
 ) Allocator.Error!Result {
-    if (maybe_form) |form| {
+    if (allowed.len > 0) {
+        const start_index = p.strm.index;
         const res = try climb(p, power);
         const expr = res.get() orelse return res;
 
-        // if a form is provided, check it
-        if (expr.form == form) {
+        std.debug.print("checking `{s}` against allowed:", .{expr.form.name()});
+        for (allowed) |form| std.debug.print(" `{s}`", .{form.name()});
+        std.debug.print("\n", .{});
+
+        // a form is provided, so check it
+        const is_allowed = check: for (allowed) |form| {
+            if (expr.form == form) {
+                break :check true;
+            }
+        } else false;
+
+        if (!is_allowed) {
+            p.strm.index = start_index;
             const fmt = "expected {s}, found {s}";
-            const exp = form.name();
+            const exp = "TODO allowed forms";
             const found = expr.form.name();
             return try parseError(p, expr.loc, fmt, .{exp, found});
         }
@@ -122,43 +134,61 @@ fn expectFormExpr(
     fexpr: FormExpr
 ) Allocator.Error!ExpResult {
     return switch (fexpr) {
-        .expr => |meta| switch (meta.flag) {
-            .any, .multi => coll: {
-                var list = std.ArrayList(RawExpr).init(p.ally);
-                defer list.deinit();
-
-                while (true) {
-                    const el_res = try expectSingleExpr(p, power, meta.form);
-                    const el = switch (el_res) {
-                        .ok => |expr| expr,
-                        .err => |msg| {
-                            if (meta.flag == .multi and list.items.len == 0) {
-                                break :coll ExpResult.err(msg);
-                            }
-
-                            msg.deinit(p.ally);
-                            break;
-                        }
-                    };
-
-                    try list.append(el);
-                }
-
-                break :coll ExpResult.ok(list.toOwnedSlice());
-            },
-            .one => one: {
-                const sg_res = try expectSingleExpr(p, power, meta.form);
-                const sg = sg_res.get() orelse return sg_res.cast([]RawExpr);
-
-                const list = try p.ally.alloc(RawExpr, 1);
-                list[0] = sg;
-
-                break :one ExpResult.ok(list);
-            },
-        },
         .keyword => |kw| switch (try expectKeyword(p, kw)) {
             .ok => ExpResult.ok(&.{}),
             .err => |msg| ExpResult.err(msg),
+        },
+        .expr => |meta| expr: {
+            const allowed = meta.allowed.slice();
+
+            break :expr switch (meta.flag) {
+                .one => one: {
+                    const res = try expectSingleExpr(p, power, allowed);
+                    const expr = res.get() orelse return res.cast([]RawExpr);
+
+                    const list = try p.ally.alloc(RawExpr, 1);
+                    list[0] = expr;
+
+                    break :one ExpResult.ok(list);
+                },
+                .maybe => switch (try expectSingleExpr(p, power, allowed)) {
+                    .ok => |expr| one: {
+                        const list = try p.ally.alloc(RawExpr, 1);
+                        list[0] = expr;
+                        break :one ExpResult.ok(list);
+                    },
+                    .err => |msg| none: {
+                        msg.deinit(p.ally);
+                        break :none ExpResult.ok(&.{});
+                    }
+                },
+                .any, .multi => coll: {
+                    var list = std.ArrayList(RawExpr).init(p.ally);
+                    defer list.deinit();
+
+                    while (true) {
+                        const el_index = p.strm.index;
+                        const el_res = try expectSingleExpr(p, power, allowed);
+                        const el = switch (el_res) {
+                            .ok => |expr| expr,
+                            .err => |msg| {
+                                if (meta.flag == .multi
+                                and list.items.len == 0) {
+                                    break :coll ExpResult.err(msg);
+                                }
+
+                                p.strm.index = el_index;
+                                msg.deinit(p.ally);
+                                break;
+                            }
+                        };
+
+                        try list.append(el);
+                    }
+
+                    break :coll ExpResult.ok(list.toOwnedSlice());
+                },
+            };
         },
     };
 }
@@ -199,7 +229,7 @@ fn parseSyntax(p: *Parser, syntax: Syntax) Allocator.Error!Result {
         .loc = loc,
         .form = syntax.form,
         .exprs = exprs,
-});
+    });
 }
 
 /// parens require special logic with unit, forced calls, etc. and I don't want
@@ -257,95 +287,60 @@ fn parseAtom(p: *Parser) Allocator.Error!Result {
 
             break :kw parseSyntax(p, syntax);
         },
-        inline .number, .string => |tag| lit: {
+        inline .number, .string, .symbol => |tag| lit: {
             p.eat();
             break :lit Result.ok(RawExpr{
                 .loc = tok.loc,
                 .form = @field(Form, @tagName(tag)),
             });
         },
-        .symbol => sym: {
-            const start_index = p.strm.index;
-            p.eat();
-
-            var expr = RawExpr{
-                .loc = tok.loc,
-                .form = .symbol
-            };
-
-            // parse `dot` (field access)
-            while (true) {
-                // check dot
-                const dot_tok = p.peek() orelse break;
-                if (dot_tok.tag != .keyword) break;
-
-                const slice = dot_tok.loc.slice(p.proj);
-                if (!std.mem.eql(u8, slice, ".")) break;
-
-                p.eat();
-
-                // check field
-                const field_tok = p.peek() orelse {
-                    p.strm.index = start_index;
-                    break :sym streamError(p, "expected field, found EOF", .{});
-                };
-
-                if (field_tok.tag != .symbol) {
-                    p.strm.index = start_index;
-                    break :sym streamError(p, "expected field", .{});
-                }
-
-                p.eat();
-
-                const field = RawExpr{
-                    .loc = field_tok.loc,
-                    .form = .symbol,
-                };
-
-                const loc = expr.loc.span(field.loc);
-                expr = try RawExpr.init(p.ally, loc, .dot, &.{expr, field});
-            }
-
-            break :sym Result.ok(expr);
-        },
     };
 }
 
 fn climb(p: *Parser, power: usize) Allocator.Error!Result {
+    const CALL_POWER = auto.PRECEDENCES.CALL.power;
     const start_index = p.strm.index;
 
-    // parse head
-    const head_res = try parseAtom(p);
-    var expr = head_res.get() orelse return head_res;
-
-    // parse any parameters passed to head
+    // function calls require special behavior
     var group = std.ArrayList(RawExpr).init(p.ally);
     defer group.deinit();
 
-    try group.append(expr);
+    if (power >= CALL_POWER) {
+        // parse atom
+        const head_res = try parseAtom(p);
+        const head = head_res.get() orelse return head_res;
 
-    while (true) {
-        const param = switch (try parseAtom(p)) {
-            .ok => |got| got,
-            .err => |msg| {
-                msg.deinit(p.ally);
-                break;
-            }
-        };
-        try group.append(param);
+        try group.append(head);
+    } else {
+        // parse call
+        const head_res = try climb(p, CALL_POWER);
+        const head = head_res.get() orelse return head_res;
+
+        try group.append(head);
+
+        while (true) {
+            const param = switch (try climb(p, CALL_POWER)) {
+                .ok => |got| got,
+                .err => |msg| {
+                    msg.deinit(p.ally);
+                    break;
+                }
+            };
+            try group.append(param);
+        }
     }
 
-    if (group.items.len > 1) {
+    var expr = if (group.items.len == 1) group.items[0] else call: {
         const last = group.items[group.items.len - 1];
         const loc = group.items[0].loc.span(last.loc);
-        expr = RawExpr{
+        break :call RawExpr{
             .loc = loc,
             .form = .call,
             .exprs = group.toOwnedSlice(),
         };
-    }
+    };
 
-    // parse non-prefix ops
+    // parse  ops
     while (true) {
         const next = p.peek() orelse break;
 
