@@ -90,39 +90,51 @@ fn expectKeyword(
     return Message.Result(Token).ok(tok);
 }
 
+fn checkForm(
+    ally: Allocator,
+    allowed: []const Form,
+    loc: Loc,
+    form: Form
+) Allocator.Error!Message.Result(void) {
+    // a form is provided, so check it
+    const is_allowed = allowed.len == 0
+                    or std.mem.containsAtLeast(Form, allowed, 1, &.{form});
+
+    if (!is_allowed) {
+        if (allowed.len == 1) {
+            const fmt = "expected {s}, found {s}";
+            return Message.err(ally, void, loc, fmt, .{
+                allowed[0].name(),
+                form.name(),
+            });
+        }
+
+        var forms = std.ArrayList([]const u8).init(ally);
+        defer forms.deinit();
+
+        for (allowed) |against| {
+            try forms.append(against.name());
+        }
+
+        const fmt = "expected one of {s}, found {s}";
+        return Message.err(ally, void, loc, fmt, .{forms.items, form.name()});
+    }
+
+    return Message.Result(void).ok({});
+}
+
 fn expectSingleExpr(
     p: *Parser,
     power: usize,
     allowed: []const Form
 ) Allocator.Error!Result {
-    if (allowed.len > 0) {
-        const start_index = p.strm.index;
-        const res = try climb(p, power);
-        const expr = res.get() orelse return res;
+    const res = try climb(p, power);
+    const expr = res.get() orelse return res;
 
-        std.debug.print("checking `{s}` against allowed:", .{expr.form.name()});
-        for (allowed) |form| std.debug.print(" `{s}`", .{form.name()});
-        std.debug.print("\n", .{});
-
-        // a form is provided, so check it
-        const is_allowed = check: for (allowed) |form| {
-            if (expr.form == form) {
-                break :check true;
-            }
-        } else false;
-
-        if (!is_allowed) {
-            p.strm.index = start_index;
-            const fmt = "expected {s}, found {s}";
-            const exp = "TODO allowed forms";
-            const found = expr.form.name();
-            return try parseError(p, expr.loc, fmt, .{exp, found});
-        }
-
-        return Result.ok(expr);
-    } else {
-        return try climb(p, power);
-    }
+    return switch (try checkForm(p.ally, allowed, expr.loc, expr.form)) {
+        .ok => Result.ok(expr),
+        .err => |msg| Result.err(msg),
+    };
 }
 
 const ExpResult = Message.Result([]RawExpr);
@@ -351,11 +363,21 @@ fn climb(p: *Parser, power: usize) Allocator.Error!Result {
         const syntax = auto.BINARY_SYNTAX.get(keyword) orelse break;
 
         if (syntax.prec.power < power) break;
+
+        // check the left allowed forms
+        const l_allowed = syntax.fexprs[0].expr.allowed.slice();
+        const l_check = try checkForm(p.ally, l_allowed, expr.loc, expr.form);
+        if (l_check.getErr()) |msg| {
+            return Result.err(msg);
+        }
+
         p.eat();
 
         // token is a binary operator, dispatch climb
         const climb_power = syntax.prec.power + @boolToInt(!syntax.prec.right);
-        const rhs_res = try climb(p, climb_power);
+
+        const r_allowed = syntax.fexprs[2].expr.allowed.slice();
+        const rhs_res = try expectSingleExpr(p, climb_power, r_allowed);
         const rhs = rhs_res.get() orelse {
             p.strm.index = start_index;
             return rhs_res;

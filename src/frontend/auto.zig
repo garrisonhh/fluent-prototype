@@ -125,7 +125,7 @@ fn parseFormExprs(comptime str: []const u8) [countFormExprs(str)]FormExpr {
                 // parse inner expr
                 var forms = FormExpr.Allowed{};
 
-                var inner_iter = std.mem.tokenize(u8, inner, " ");
+                var inner_iter = std.mem.tokenize(u8, inner, "|");
                 while (inner_iter.next()) |name| {
                     const form = Form.map.get(name) orelse {
                         @compileError("unknown form `" ++ name ++ "`");
@@ -181,6 +181,7 @@ pub const Form = enum {
     dot,
     anno,
     dict,
+    seq,
 
     // no children
     unit,
@@ -235,6 +236,7 @@ pub const Form = enum {
             .file, .call, .list, .unit, .symbol, .string, .number
                 => @tagName(self),
             .dict => "dictionary literal",
+            .seq => "sequence",
             .anno => "annotation",
             .dot => "field access (`.`) operator",
             .add => "addition",
@@ -256,7 +258,7 @@ pub const Form = enum {
 
 pub const KEYWORDS = kw: {
     const list = [_][]const u8{
-        ".", ";", "=", ":",
+        ".", ";", "=", ":", ",",
         // math
         "+", "-", "*", "/", "%",
         // comparisons
@@ -291,13 +293,14 @@ pub const PRECEDENCES = struct {
 
     pub const LOWEST         = P{ .power = 0 };
     pub const STATEMENT      = P{ .power = 1, .right = true };
-    pub const ANNOTATION     = P{ .power = 2 };
-    pub const COMPARISON     = P{ .power = 3 };
-    pub const ADDITIVE       = P{ .power = 4 };
-    pub const MULTIPLICATIVE = P{ .power = 5 };
-    pub const CALL           = P{ .power = 6 };
-    pub const POINTER        = P{ .power = 7 };
-    pub const FIELD_ACCESS   = P{ .power = 8 };
+    pub const SEQUENCE       = P{ .power = 2, .right = true };
+    pub const ANNOTATION     = P{ .power = 3 };
+    pub const COMPARISON     = P{ .power = 4 };
+    pub const ADDITIVE       = P{ .power = 5 };
+    pub const MULTIPLICATIVE = P{ .power = 6 };
+    pub const CALL           = P{ .power = 7 };
+    pub const POINTER        = P{ .power = 8 };
+    pub const FIELD_ACCESS   = P{ .power = 9 };
 };
 
 /// the definition of fluent syntax
@@ -307,9 +310,11 @@ pub const SYNTAX_TABLE = table: {
 
     break :table [_]Syntax{
         x(.@"if", P.LOWEST,         "if <> then <> else <>"),
-        x(.dict,  P.LOWEST,         "{ <anno>* }"),
+        x(.dict,  P.LOWEST,         "{ <anno|seq>? }"),
 
         x(.stmt,  P.STATEMENT,      "<> ; <>"),
+
+        x(.seq,   P.SEQUENCE,       "<> , <>"),
 
         x(.anno,  P.ANNOTATION,     "<symbol> : <>"),
 
