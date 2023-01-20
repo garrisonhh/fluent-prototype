@@ -209,6 +209,8 @@ pub const Form = enum {
     // flow
     stmt,
     @"if",
+    @"fn",
+    def,
 
     /// maps tagName to enum value. used for parsing form exprs.
     const map = map: {
@@ -252,27 +254,25 @@ pub const Form = enum {
             .addr => "address operator",
             .stmt => "statement expression",
             .@"if" => "if expression",
+            .@"fn" => "fn expression",
+            .def => "declaration",
         };
     }
 };
 
 pub const KEYWORDS = kw: {
     const list = [_][]const u8{
-        ".", ";", "=", ":", ",",
+        ".", ";", "=", ":", ",", "->",
         // math
         "+", "-", "*", "/", "%",
         // comparisons
         "==", ">", "<", ">=", "<=",
         // ptrs
         "&",
-        // parens
-        "(", ")",
-        // lists
-        "[", "]",
-        // dicts
-        "{", "}",
-        // if
-        "if", "then", "else"
+        // matched
+        "(", ")", "[", "]", "{", "}",
+        // words
+        "if", "then", "else", "def", "fn",
     };
 
     // manipulate so it's consumable by ComptimeStringMap
@@ -291,16 +291,16 @@ pub const KEYWORDS = kw: {
 pub const PRECEDENCES = struct {
     const P = Precedence;
 
-    pub const LOWEST         = P{ .power = 0 };
+    pub const DEFAULT        = P{ .power = 0 };
     pub const STATEMENT      = P{ .power = 1, .right = true };
     pub const SEQUENCE       = P{ .power = 2, .right = true };
     pub const ANNOTATION     = P{ .power = 3 };
     pub const COMPARISON     = P{ .power = 4 };
     pub const ADDITIVE       = P{ .power = 5 };
     pub const MULTIPLICATIVE = P{ .power = 6 };
-    pub const CALL           = P{ .power = 7 };
-    pub const POINTER        = P{ .power = 8 };
-    pub const FIELD_ACCESS   = P{ .power = 9 };
+    pub const CALL           = P{ .power = 8 };
+    pub const POINTER        = P{ .power = 9 };
+    pub const FIELD_ACCESS   = P{ .power = 10 };
 };
 
 /// the definition of fluent syntax
@@ -309,8 +309,11 @@ pub const SYNTAX_TABLE = table: {
     const x = Syntax.init;
 
     break :table [_]Syntax{
-        x(.@"if", P.LOWEST,         "if <> then <> else <>"),
-        x(.dict,  P.LOWEST,         "{ <anno|seq>? }"),
+        x(.dict,  P.DEFAULT,        "{ <anno|seq>? }"),
+        x(.list,  P.DEFAULT,        "[ <>? ]"),
+        x(.@"if", P.DEFAULT,        "if <> then <> else <>"),
+        x(.@"fn", P.DEFAULT,        "fn <dict> -> <> = <>"),
+        x(.def,   P.DEFAULT,        "def <symbol|anno> = <> ; ;"),
 
         x(.stmt,  P.STATEMENT,      "<> ; <>"),
 
@@ -330,6 +333,8 @@ pub const SYNTAX_TABLE = table: {
         x(.mul,   P.MULTIPLICATIVE, "<> * <>"),
         x(.div,   P.MULTIPLICATIVE, "<> / <>"),
         x(.mod,   P.MULTIPLICATIVE, "<> % <>"),
+
+        // CALL precedence goes here
 
         x(.addr,  P.POINTER,        "& <>"),
 

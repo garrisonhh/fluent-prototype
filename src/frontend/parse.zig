@@ -311,7 +311,6 @@ fn parseAtom(p: *Parser) Allocator.Error!Result {
 
 fn climb(p: *Parser, power: usize) Allocator.Error!Result {
     const CALL_POWER = auto.PRECEDENCES.CALL.power;
-    const start_index = p.strm.index;
 
     // function calls require special behavior
     var group = std.ArrayList(RawExpr).init(p.ally);
@@ -368,8 +367,11 @@ fn climb(p: *Parser, power: usize) Allocator.Error!Result {
         const l_allowed = syntax.fexprs[0].expr.allowed.slice();
         const l_check = try checkForm(p.ally, l_allowed, expr.loc, expr.form);
         if (l_check.getErr()) |msg| {
-            return Result.err(msg);
+            msg.deinit(p.ally);
+            break;
         }
+
+        const bin_start_index = p.strm.index;
 
         p.eat();
 
@@ -378,9 +380,13 @@ fn climb(p: *Parser, power: usize) Allocator.Error!Result {
 
         const r_allowed = syntax.fexprs[2].expr.allowed.slice();
         const rhs_res = try expectSingleExpr(p, climb_power, r_allowed);
-        const rhs = rhs_res.get() orelse {
-            p.strm.index = start_index;
-            return rhs_res;
+        const rhs = switch (rhs_res) {
+            .ok => |rhs| rhs,
+            .err => |msg| {
+                msg.deinit(p.ally);
+                p.strm.index = bin_start_index;
+                break;
+            }
         };
 
         const loc = expr.loc.span(rhs.loc);
@@ -405,7 +411,7 @@ pub fn parse(
     const tokens = lex_res.get() orelse return lex_res.cast(RawExpr);
     defer ally.free(tokens);
 
-    // parse
+    // parse, respecting behavior based on file vs. expr parsing
     var parser = Parser{
         .ally = ally,
         .strm = Stream(Token).init(tokens, 0),
@@ -413,31 +419,54 @@ pub fn parse(
         .file = file,
     };
 
-    if (parser.done()) {
-        // empty exprs are fine, empty files are not
-        return switch (what) {
-            .file => try streamError(&parser, "empty file", .{}),
-            .expr => Result.ok(RawExpr{
-                .loc = Loc.of(file, 0, 0),
-                .form = .unit,
-            }),
-        };
+    switch (what) {
+        .expr => {
+            if (parser.done()) {
+                return Result.ok(RawExpr{
+                    .loc = Loc.of(file, 0, 0),
+                    .form = .unit,
+                });
+            }
+
+            const res = try climb(&parser, 0);
+
+            if (res == .ok and !parser.done()) {
+                const fmt = "leftover tokens after parsing";
+                return try streamError(&parser, fmt, .{});
+            }
+
+            return res;
+        },
+        .file => {
+            var exprs = std.ArrayList(RawExpr).init(ally);
+            defer {
+                for (exprs.items) |expr| expr.deinit(ally);
+                exprs.deinit();
+            }
+
+            while (!parser.done()) {
+                switch (try climb(&parser, 0)) {
+                    .ok => |expr| try exprs.append(expr),
+                    .err => |msg| return Result.err(msg),
+                }
+            }
+
+            const loc = switch (exprs.items.len) {
+                0 => Loc.of(file, 0, 0),
+                1 => exprs.items[0].loc,
+                else => many: {
+                    const first = exprs.items[0].loc;
+                    const last = exprs.items[exprs.items.len - 1].loc;
+                    break :many first.span(last);
+                }
+            };
+
+            // files need to be wrapped in a file expr
+            return Result.ok(RawExpr{
+                .loc = loc,
+                .form = .file,
+                .exprs = exprs.toOwnedSlice(),
+            });
+        },
     }
-
-    // handle parse result
-    const res = try climb(&parser, 0);
-
-    // check for leftover input
-    if (res == .ok and !parser.done()) {
-        const fmt = "leftover tokens after parsing";
-        return try streamError(&parser, fmt, .{});
-    }
-
-    if (what == .file and res == .ok) {
-        // files need to be wrapped in a file expr
-        const wrapped = try RawExpr.init(ally, res.ok.loc, .file, &.{res.ok});
-        return Result.ok(wrapped);
-    }
-
-    return res;
 }
