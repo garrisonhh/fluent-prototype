@@ -3,181 +3,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-pub const Precedence = struct {
-    power: usize,
-    /// for binary ops
-    right: bool = false,
-};
-
-/// used by parseForm to encode syntax
-pub const FormExpr = union(enum) {
-    pub const Flag = enum { one, maybe, any, multi };
-
-    const Allowed = std.BoundedArray(Form, 4);
-
-    pub const Expr = struct {
-        // a number of allowed forms
-        allowed: Allowed,
-        flag: Flag,
-    };
-
-    expr: Expr,
-    keyword: []const u8,
-
-    fn expr(allowed: Allowed, flag: Flag) @This() {
-        return .{ .expr = .{ .allowed = allowed, .flag = flag } };
-    }
-};
-
-pub const Syntax = struct {
-    const Self = @This();
-
-    pub const Kind = enum {
-        prefixed, // begins with a keyword
-        binary,
-        unfixed, // begins + ends with exprs
-    };
-
-    form: Form,
-    prec: Precedence,
-    fexprs: []const FormExpr,
-    kind: Kind,
-
-    fn init(form: Form, prec: Precedence, comptime str: []const u8) Self {
-        const fexprs = &parseFormExprs(str);
-        std.debug.assert(fexprs.len > 0);
-
-        const is_binary = fexprs.len == 3
-                      and fexprs[0] == .expr
-                      and fexprs[1] == .keyword
-                      and fexprs[2] == .expr;
-
-        const kind: Kind =
-            if (is_binary) .binary
-            else if (fexprs[0] == .keyword) .prefixed
-            else .unfixed;
-
-        return Self{
-            .form = form,
-            .prec = prec,
-            .fexprs = fexprs,
-            .kind = kind
-        };
-    }
-};
-
-fn countFormExprs(comptime str: []const u8) usize {
-    comptime {
-        var count: usize = 0;
-        var iter = std.mem.tokenize(u8, str, " ");
-        while (iter.next() != null) {
-            count += 1;
-        }
-
-        return count;
-    }
-}
-
-fn badFormExpr(comptime str: [] const u8) noreturn {
-    @compileError("`" ++ str ++ "` is not a form expr");
-}
-
-/// parses a formexpr at comptime.
-///
-/// str is a series of tokens separated by spaces. each token can be:
-/// - a keyword
-/// - `<>` -- parses any expression
-/// - `<form0 form1 ... formN>` -- pases a
-///
-/// `<>` forms can be followed by a flag:
-/// - `?` -- zero or one expr
-/// - `*` -- zero or more exprs
-/// - `+` -- one or more exprs
-///
-/// see SYNTAX_TABLE for examples
-fn parseFormExprs(comptime str: []const u8) [countFormExprs(str)]FormExpr {
-    comptime {
-        @setEvalBranchQuota(100_000);
-
-        var fexprs: [countFormExprs(str)]FormExpr = undefined;
-        var i: usize = 0;
-
-        var iter = std.mem.tokenize(u8, str, " ");
-        while (iter.next()) |tok| : (i += 1) {
-            if (KEYWORDS.has(tok)) {
-                fexprs[i] = .{ .keyword = tok };
-            } else {
-                // get flag and inner expr
-                const flag: FormExpr.Flag = switch (tok[tok.len - 1]) {
-                    '*' => .any,
-                    '+' => .multi,
-                    '>' => .one,
-                    '?' => .maybe,
-                    else => badFormExpr(tok)
-                };
-
-                if (flag != .one and tok[tok.len - 2] != '>') {
-                    badFormExpr(tok);
-                }
-
-                const inner = tok[1..tok.len - 1 - @boolToInt(flag != .one)];
-
-                // parse inner expr
-                var forms = FormExpr.Allowed{};
-
-                var inner_iter = std.mem.tokenize(u8, inner, "|");
-                while (inner_iter.next()) |name| {
-                    const form = Form.map.get(name) orelse {
-                        @compileError("unknown form `" ++ name ++ "`");
-                    };
-
-                    forms.appendAssumeCapacity(form);
-                }
-
-                fexprs[i] = FormExpr.expr(forms, flag);
-            }
-        }
-
-        return fexprs;
-    }
-}
-
-fn tableWhereCount(comptime kind: Syntax.Kind) usize {
-    comptime {
-        // count entries
-        var count: usize = 0;
-        for (SYNTAX_TABLE) |syntax| {
-            count += @boolToInt(syntax.kind == kind);
-        }
-
-        return count;
-    }
-}
-
-fn tableWhere(comptime kind: Syntax.Kind) [tableWhereCount(kind)]Syntax {
-    comptime {
-        const count = tableWhereCount(kind);
-
-        var arr: [count]Syntax = undefined;
-        var i: usize = 0;
-        for (SYNTAX_TABLE) |syntax| {
-            if (syntax.kind == kind) {
-                arr[i] = syntax;
-                i += 1;
-            }
-        }
-
-        return arr;
-    }
-}
-
-// tables ======================================================================
-
 pub const Form = enum {
     file,
     call,
     list,
 
+    parens,
     dot,
     anno,
     dict,
@@ -237,21 +68,22 @@ pub const Form = enum {
         return switch (self) {
             .file, .call, .list, .unit, .symbol, .string, .number
                 => @tagName(self),
+            .parens => "parentheses",
             .dict => "dictionary literal",
             .seq => "sequence",
             .anno => "annotation",
-            .dot => "field access (`.`) operator",
-            .add => "addition",
-            .sub => "subtraction",
-            .mul => "multiplication",
-            .div => "division",
-            .mod => "modulus",
-            .eq => "equality",
+            .dot => "field access",
+            .add => "add operator",
+            .sub => "subtract operator",
+            .mul => "multiply operator",
+            .div => "divide operator",
+            .mod => "modulus operator",
+            .eq => "equality operator",
             .gt => "greater than operator",
             .lt => "less than operator",
             .ge => "greater than or equals operator",
             .le => "less than or equals operator",
-            .addr => "address operator",
+            .addr => "address of operator",
             .stmt => "statement expression",
             .@"if" => "if expression",
             .@"fn" => "fn expression",
@@ -260,124 +92,249 @@ pub const Form = enum {
     }
 };
 
-pub const KEYWORDS = kw: {
-    const list = [_][]const u8{
-        ".", ";", "=", ":", ",", "->",
-        // math
-        "+", "-", "*", "/", "%",
-        // comparisons
-        "==", ">", "<", ">=", "<=",
-        // ptrs
-        "&",
-        // matched
-        "(", ")", "[", "]", "{", "}",
-        // words
-        "if", "then", "else", "def", "fn",
+/// used by parseForm to encode syntax
+pub const FormExpr = union(enum) {
+    pub const Flag = enum { one, opt, any, multi };
+
+    pub const Expr = struct {
+        flag: Flag = .one,
+        /// if an expr is contained, it resets the climbing precedence.
+        /// otherwise, exprs here must match or exceed the current precedence
+        container: bool = false,
     };
 
-    // manipulate so it's consumable by ComptimeStringMap
-    const KV = struct {
-        @"0": []const u8,
-        @"1": void = {},
-    };
-    var kvs: [list.len]KV = undefined;
-    for (list) |keyword, i| {
-        kvs[i] = KV{ .@"0" = keyword };
+    expr: Expr,
+    word: []const u8,
+
+    pub fn format(
+        self: @This(),
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) @TypeOf(writer).Error!void {
+        switch (self) {
+            .expr => |expr| {
+                if (expr.container) {
+                    try writer.writeAll("<>");
+                } else {
+                    try writer.writeByte('$');
+                }
+
+                try writer.writeAll(switch (expr.flag) {
+                    .one => "",
+                    .opt => "?",
+                    .any => "*",
+                    .multi => "+",
+                });
+            },
+            .word => |word| {
+                try writer.writeByte('`');
+                try writer.writeAll(word);
+            }
+        }
+    }
+};
+
+pub const Syntax = struct {
+    const Self = @This();
+
+    pub const Direction = enum { left, right };
+
+    form: Form,
+    dir: Direction,
+    fexprs: []const FormExpr,
+
+    fn fexprsCount(comptime str: []const u8) usize {
+        var count: usize = 0;
+        var tokens = std.mem.tokenize(u8, str, " ");
+        while (tokens.next()) |_| {
+            count += 1;
+        }
+
+        return count;
     }
 
-    break :kw std.ComptimeStringMap(void, kvs);
+    fn badModifier(comptime tok: []const u8) noreturn {
+        @compileError("`" ++ tok[1..] ++ "` is not a valid modifier");
+    }
+
+    fn parseFormExpr(comptime tok: []const u8) FormExpr {
+        comptime {
+            return switch (tok[0]) {
+                '`' => word: {
+                    const word = tok[1..];
+                    if (!SYMBOLS.has(word) and !KEYWORDS.has(word)) {
+                        @compileError(
+                            "`" ++ word ++ "` is not a symbol or keyword"
+                        );
+                    }
+
+                    break :word FormExpr{ .word = word };
+                },
+                '$' => switch (tok.len) {
+                    1 => FormExpr{ .expr = .{} },
+                    2 => FormExpr{
+                        .expr = .{
+                            .flag = switch (tok[1]) {
+                                '?' => .opt,
+                                '*' => .any,
+                                '+' => .multi,
+                                else => badModifier(tok)
+                            },
+                        }
+                    },
+                    else => badModifier(tok)
+                },
+                else => {
+                    @compileError("`" ++ tok ++ "` is not a valid FormExpr");
+                }
+            };
+        }
+    }
+
+    /// compiles a series of expressions separated by spaces. expression can
+    /// be:
+    /// - '`' followed by a keyword or symbol
+    /// - '$' representing a child expr, followed by one of '*', '?', or '+'
+    ///   which represent their regex counterparts
+    fn parseForm(comptime str: []const u8) [fexprsCount(str)]FormExpr {
+        comptime {
+            var fexprs: [fexprsCount(str)]FormExpr = undefined;
+            var index: usize = 0;
+
+            var tokens = std.mem.tokenize(u8, str, " ");
+            while (tokens.next()) |tok| : (index += 1) {
+                fexprs[index] = parseFormExpr(tok);
+            }
+
+            // second pass to find contained exprs
+            var i: usize = 1;
+            while (i < fexprs.len - 1) : (i += 1) {
+                const is_container = fexprs[i] == .expr
+                                 and fexprs[i - 1] == .word
+                                 and fexprs[i + 1] == .word;
+
+                if (is_container) {
+                    fexprs[i].expr.container = true;
+                }
+            }
+
+            return fexprs;
+        }
+    }
+
+    pub fn init(form: Form, dir: Direction, comptime syntax: []const u8) Self {
+        return Self{
+            .form = form,
+            .dir = dir,
+            .fexprs = &parseForm(syntax),
+        };
+    }
+
+    pub fn format(
+        self: Self,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) @TypeOf(writer).Error!void {
+        try writer.print(
+            "[{s} {c}]",
+            .{@tagName(self.form), @tagName(self.dir)[0]}
+        );
+
+        for (self.fexprs) |fexpr| {
+            try writer.print(" {}", .{fexpr});
+        }
+    }
 };
 
-pub const PRECEDENCES = struct {
-    const P = Precedence;
-
-    pub const DEFAULT        = P{ .power = 0 };
-    pub const STATEMENT      = P{ .power = 1, .right = true };
-    pub const SEQUENCE       = P{ .power = 2, .right = true };
-    pub const ANNOTATION     = P{ .power = 3 };
-    pub const COMPARISON     = P{ .power = 4 };
-    pub const ADDITIVE       = P{ .power = 5 };
-    pub const MULTIPLICATIVE = P{ .power = 6 };
-    pub const CALL           = P{ .power = 8 };
-    pub const POINTER        = P{ .power = 9 };
-    pub const FIELD_ACCESS   = P{ .power = 10 };
-};
-
-/// the definition of fluent syntax
-pub const SYNTAX_TABLE = table: {
-    const P = PRECEDENCES;
+/// syntax organized by precedence in ascending order
+pub const SYNTAX = t: {
     const x = Syntax.init;
-
-    break :table [_]Syntax{
-        x(.dict,  P.DEFAULT,        "{ <anno|seq>? }"),
-        x(.list,  P.DEFAULT,        "[ <>? ]"),
-        x(.@"if", P.DEFAULT,        "if <> then <> else <>"),
-        x(.@"fn", P.DEFAULT,        "fn <dict> -> <> = <>"),
-        x(.def,   P.DEFAULT,        "def <symbol|anno> = <> ; ;"),
-
-        x(.stmt,  P.STATEMENT,      "<> ; <>"),
-
-        x(.seq,   P.SEQUENCE,       "<> , <>"),
-
-        x(.anno,  P.ANNOTATION,     "<symbol> : <>"),
-
-        x(.eq,    P.COMPARISON,     "<> == <>"),
-        x(.gt,    P.COMPARISON,     "<> > <>"),
-        x(.lt,    P.COMPARISON,     "<> < <>"),
-        x(.ge,    P.COMPARISON,     "<> >= <>"),
-        x(.le,    P.COMPARISON,     "<> <= <>"),
-
-        x(.add,   P.ADDITIVE,       "<> + <>"),
-        x(.sub,   P.ADDITIVE,       "<> - <>"),
-
-        x(.mul,   P.MULTIPLICATIVE, "<> * <>"),
-        x(.div,   P.MULTIPLICATIVE, "<> / <>"),
-        x(.mod,   P.MULTIPLICATIVE, "<> % <>"),
-
-        // CALL precedence goes here
-
-        x(.addr,  P.POINTER,        "& <>"),
-
-        x(.dot,   P.FIELD_ACCESS,   "<> . <>"),
+    break :t &[_][]const Syntax {
+        &.{
+            x(.parens, .left,  "`( $ `)"),
+        },
+        &.{
+            x(.add,    .left,  "$ `+ $"),
+            x(.sub,    .left,  "$ `- $"),
+        },
+        &.{
+            x(.mul,    .left,  "$ `* $"),
+            x(.div,    .left,  "$ `/ $"),
+            x(.mod,    .left,  "$ `% $"),
+        },
     };
 };
 
-/// a ComptimeStringMap(Syntax) where the key is the prefix keyword
-pub const PREFIXED_SYNTAX = map: {
-    const arr = tableWhere(.prefixed);
-
-    const KV = struct {
-        @"0": []const u8,
-        @"1": Syntax,
-    };
-
-    var kvs: [arr.len]KV = undefined;
-    for (arr) |syntax, i| {
-        kvs[i] = KV{
-            .@"0" = syntax.fexprs[0].keyword,
-            .@"1" = syntax,
+fn comptimeStringSet(comptime list: []const []const u8) type {
+    comptime {
+        // manipulate so it's consumable by ComptimeStringMap
+        const KV = struct {
+            @"0": []const u8,
+            @"1": void = {},
         };
+        var kvs: [list.len]KV = undefined;
+        for (list) |keyword, i| {
+            kvs[i] = KV{ .@"0" = keyword };
+        }
+
+        return std.ComptimeStringMap(void, kvs);
+    }
+}
+
+const KEYWORD_LIST = &[_][]const u8{
+    "=", "+", "-", "*", "/", "%",
+    "==", ">", "<", ">=", "<=",
+    "if", "then", "else", "def", "fn",
+};
+
+const SYMBOL_LIST = &[_][]const u8{
+    "(", ")", "[", "]", "{", "}",
+    "&", ".", ",", ";", ":",
+    "->",
+};
+
+pub const KEYWORDS = comptimeStringSet(KEYWORD_LIST);
+pub const SYMBOLS = comptimeStringSet(SYMBOL_LIST);
+
+pub const MAX_SYMBOL_LEN = max: {
+    var max: usize = 0;
+    for (SYMBOL_LIST) |sym| {
+        max = @max(max, sym.len);
     }
 
-    break :map std.ComptimeStringMap(Syntax, kvs);
+    break :max max;
 };
 
-/// a ComptimeStringMap(Syntax) where the key is the binary operator keyword
-pub const BINARY_SYNTAX = map: {
-    const arr = tableWhere(.binary);
+// [OLD SYNTAX TABLE]
+// x(.dict,  P.DEFAULT,        "{ <anno|seq>? }"),
+// x(.list,  P.DEFAULT,        "[ <>? ]"),
+// x(.@"if", P.DEFAULT,        "if <> then <> else <>"),
+// x(.@"fn", P.DEFAULT,        "fn <dict> -> <> = <>"),
+// x(.def,   P.DEFAULT,        "def <symbol|anno> = <> ; ;"),
 
-    const KV = struct {
-        @"0": []const u8,
-        @"1": Syntax,
-    };
+// x(.stmt,  P.STATEMENT,      "<> ; <>"),
 
-    var kvs: [arr.len]KV = undefined;
-    for (arr) |syntax, i| {
-        kvs[i] = KV{
-            .@"0" = syntax.fexprs[1].keyword,
-            .@"1" = syntax,
-        };
-    }
+// x(.seq,   P.SEQUENCE,       "<> , <>"),
 
-    break :map std.ComptimeStringMap(Syntax, kvs);
-};
+// x(.anno,  P.ANNOTATION,     "<symbol> : <>"),
+
+// x(.eq,    P.COMPARISON,     "<> == <>"),
+// x(.gt,    P.COMPARISON,     "<> > <>"),
+// x(.lt,    P.COMPARISON,     "<> < <>"),
+// x(.ge,    P.COMPARISON,     "<> >= <>"),
+// x(.le,    P.COMPARISON,     "<> <= <>"),
+
+// x(.add,   P.ADDITIVE,       "<> + <>"),
+// x(.sub,   P.ADDITIVE,       "<> - <>"),
+
+// x(.mul,   P.MULTIPLICATIVE, "<> * <>"),
+// x(.div,   P.MULTIPLICATIVE, "<> / <>"),
+// x(.mod,   P.MULTIPLICATIVE, "<> % <>"),
+
+// // CALL precedence goes here
+
+// x(.addr,  P.POINTER,        "& <>"),
+
+// x(.dot,   P.FIELD_ACCESS,   "<> . <>"),

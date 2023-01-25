@@ -43,12 +43,12 @@ const Parser = struct {
 };
 
 fn parseError(
-    p: *const Parser,
+    ally: Allocator,
     loc: Loc,
     comptime fmt: []const u8,
     args: anytype
 ) Allocator.Error!Result {
-    return try Message.err(p.ally, RawExpr, loc, fmt, args);
+    return try Message.err(ally, RawExpr, loc, fmt, args);
 }
 
 fn streamError(
@@ -64,336 +64,60 @@ fn streamError(
             break :eof Loc.of(p.file, final.stop, final.stop);
         };
 
-    return parseError(p, loc, fmt, args);
+    return parseError(p.ally, loc, fmt, args);
 }
 
 fn unexpectedEof(p: *const Parser) Allocator.Error!Result {
     return streamError(p, "unexpected EOF", .{});
 }
 
-fn expectKeyword(
-    p: *Parser,
-    kw: []const u8,
-) Allocator.Error!Message.Result(Token) {
-    const tok = p.peek() orelse {
-        const err = try streamError(p, "expected `{s}`, found EOF", .{kw});
-        return err.cast(Token);
-    };
-
-    if (tok.tag != .keyword or !std.mem.eql(u8, kw, tok.loc.slice(p.proj))) {
-        const err = try streamError(p, "expected `{s}`", .{kw});
-        return err.cast(Token);
-    }
-
-    p.eat();
-
-    return Message.Result(Token).ok(tok);
-}
-
-fn checkForm(
-    ally: Allocator,
-    allowed: []const Form,
-    loc: Loc,
-    form: Form
-) Allocator.Error!Message.Result(void) {
-    // a form is provided, so check it
-    const is_allowed = allowed.len == 0
-                    or std.mem.containsAtLeast(Form, allowed, 1, &.{form});
-
-    if (!is_allowed) {
-        if (allowed.len == 1) {
-            const fmt = "expected {s}, found {s}";
-            return Message.err(ally, void, loc, fmt, .{
-                allowed[0].name(),
-                form.name(),
-            });
-        }
-
-        var forms = std.ArrayList([]const u8).init(ally);
-        defer forms.deinit();
-
-        for (allowed) |against| {
-            try forms.append(against.name());
-        }
-
-        const fmt = "expected one of {s}, found {s}";
-        return Message.err(ally, void, loc, fmt, .{forms.items, form.name()});
-    }
-
-    return Message.Result(void).ok({});
-}
-
-fn expectSingleExpr(
-    p: *Parser,
-    power: usize,
-    allowed: []const Form
-) Allocator.Error!Result {
-    const res = try climb(p, power);
-    const expr = res.get() orelse return res;
-
-    return switch (try checkForm(p.ally, allowed, expr.loc, expr.form)) {
-        .ok => Result.ok(expr),
-        .err => |msg| Result.err(msg),
-    };
-}
-
-const ExpResult = Message.Result([]RawExpr);
-
-/// expect a single formexpr
-fn expectFormExpr(
-    p: *Parser,
-    power: usize,
-    fexpr: FormExpr
-) Allocator.Error!ExpResult {
-    return switch (fexpr) {
-        .keyword => |kw| switch (try expectKeyword(p, kw)) {
-            .ok => ExpResult.ok(&.{}),
-            .err => |msg| ExpResult.err(msg),
-        },
-        .expr => |meta| expr: {
-            const allowed = meta.allowed.slice();
-
-            break :expr switch (meta.flag) {
-                .one => one: {
-                    const res = try expectSingleExpr(p, power, allowed);
-                    const expr = res.get() orelse return res.cast([]RawExpr);
-
-                    const list = try p.ally.alloc(RawExpr, 1);
-                    list[0] = expr;
-
-                    break :one ExpResult.ok(list);
-                },
-                .maybe => switch (try expectSingleExpr(p, power, allowed)) {
-                    .ok => |expr| one: {
-                        const list = try p.ally.alloc(RawExpr, 1);
-                        list[0] = expr;
-                        break :one ExpResult.ok(list);
-                    },
-                    .err => |msg| none: {
-                        msg.deinit(p.ally);
-                        break :none ExpResult.ok(&.{});
-                    }
-                },
-                .any, .multi => coll: {
-                    var list = std.ArrayList(RawExpr).init(p.ally);
-                    defer list.deinit();
-
-                    while (true) {
-                        const el_index = p.strm.index;
-                        const el_res = try expectSingleExpr(p, power, allowed);
-                        const el = switch (el_res) {
-                            .ok => |expr| expr,
-                            .err => |msg| {
-                                if (meta.flag == .multi
-                                and list.items.len == 0) {
-                                    break :coll ExpResult.err(msg);
-                                }
-
-                                p.strm.index = el_index;
-                                msg.deinit(p.ally);
-                                break;
-                            }
-                        };
-
-                        try list.append(el);
-                    }
-
-                    break :coll ExpResult.ok(list.toOwnedSlice());
-                },
-            };
-        },
-    };
-}
-
-/// parse syntax where power is >= a certain power
-fn parseSyntax(p: *Parser, syntax: Syntax) Allocator.Error!Result {
-    const start_index = p.strm.index;
-
-    // parse each FormExpr in order
-    var group = std.ArrayList(RawExpr).init(p.ally);
-    defer group.deinit();
-
-    const fst_loc = p.peek().?.loc;
-
-    for (syntax.fexprs) |fexpr| {
-        const res = try expectFormExpr(p, syntax.prec.power, fexpr);
-        switch (res) {
-            .err => |msg| {
-                // early failure
-                for (group.items) |parsed| parsed.deinit(p.ally);
-                p.strm.index = start_index;
-                return Result.err(msg);
-            },
-            .ok => |got| {
-                defer p.ally.free(got);
-                try group.appendSlice(got);
-            },
-        }
-    }
-
-    const last_loc = p.prev().loc;
-
-    // make form expr
-    const loc = fst_loc.span(last_loc);
-    const exprs = group.toOwnedSlice();
-
-    return Result.ok(RawExpr{
-        .loc = loc,
-        .form = syntax.form,
-        .exprs = exprs,
-    });
-}
-
-/// parens require special logic with unit, forced calls, etc. and I don't want
-/// them to have their own ast form
-fn parseParens(p: *Parser) Allocator.Error!Result {
-    const start_index = p.strm.index;
-    const tok = p.peek().?;
-    p.eat();
-
-    std.debug.assert(std.mem.eql(u8, tok.loc.slice(p.proj), "("));
-
-    // check for unit
-    switch (try expectKeyword(p, ")")) {
-        .ok => |rparen| return Result.ok(RawExpr{
-            .loc = tok.loc.span(rparen.loc),
-            .form = .unit,
-        }),
-        .err => |msg| msg.deinit(p.ally),
-    }
-
-    // parse `( <> )` form
-    const child_res = try climb(p, 0);
-    const child = child_res.get() orelse {
-        p.strm.index = start_index;
-        return child_res;
-    };
-
-    const rparen_res = try expectKeyword(p, ")");
-    const rparen = rparen_res.get() orelse {
-        p.strm.index = start_index;
-        return rparen_res.cast(RawExpr);
-    };
-
-    // construct child, forcing calls if necessary
-    if (child.form == .symbol or child.form == .dot) {
-        const loc = tok.loc.span(rparen.loc);
-        return Result.ok(try RawExpr.init(p.ally, loc, .call, &.{child}));
-    }
-
-    return Result.ok(child);
-}
-
 fn parseAtom(p: *Parser) Allocator.Error!Result {
-    const tok = p.peek() orelse return unexpectedEof(p);
+    const tok = p.peek();
     return switch (tok.tag) {
-        .keyword => kw: {
-            const slice = tok.loc.slice(p.proj);
-            if (std.mem.eql(u8, slice, "(")) {
-                break :kw parseParens(p);
-            }
-
-            const syntax = auto.PREFIXED_SYNTAX.get(slice) orelse {
-                return streamError(p, "misplaced `{s}`", .{slice});
-            };
-
-            break :kw parseSyntax(p, syntax);
+        inline .symbol, .number, .string
+            => |tag| RawExpr{
+            .tag = @field(Form, @tagName(tag)),
+            .loc = tok.loc,
         },
-        inline .number, .string, .symbol => |tag| lit: {
-            p.eat();
-            break :lit Result.ok(RawExpr{
-                .loc = tok.loc,
-                .form = @field(Form, @tagName(tag)),
-            });
-        },
+        .word => @panic("TODO error parseAtom of word"),
     };
 }
 
-fn climb(p: *Parser, power: usize) Allocator.Error!Result {
-    const CALL_POWER = auto.PRECEDENCES.CALL.power;
+fn parseExpr(p: *Parser) Allocator.Error!Result {
+    _ = p;
 
-    // function calls require special behavior
-    var group = std.ArrayList(RawExpr).init(p.ally);
-    defer group.deinit();
+    // TODO
+}
 
-    if (power >= CALL_POWER) {
-        // parse atom
-        const head_res = try parseAtom(p);
-        const head = head_res.get() orelse return head_res;
+fn parseWord(p: *Parser) Allocator.Error!Message.Result(void) {
+    _ = p;
 
-        try group.append(head);
-    } else {
-        // parse call
-        const head_res = try climb(p, CALL_POWER);
-        const head = head_res.get() orelse return head_res;
+    // TODO
+}
 
-        try group.append(head);
-
-        while (true) {
-            const param = switch (try climb(p, CALL_POWER)) {
-                .ok => |got| got,
-                .err => |msg| {
-                    msg.deinit(p.ally);
-                    break;
-                }
-            };
-            try group.append(param);
-        }
+/// attempt to parse an expression at or above a certain precedence
+fn climb(p: *Parser, prec: usize) Allocator.Error!Result {
+    // atoms are always the highest precedence
+    if (prec > auto.SYNTAX.len) {
+        return parseAtom(p);
     }
 
-    var expr = if (group.items.len == 1) group.items[0] else call: {
-        const last = group.items[group.items.len - 1];
-        const loc = group.items[0].loc.span(last.loc);
-        break :call RawExpr{
-            .loc = loc,
-            .form = .call,
-            .exprs = group.toOwnedSlice(),
-        };
-    };
+    const start_index = p.strm.index;
+    _ = start_index;
 
-    // parse  ops
-    while (true) {
-        const next = p.peek() orelse break;
+    // collect the syntax rules at this precedence
+    const Valid = std.ArrayListUnmanaged(*const Syntax);
+    const prec_rules = auto.SYNTAX[prec];
 
-        // check if this is a binary op where precedence.power >= power
-        if (next.tag != .keyword) break;
+    var valid = try Valid.initCapacity(p.ally, prec_rules.len);
+    defer valid.deinit(p.ally);
 
-        const keyword = next.loc.slice(p.proj);
-        const syntax = auto.BINARY_SYNTAX.get(keyword) orelse break;
-
-        if (syntax.prec.power < power) break;
-
-        // check the left allowed forms
-        const l_allowed = syntax.fexprs[0].expr.allowed.slice();
-        const l_check = try checkForm(p.ally, l_allowed, expr.loc, expr.form);
-        if (l_check.getErr()) |msg| {
-            msg.deinit(p.ally);
-            break;
-        }
-
-        const bin_start_index = p.strm.index;
-
-        p.eat();
-
-        // token is a binary operator, dispatch climb
-        const climb_power = syntax.prec.power + @boolToInt(!syntax.prec.right);
-
-        const r_allowed = syntax.fexprs[2].expr.allowed.slice();
-        const rhs_res = try expectSingleExpr(p, climb_power, r_allowed);
-        const rhs = switch (rhs_res) {
-            .ok => |rhs| rhs,
-            .err => |msg| {
-                msg.deinit(p.ally);
-                p.strm.index = bin_start_index;
-                break;
-            }
-        };
-
-        const loc = expr.loc.span(rhs.loc);
-        expr = try RawExpr.init(p.ally, loc, syntax.form, &.{expr, rhs});
+    for (prec_rules) |*rule| {
+        valid.append(rule);
     }
 
-    return Result.ok(expr);
+    // attempt to parse each rule in parallel
+    // TODO
 }
 
 pub const ParseType = enum { file, expr };
@@ -406,6 +130,14 @@ pub fn parse(
     file: FileRef,
     what: ParseType
 ) Allocator.Error!Result {
+    for (auto.SYNTAX) |prec, i| {
+        std.debug.print("[{} precedence]\n", .{i});
+        for (prec) |syntax| {
+            std.debug.print("{}\n", .{syntax});
+        }
+        std.debug.print("\n", .{});
+    }
+
     // lex
     const lex_res = try lex.tokenize(ally, proj, file);
     const tokens = lex_res.get() orelse return lex_res.cast(RawExpr);

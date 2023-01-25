@@ -15,8 +15,8 @@ pub const Token = struct {
     pub const Tag = enum {
         number,
         string,
-        symbol,
-        keyword,
+        ident,
+        word,
     };
 
     tag: Tag,
@@ -90,9 +90,11 @@ fn lexNumber(lexer: *Lexer, loc: Loc) Error!Token {
 }
 
 fn tokenOfIdent(loc: Loc, slice: []const u8) Token {
+    // TODO split up symbols here
+
     const tag: Token.Tag =
         if (auto.KEYWORDS.has(slice)) .keyword
-        else .symbol;
+        else .ident;
 
     return Token.of(tag, loc);
 }
