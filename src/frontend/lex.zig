@@ -93,7 +93,7 @@ fn tokenOfIdent(loc: Loc, slice: []const u8) Token {
     // TODO split up symbols here
 
     const tag: Token.Tag =
-        if (auto.KEYWORDS.has(slice)) .keyword
+        if (auto.KEYWORDS.has(slice) or auto.SYMBOLS.has(slice)) .word
         else .ident;
 
     return Token.of(tag, loc);

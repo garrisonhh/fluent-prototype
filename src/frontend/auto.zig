@@ -94,6 +94,8 @@ pub const Form = enum {
 
 /// used by parseForm to encode syntax
 pub const FormExpr = union(enum) {
+    const Self = @This();
+
     pub const Flag = enum { one, opt, any, multi };
 
     pub const Expr = struct {
@@ -104,10 +106,15 @@ pub const FormExpr = union(enum) {
     };
 
     expr: Expr,
-    word: []const u8,
+    word: []const u8, // TODO use common.Symbol
+
+    /// whether this fexpr represents this word
+    pub fn isWord(self: Self, word: []const u8) bool {
+        return self == .word and std.mem.eql(u8, word, self.word);
+    }
 
     pub fn format(
-        self: @This(),
+        self: Self,
         comptime _: []const u8,
         _: std.fmt.FormatOptions,
         writer: anytype,
@@ -205,6 +212,12 @@ pub const Syntax = struct {
             var tokens = std.mem.tokenize(u8, str, " ");
             while (tokens.next()) |tok| : (index += 1) {
                 fexprs[index] = parseFormExpr(tok);
+
+                // currently I'm not using the modifiers
+                if (fexprs[index] == .expr
+                and fexprs[index].expr.flag != .one) {
+                    @compileError("sorry, flags don't work right now!");
+                }
             }
 
             // second pass to find contained exprs
@@ -254,6 +267,7 @@ pub const SYNTAX = t: {
     break :t &[_][]const Syntax {
         &.{
             x(.parens, .left,  "`( $ `)"),
+            x(.@"if",  .right, "`if $ `then $ `else $"),
         },
         &.{
             x(.add,    .left,  "$ `+ $"),
@@ -306,35 +320,3 @@ pub const MAX_SYMBOL_LEN = max: {
 
     break :max max;
 };
-
-// [OLD SYNTAX TABLE]
-// x(.dict,  P.DEFAULT,        "{ <anno|seq>? }"),
-// x(.list,  P.DEFAULT,        "[ <>? ]"),
-// x(.@"if", P.DEFAULT,        "if <> then <> else <>"),
-// x(.@"fn", P.DEFAULT,        "fn <dict> -> <> = <>"),
-// x(.def,   P.DEFAULT,        "def <symbol|anno> = <> ; ;"),
-
-// x(.stmt,  P.STATEMENT,      "<> ; <>"),
-
-// x(.seq,   P.SEQUENCE,       "<> , <>"),
-
-// x(.anno,  P.ANNOTATION,     "<symbol> : <>"),
-
-// x(.eq,    P.COMPARISON,     "<> == <>"),
-// x(.gt,    P.COMPARISON,     "<> > <>"),
-// x(.lt,    P.COMPARISON,     "<> < <>"),
-// x(.ge,    P.COMPARISON,     "<> >= <>"),
-// x(.le,    P.COMPARISON,     "<> <= <>"),
-
-// x(.add,   P.ADDITIVE,       "<> + <>"),
-// x(.sub,   P.ADDITIVE,       "<> - <>"),
-
-// x(.mul,   P.MULTIPLICATIVE, "<> * <>"),
-// x(.div,   P.MULTIPLICATIVE, "<> / <>"),
-// x(.mod,   P.MULTIPLICATIVE, "<> % <>"),
-
-// // CALL precedence goes here
-
-// x(.addr,  P.POINTER,        "& <>"),
-
-// x(.dot,   P.FIELD_ACCESS,   "<> . <>"),

@@ -29,6 +29,10 @@ const Parser = struct {
         return self.strm.done();
     }
 
+    fn reset(self: *Self, index: usize) void {
+        self.strm.index = index;
+    }
+
     fn peek(self: Self) ?Token {
         return self.strm.peek();
     }
@@ -72,52 +76,138 @@ fn unexpectedEof(p: *const Parser) Allocator.Error!Result {
 }
 
 fn parseAtom(p: *Parser) Allocator.Error!Result {
-    const tok = p.peek();
+    const tok = p.peek() orelse return unexpectedEof(p);
     return switch (tok.tag) {
-        inline .symbol, .number, .string
-            => |tag| RawExpr{
-            .tag = @field(Form, @tagName(tag)),
-            .loc = tok.loc,
+        inline .ident, .number, .string => |tag| lit: {
+            p.eat();
+            break :lit Result.ok(RawExpr{
+                .form = comptime switch (tag) {
+                    .ident => .symbol,
+                    .number => .number,
+                    .string => .string,
+                    else => unreachable
+                },
+                .loc = tok.loc,
+            });
         },
-        .word => @panic("TODO error parseAtom of word"),
+        .word => return streamError(p, "expected expression", .{}),
     };
-}
-
-fn parseExpr(p: *Parser) Allocator.Error!Result {
-    _ = p;
-
-    // TODO
-}
-
-fn parseWord(p: *Parser) Allocator.Error!Message.Result(void) {
-    _ = p;
-
-    // TODO
 }
 
 /// attempt to parse an expression at or above a certain precedence
 fn climb(p: *Parser, prec: usize) Allocator.Error!Result {
+    if (p.done()) {
+        return unexpectedEof(p);
+    }
+
     // atoms are always the highest precedence
-    if (prec > auto.SYNTAX.len) {
+    if (prec >= auto.SYNTAX.len) {
         return parseAtom(p);
     }
 
     const start_index = p.strm.index;
-    _ = start_index;
+    const start_loc = p.peek().?.loc;
 
-    // collect the syntax rules at this precedence
-    const Valid = std.ArrayListUnmanaged(*const Syntax);
-    const prec_rules = auto.SYNTAX[prec];
-
-    var valid = try Valid.initCapacity(p.ally, prec_rules.len);
+    // collect the syntax rules at or above this precedence
+    const ValidList = std.ArrayListUnmanaged(*const Syntax);
+    var valid = ValidList{};
     defer valid.deinit(p.ally);
 
-    for (prec_rules) |*rule| {
-        valid.append(rule);
+    for (auto.SYNTAX[prec]) |*rule| {
+        try valid.append(p.ally, rule);
     }
 
     // attempt to parse each rule in parallel
-    // TODO
+    var exprs = std.ArrayList(RawExpr).init(p.ally);
+    defer exprs.deinit();
+
+    var fexpr_index: usize = 0;
+    while (true) {
+        const tok = p.peek() orelse {
+            if (exprs.items.len == 1) {
+                return Result.ok(exprs.items[0]);
+            } else {
+                defer p.reset(start_index);
+                return unexpectedEof(p);
+            }
+        };
+
+        var parse_expr = true;
+
+        if (tok.tag == .word) {
+            parse_expr = false;
+
+            const tok_word = tok.loc.slice(p.proj);
+
+            // if this word represents the next bit of a valid rule, continue
+            // parsing that rule
+            var still_valid =
+                try ValidList.initCapacity(p.ally, valid.items.len);
+            defer still_valid.deinit(p.ally);
+
+            for (valid.items) |rule| {
+                if (rule.fexprs[fexpr_index].isWord(tok_word)) {
+                    still_valid.appendAssumeCapacity(rule);
+                }
+            }
+
+            if (still_valid.items.len > 0) {
+                // only some rules are valid now
+                p.eat();
+
+                std.debug.print("{}: accepted `{s}`\n", .{prec, tok_word});
+
+                valid.shrinkAndFree(p.ally, 0);
+                try valid.appendSlice(p.ally, still_valid.items);
+                fexpr_index += 1;
+
+            } else {
+                // if all rules were ruled out, try parsing an expr
+                parse_expr = true;
+            }
+        }
+
+        if (parse_expr) {
+            // ensure that a syntax rule can accept an expr
+            const accepts_expr = for (valid.items) |rule| {
+                if (rule.fexprs[fexpr_index] == .expr) break true;
+            } else false;
+
+            if (!accepts_expr) {
+                if (fexpr_index == 1 and exprs.items.len == 1) {
+                    return Result.ok(exprs.items[0]);
+                } else {
+                    p.reset(start_index);
+                    return climb(p, prec + 1);
+                }
+            }
+
+            // try to parse an expr TODO containers
+            const left_recursive = fexpr_index == 0;
+            const res = try climb(p, prec + @boolToInt(left_recursive));
+            const expr = res.get() orelse {
+                p.reset(start_index);
+                return res;
+            };
+
+            try exprs.append(expr);
+            fexpr_index += 1;
+
+            std.debug.print("{}: accepted {s}\n", .{prec, @tagName(expr.form)});
+        }
+
+        // if a syntax rule has been completed, parsing is done and a form
+        // can be returned
+        for (valid.items) |rule| {
+            if (fexpr_index == rule.fexprs.len) {
+                return Result.ok(RawExpr{
+                    .form = rule.form,
+                    .loc = start_loc.span(p.prev().loc),
+                    .exprs = exprs.toOwnedSlice(),
+                });
+            }
+        }
+    }
 }
 
 pub const ParseType = enum { file, expr };
@@ -142,6 +232,10 @@ pub fn parse(
     const lex_res = try lex.tokenize(ally, proj, file);
     const tokens = lex_res.get() orelse return lex_res.cast(RawExpr);
     defer ally.free(tokens);
+
+    for (tokens) |token| {
+        std.debug.print("[{s}] `{s}`\n", .{@tagName(token.tag), token.loc.slice(proj)});
+    }
 
     // parse, respecting behavior based on file vs. expr parsing
     var parser = Parser{
