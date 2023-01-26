@@ -97,12 +97,19 @@ pub const FormExpr = union(enum) {
     const Self = @This();
 
     pub const Flag = enum { one, opt, any, multi };
+    pub const ClimbBehavior = enum { same, increase, reset };
 
     pub const Expr = struct {
         flag: Flag = .one,
-        /// if an expr is contained, it resets the climbing precedence.
-        /// otherwise, exprs here must match or exceed the current precedence
-        container: bool = false,
+        behavior: ClimbBehavior = .same,
+
+        pub fn innerPrec(self: @This(), prec: usize) usize {
+            return switch (self.behavior) {
+                .same => prec,
+                .increase => prec + 1,
+                .reset => 0,
+            };
+        }
     };
 
     expr: Expr,
@@ -121,11 +128,13 @@ pub const FormExpr = union(enum) {
     ) @TypeOf(writer).Error!void {
         switch (self) {
             .expr => |expr| {
-                if (expr.container) {
-                    try writer.writeAll("<>");
-                } else {
-                    try writer.writeByte('$');
-                }
+                try writer.writeByte('$');
+
+                try writer.writeAll(switch (expr.behavior) {
+                    .same => "",
+                    .increase => "+",
+                    .reset => "0",
+                });
 
                 try writer.writeAll(switch (expr.flag) {
                     .one => "",
@@ -145,10 +154,9 @@ pub const FormExpr = union(enum) {
 pub const Syntax = struct {
     const Self = @This();
 
-    pub const Direction = enum { left, right };
+    const Direction = enum { l, r };
 
     form: Form,
-    dir: Direction,
     fexprs: []const FormExpr,
 
     fn fexprsCount(comptime str: []const u8) usize {
@@ -204,7 +212,10 @@ pub const Syntax = struct {
     /// - '`' followed by a keyword or symbol
     /// - '$' representing a child expr, followed by one of '*', '?', or '+'
     ///   which represent their regex counterparts
-    fn parseForm(comptime str: []const u8) [fexprsCount(str)]FormExpr {
+    fn parseForm(
+        comptime dir: Direction,
+        comptime str: []const u8
+    ) [fexprsCount(str)]FormExpr {
         comptime {
             var fexprs: [fexprsCount(str)]FormExpr = undefined;
             var index: usize = 0;
@@ -220,7 +231,20 @@ pub const Syntax = struct {
                 }
             }
 
-            // second pass to find contained exprs
+            // directions are handled by changing the precedence climbing rule
+            // for LR or RR exprs to ignore all same-precedence rules. this is
+            // so that the parser doesn't have to understand directions
+            const inc_index = switch (dir) {
+                .l => fexprs.len - 1,
+                .r => 0,
+            };
+
+            if (fexprs[inc_index] == .expr) {
+                fexprs[inc_index].expr.behavior = .increase;
+            }
+
+            // if an expression is inside of two keywords, it is a 'container'
+            // and precedence should be reset when parsing it
             var i: usize = 1;
             while (i < fexprs.len - 1) : (i += 1) {
                 const is_container = fexprs[i] == .expr
@@ -228,7 +252,7 @@ pub const Syntax = struct {
                                  and fexprs[i + 1] == .word;
 
                 if (is_container) {
-                    fexprs[i].expr.container = true;
+                    fexprs[i].expr.behavior = .reset;
                 }
             }
 
@@ -236,11 +260,14 @@ pub const Syntax = struct {
         }
     }
 
-    pub fn init(form: Form, dir: Direction, comptime syntax: []const u8) Self {
+    pub fn init(
+        form: Form,
+        comptime dir: Direction,
+        comptime syntax: []const u8
+    ) Self {
         return Self{
             .form = form,
-            .dir = dir,
-            .fexprs = &parseForm(syntax),
+            .fexprs = &parseForm(dir, syntax),
         };
     }
 
@@ -250,10 +277,7 @@ pub const Syntax = struct {
         _: std.fmt.FormatOptions,
         writer: anytype,
     ) @TypeOf(writer).Error!void {
-        try writer.print(
-            "[{s} {c}]",
-            .{@tagName(self.form), @tagName(self.dir)[0]}
-        );
+        try writer.print("[{s}]", .{@tagName(self.form)});
 
         for (self.fexprs) |fexpr| {
             try writer.print(" {}", .{fexpr});
@@ -266,17 +290,17 @@ pub const SYNTAX = t: {
     const x = Syntax.init;
     break :t &[_][]const Syntax {
         &.{
-            x(.parens, .left,  "`( $ `)"),
-            x(.@"if",  .right, "`if $ `then $ `else $"),
+            x(.parens, .l, "`( $ `)"),
+            x(.@"if",  .r, "`if $ `then $ `else $"),
         },
         &.{
-            x(.add,    .left,  "$ `+ $"),
-            x(.sub,    .left,  "$ `- $"),
+            x(.add,    .l, "$ `+ $"),
+            x(.sub,    .l, "$ `- $"),
         },
         &.{
-            x(.mul,    .left,  "$ `* $"),
-            x(.div,    .left,  "$ `/ $"),
-            x(.mod,    .left,  "$ `% $"),
+            x(.mul,    .l, "$ `* $"),
+            x(.div,    .l, "$ `/ $"),
+            x(.mod,    .l, "$ `% $"),
         },
     };
 };
@@ -298,15 +322,17 @@ fn comptimeStringSet(comptime list: []const []const u8) type {
 }
 
 const KEYWORD_LIST = &[_][]const u8{
-    "=", "+", "-", "*", "/", "%",
-    "==", ">", "<", ">=", "<=",
     "if", "then", "else", "def", "fn",
 };
 
 const SYMBOL_LIST = &[_][]const u8{
-    "(", ")", "[", "]", "{", "}",
-    "&", ".", ",", ";", ":",
-    "->",
+    "&", ".", "=", "::", "->", ",", ";", ":",
+    // math
+    "=", "+", "-", "*", "/", "%",
+    // cond
+    "==", ">", "<", ">=", "<=",
+    // matched
+    "(", ")", "[", "]", "{", "}", "|",
 };
 
 pub const KEYWORDS = comptimeStringSet(KEYWORD_LIST);
