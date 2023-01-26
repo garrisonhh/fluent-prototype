@@ -66,7 +66,8 @@ alloc :: fn { size: usize } mem (slice u8) ->
   mem.realloc &[] size
 
 dupe :: fn { data: slice u8 } mem (slice u8) ->
-  cloned = ref (alloc data.len); // `ref` creates a stack allocated `*mut T`
+  // `ref` ensures a variable is stack allocated and gives you a `*mut` to it
+  cloned = ref (alloc data.len);
   memcpy cloned data; // memcpy will probably be a prelude function
   cloned
 ```
