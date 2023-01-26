@@ -45,24 +45,36 @@ build language features around this.
 here's an example of a zig function decl and the equivalent (goal) *fluent*:
 
 ```zig
+const Allocator = @import("std").mem.Allocator;
+
 fn dupe(ally: Allocator, bytes: []const u8) Allocator.Error![]u8 {
   // ...
 }
 ```
 
-Allocator in this case is a context which provides allocation capabilities,
-and OnAllocFailure is a callback used when allocation fails.
-
 ```
-def dupe (Fn [] [(Slice u8)] [(Ptr Allocator), OnAllocFailure])
-  // ...
+// defines an effect interface which:
+// - provides a context object
+// - provides a realloc() function which provides memory management
+// TODO unsure about this syntax
+mem :: effect {
+  context: *mut opaque,
+  realloc: *Fn [T] [slice T, usize] slice T,
+}
+
+alloc :: fn { size: usize } mem (slice u8) ->
+  mem.realloc &[] size
+
+dupe :: fn { data: slice u8 } mem (slice u8) ->
+  cloned = ref (alloc data.len); // `ref` creates a stack allocated `*mut T`
+  memcpy cloned data; // memcpy will probably be a prelude function
+  cloned
 ```
 
 you could then do something along the lines of:
 
 ```
-with [(ref allocator), my-error-callback]
-  dupe bytes
+with my-allocator (dupe bytes)
 ```
 
 these effects and contexts can be implicitly passed between functions, to
