@@ -280,6 +280,17 @@ pub const Syntax = struct {
         return left == .expr and left.expr.behavior == .same;
     }
 
+    /// whether this rule starts with a word
+    pub fn isPrefixed(self: Self) bool {
+        return self.fexprs[0] == .word;
+    }
+
+    /// whether this rule starts with a specific word
+    pub fn hasPrefix(self: Self, prefix: []const u8) bool {
+        const left = self.fexprs[0];
+        return left == .word and std.mem.eql(u8, prefix, left.word);
+    }
+
     pub fn format(
         self: Self,
         comptime _: []const u8,

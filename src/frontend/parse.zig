@@ -79,7 +79,29 @@ fn syntaxError(p: *const Parser) Allocator.Error!Result {
 fn parseAtom(p: *Parser) Allocator.Error!?RawExpr {
     const tok = p.peek() orelse return null;
     return switch (tok.tag) {
-        .word => null,
+        .word => prefixed: {
+            // try to parse any prefixed ops
+            // TODO this is absurdly trivially optimizable with a hashmap
+            const word = tok.loc.slice(p.proj);
+
+            var i: usize = auto.SYNTAX.len;
+            while (i > 0) : (i -= 1) {
+                const prec = i - 1;
+                const ruleset = auto.SYNTAX[prec];
+
+                for (ruleset) |rule| {
+                    if (rule.hasPrefix(word)) {
+                        const res = try parsePrefixedSyntax(p, rule, prec);
+                        if (res) |expr| {
+                            return expr;
+                        }
+                    }
+                }
+            }
+
+            // no rule matched
+            break :prefixed null;
+        },
         inline .ident, .number, .string => |tag| lit: {
             p.eat();
             break :lit RawExpr{
@@ -95,18 +117,18 @@ fn parseAtom(p: *Parser) Allocator.Error!?RawExpr {
     };
 }
 
-/// parses syntax, doesn't reset parser on failure
-fn parseNonLRSyntax(
+fn parseFormExprs(
     p: *Parser,
-    syntax: Syntax,
+    fexprs: []const FormExpr,
     prec: usize,
-) Allocator.Error!?RawExpr {
-    std.debug.assert(!syntax.isLR());
-
+) Allocator.Error!?[]RawExpr {
     var exprs = std.ArrayList(RawExpr).init(p.ally);
-    defer exprs.deinit();
+    defer {
+        for (exprs.items) |expr| expr.deinit(p.ally);
+        exprs.deinit();
+    }
 
-    for (syntax.fexprs) |fexpr| {
+    for (fexprs) |fexpr| {
         switch (fexpr) {
             .word => |word| {
                 const tok = p.peek() orelse return null;
@@ -127,31 +149,73 @@ fn parseNonLRSyntax(
         }
     }
 
-    // success
-    const start_loc = exprs.items[0].loc;
-    const stop_loc = exprs.items[exprs.items.len - 1].loc;
-
-    return RawExpr{
-        .form = syntax.form,
-        .loc = start_loc.span(stop_loc),
-        .exprs = exprs.toOwnedSlice(),
-    };
+    return exprs.toOwnedSlice();
 }
 
-// same as parseSyntax but allows left-recursion
-fn parseLRSyntax(
+/// parses syntax, doesn't reset parser on failure
+fn parsePrefixedSyntax(
     p: *Parser,
     syntax: Syntax,
     prec: usize,
 ) Allocator.Error!?RawExpr {
-    std.debug.assert(syntax.isLR());
+    std.debug.assert(syntax.isPrefixed());
 
-    _ = p;
-    _ = prec;
+    const next = p.peek() orelse {
+        return null;
+    };
+    const start_loc = next.loc;
 
-    // TODO lr syntax
+    const exprs = (try parseFormExprs(p, syntax.fexprs, prec)) orelse {
+        return null;
+    };
 
-    return null;
+    // success
+    const stop_loc = p.prev().loc;
+
+    return RawExpr{
+        .form = syntax.form,
+        .loc = start_loc.span(stop_loc),
+        .exprs = exprs,
+    };
+}
+
+/// parses syntax, doesn't reset parser on failure
+/// allows left recursion
+fn parseUnprefixedSyntax(
+    p: *Parser,
+    syntax: Syntax,
+    prec: usize,
+    leftmost: RawExpr,
+) Allocator.Error!?RawExpr {
+    std.debug.assert(!syntax.isPrefixed());
+
+    var exprs = std.ArrayList(RawExpr).init(p.ally);
+    defer {
+        if (exprs.items.len > 1) {
+            // leftmost expr is not managed by this function
+            for (exprs.items[1..]) |expr| expr.deinit(p.ally);
+        }
+        exprs.deinit();
+    }
+
+    try exprs.append(leftmost);
+
+    // parse this left expr
+    const fexprs = syntax.fexprs[1..];
+    const rule_exprs = (try parseFormExprs(p, fexprs, prec)) orelse {
+        return null;
+    };
+
+    try exprs.appendSlice(rule_exprs);
+
+    // success
+    const loc = leftmost.loc.span(p.prev().loc);
+
+    return RawExpr{
+        .form = syntax.form,
+        .loc = loc,
+        .exprs = exprs.toOwnedSlice(),
+    };
 }
 
 /// attempt to parse an expression at or above a certain precedence
@@ -163,19 +227,52 @@ fn climb(p: *Parser, prec: usize) Allocator.Error!?RawExpr {
 
     // try to parse all of the syntax
     const start_index = p.strm.index;
+    const leftmost = try climb(p, prec + 1);
 
-    for (auto.SYNTAX[prec]) |rule| {
-        const res =
-            if (rule.isLR()) try parseLRSyntax(p, rule, prec)
-            else try parseNonLRSyntax(p, rule, prec);
+    var expr = parse: for (auto.SYNTAX[prec]) |rule| {
+        var res: ?RawExpr = null;
 
-        if (res) |expr| return expr;
+        if (leftmost) |left_expr| {
+            if (!rule.isPrefixed()) {
+                res = try parseUnprefixedSyntax(p, rule, prec, left_expr);
+            }
+        } else if (rule.isPrefixed()) {
+            res = try parsePrefixedSyntax(p, rule, prec);
+        }
+
+        if (res) |got| {
+            break :parse got;
+        }
 
         p.reset(start_index);
+    } else {
+        // no rules found at this precedence, attempt climbing
+        break :parse (try climb(p, prec + 1)) orelse {
+            return null;
+        };
+    };
+
+    // keep parsing LR rules until it's not possible anymore
+    parse_lr: while (true) {
+        const lr_start_index = p.strm.index;
+
+        next_lr: for (auto.SYNTAX[prec]) |rule| {
+            if (!rule.isLR()) continue;
+
+            const res = try parseUnprefixedSyntax(p, rule, prec, expr);
+            if (res) |got| {
+                expr = got;
+                break :next_lr;
+            }
+
+            p.reset(lr_start_index);
+        } else {
+            // no more rules worked, break the outer loop
+            break :parse_lr;
+        }
     }
 
-    // parsing at this precedence failed, attempt climbing
-    return try climb(p, prec + 1);
+    return expr;
 }
 
 pub const ParseType = enum { file, expr };
@@ -223,6 +320,10 @@ pub fn parse(
             }
 
             if (try climb(&parser, 0)) |expr| {
+                if (!parser.done()) {
+                    return syntaxError(&parser);
+                }
+
                 return Result.ok(expr);
             }
 
