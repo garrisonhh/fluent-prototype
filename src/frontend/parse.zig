@@ -71,16 +71,18 @@ fn streamError(
     return parseError(p.ally, loc, fmt, args);
 }
 
-fn unexpectedEof(p: *const Parser) Allocator.Error!Result {
-    return streamError(p, "unexpected EOF", .{});
+/// generic error at current parsing location
+fn syntaxError(p: *const Parser) Allocator.Error!Result {
+    return streamError(p, "syntax error", .{});
 }
 
-fn parseAtom(p: *Parser) Allocator.Error!Result {
-    const tok = p.peek() orelse return unexpectedEof(p);
+fn parseAtom(p: *Parser) Allocator.Error!?RawExpr {
+    const tok = p.peek() orelse return null;
     return switch (tok.tag) {
+        .word => null,
         inline .ident, .number, .string => |tag| lit: {
             p.eat();
-            break :lit Result.ok(RawExpr{
+            break :lit RawExpr{
                 .form = comptime switch (tag) {
                     .ident => .symbol,
                     .number => .number,
@@ -88,126 +90,92 @@ fn parseAtom(p: *Parser) Allocator.Error!Result {
                     else => unreachable
                 },
                 .loc = tok.loc,
-            });
+            };
         },
-        .word => return streamError(p, "expected expression", .{}),
     };
 }
 
-/// attempt to parse an expression at or above a certain precedence
-fn climb(p: *Parser, prec: usize) Allocator.Error!Result {
-    if (p.done()) {
-        return unexpectedEof(p);
+/// parses syntax, doesn't reset parser on failure
+fn parseNonLRSyntax(
+    p: *Parser,
+    syntax: Syntax,
+    prec: usize,
+) Allocator.Error!?RawExpr {
+    std.debug.assert(!syntax.isLR());
+
+    var exprs = std.ArrayList(RawExpr).init(p.ally);
+    defer exprs.deinit();
+
+    for (syntax.fexprs) |fexpr| {
+        switch (fexpr) {
+            .word => |word| {
+                const tok = p.peek() orelse return null;
+                const slice = tok.loc.slice(p.proj);
+
+                if (!std.mem.eql(u8, slice, word)) {
+                    return null;
+                }
+
+                p.eat();
+            },
+            .expr => |meta| {
+                const expr = (try climb(p, meta.innerPrec(prec))) orelse {
+                    return null;
+                };
+                try exprs.append(expr);
+            },
+        }
     }
 
+    // success
+    const start_loc = exprs.items[0].loc;
+    const stop_loc = exprs.items[exprs.items.len - 1].loc;
+
+    return RawExpr{
+        .form = syntax.form,
+        .loc = start_loc.span(stop_loc),
+        .exprs = exprs.toOwnedSlice(),
+    };
+}
+
+// same as parseSyntax but allows left-recursion
+fn parseLRSyntax(
+    p: *Parser,
+    syntax: Syntax,
+    prec: usize,
+) Allocator.Error!?RawExpr {
+    std.debug.assert(syntax.isLR());
+
+    _ = p;
+    _ = prec;
+
+    // TODO lr syntax
+
+    return null;
+}
+
+/// attempt to parse an expression at or above a certain precedence
+fn climb(p: *Parser, prec: usize) Allocator.Error!?RawExpr {
     // atoms are always the highest precedence
     if (prec >= auto.SYNTAX.len) {
         return parseAtom(p);
     }
 
+    // try to parse all of the syntax
     const start_index = p.strm.index;
-    const start_loc = p.peek().?.loc;
 
-    // collect the syntax rules at or above this precedence
-    const ValidList = std.ArrayListUnmanaged(*const Syntax);
-    var valid = ValidList{};
-    defer valid.deinit(p.ally);
+    for (auto.SYNTAX[prec]) |rule| {
+        const res =
+            if (rule.isLR()) try parseLRSyntax(p, rule, prec)
+            else try parseNonLRSyntax(p, rule, prec);
 
-    for (auto.SYNTAX[prec]) |*rule| {
-        try valid.append(p.ally, rule);
+        if (res) |expr| return expr;
+
+        p.reset(start_index);
     }
 
-    // attempt to parse each rule in parallel
-    var exprs = std.ArrayList(RawExpr).init(p.ally);
-    defer exprs.deinit();
-
-    var fexpr_index: usize = 0;
-    while (true) {
-        const tok = p.peek() orelse {
-            if (exprs.items.len == 1) {
-                return Result.ok(exprs.items[0]);
-            } else {
-                defer p.reset(start_index);
-                return unexpectedEof(p);
-            }
-        };
-
-        var parse_expr = true;
-
-        if (tok.tag == .word) {
-            parse_expr = false;
-
-            const tok_word = tok.loc.slice(p.proj);
-
-            // if this word represents the next bit of a valid rule, continue
-            // parsing that rule
-            var still_valid =
-                try ValidList.initCapacity(p.ally, valid.items.len);
-            defer still_valid.deinit(p.ally);
-
-            for (valid.items) |rule| {
-                if (rule.fexprs[fexpr_index].isWord(tok_word)) {
-                    still_valid.appendAssumeCapacity(rule);
-                }
-            }
-
-            if (still_valid.items.len > 0) {
-                // only some rules are valid now
-                p.eat();
-
-                std.debug.print("{}: accepted `{s}`\n", .{prec, tok_word});
-
-                valid.shrinkAndFree(p.ally, 0);
-                try valid.appendSlice(p.ally, still_valid.items);
-                fexpr_index += 1;
-
-            } else {
-                // if all rules were ruled out, try parsing an expr
-                parse_expr = true;
-            }
-        }
-
-        if (parse_expr) {
-            // ensure that a syntax rule can accept an expr
-            const accepts_expr = for (valid.items) |rule| {
-                if (rule.fexprs[fexpr_index] == .expr) break true;
-            } else false;
-
-            if (!accepts_expr) {
-                if (fexpr_index == 1 and exprs.items.len == 1) {
-                    return Result.ok(exprs.items[0]);
-                } else {
-                    p.reset(start_index);
-                    return climb(p, prec + 1);
-                }
-            }
-
-            // try to parse an expr TODO containers
-            const left_recursive = fexpr_index == 0;
-            const res = try climb(p, prec + @boolToInt(left_recursive));
-            const expr = res.get() orelse {
-                p.reset(start_index);
-                return res;
-            };
-
-            try exprs.append(expr);
-            fexpr_index += 1;
-
-            std.debug.print("{}: accepted {s}\n", .{prec, @tagName(expr.form)});
-        }
-
-        // if a syntax rule has been completed, parsing is done and a form
-        // can be returned
-        for (valid.items) |rule| {
-            if (fexpr_index == rule.fexprs.len) {
-                return Result.ok(RawExpr{
-                    .form = rule.form,
-                    .loc = start_loc.span(p.prev().loc),
-                    .exprs = exprs.toOwnedSlice(),
-                });
-            }
-        }
-    }
+    // parsing at this precedence failed, attempt climbing
+    return try climb(p, prec + 1);
 }
 
 pub const ParseType = enum { file, expr };
@@ -254,14 +222,11 @@ pub fn parse(
                 });
             }
 
-            const res = try climb(&parser, 0);
-
-            if (res == .ok and !parser.done()) {
-                const fmt = "leftover tokens after parsing";
-                return try streamError(&parser, fmt, .{});
+            if (try climb(&parser, 0)) |expr| {
+                return Result.ok(expr);
             }
 
-            return res;
+            return syntaxError(&parser);
         },
         .file => {
             var exprs = std.ArrayList(RawExpr).init(ally);
@@ -271,12 +236,14 @@ pub fn parse(
             }
 
             while (!parser.done()) {
-                switch (try climb(&parser, 0)) {
-                    .ok => |expr| try exprs.append(expr),
-                    .err => |msg| return Result.err(msg),
+                if (try climb(&parser, 0)) |expr| {
+                    try exprs.append(expr);
+                } else {
+                    return syntaxError(&parser);
                 }
             }
 
+            // files need to be wrapped in a file expr
             const loc = switch (exprs.items.len) {
                 0 => Loc.of(file, 0, 0),
                 1 => exprs.items[0].loc,
@@ -287,7 +254,6 @@ pub fn parse(
                 }
             };
 
-            // files need to be wrapped in a file expr
             return Result.ok(RawExpr{
                 .loc = loc,
                 .form = .file,

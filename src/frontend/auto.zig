@@ -265,10 +265,19 @@ pub const Syntax = struct {
         comptime dir: Direction,
         comptime syntax: []const u8
     ) Self {
+        const fexprs = &parseForm(dir, syntax);
+        std.debug.assert(fexprs.len > 0);
+
         return Self{
             .form = form,
-            .fexprs = &parseForm(dir, syntax),
+            .fexprs = fexprs,
         };
+    }
+
+    /// whether this rule is left-recursive
+    pub fn isLR(self: Self) bool {
+        const left = self.fexprs[0];
+        return left == .expr and left.expr.behavior == .same;
     }
 
     pub fn format(
@@ -283,26 +292,6 @@ pub const Syntax = struct {
             try writer.print(" {}", .{fexpr});
         }
     }
-};
-
-/// syntax organized by precedence in ascending order
-pub const SYNTAX = t: {
-    const x = Syntax.init;
-    break :t &[_][]const Syntax {
-        &.{
-            x(.parens, .l, "`( $ `)"),
-            x(.@"if",  .r, "`if $ `then $ `else $"),
-        },
-        &.{
-            x(.add,    .l, "$ `+ $"),
-            x(.sub,    .l, "$ `- $"),
-        },
-        &.{
-            x(.mul,    .l, "$ `* $"),
-            x(.div,    .l, "$ `/ $"),
-            x(.mod,    .l, "$ `% $"),
-        },
-    };
 };
 
 fn comptimeStringSet(comptime list: []const []const u8) type {
@@ -321,9 +310,32 @@ fn comptimeStringSet(comptime list: []const []const u8) type {
     }
 }
 
-const KEYWORD_LIST = &[_][]const u8{
-    "if", "then", "else", "def", "fn",
+/// syntax organized by precedence in ascending order
+pub const SYNTAX = t: {
+    const x = Syntax.init;
+    break :t &[_][]const Syntax {
+        &.{
+            x(.def,    .r, "$ `:: $"),
+        },
+        &.{
+            x(.parens, .l, "`( $ `)"),
+            x(.@"if",  .r, "`if $ `then $ `else $"),
+        },
+        &.{
+            x(.add,    .l, "$ `+ $"),
+            x(.sub,    .l, "$ `- $"),
+        },
+        &.{
+            x(.mul,    .l, "$ `* $"),
+            x(.div,    .l, "$ `/ $"),
+            x(.mod,    .l, "$ `% $"),
+        },
+    };
 };
+
+pub const KEYWORDS = comptimeStringSet(&.{
+    "if", "then", "else", "def", "fn",
+});
 
 const SYMBOL_LIST = &[_][]const u8{
     "&", ".", "=", "::", "->", ",", ";", ":",
@@ -335,7 +347,6 @@ const SYMBOL_LIST = &[_][]const u8{
     "(", ")", "[", "]", "{", "}", "|",
 };
 
-pub const KEYWORDS = comptimeStringSet(KEYWORD_LIST);
 pub const SYMBOLS = comptimeStringSet(SYMBOL_LIST);
 
 pub const MAX_SYMBOL_LEN = max: {
