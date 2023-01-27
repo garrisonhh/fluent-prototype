@@ -209,11 +209,5 @@ pub fn tokenize(
         }
     };
 
-    // std.debug.print("[tokens]\n", .{});
-    // for (tokens.items) |token| {
-        // const slice = token.loc.slice(proj);
-        // std.debug.print("{s} `{s}`\n", .{@tagName(token.tag), slice});
-    // }
-
     return Result.ok(tokens.toOwnedSlice());
 }

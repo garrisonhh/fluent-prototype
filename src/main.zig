@@ -13,7 +13,8 @@ const Project = util.Project;
 const plumbing = @import("plumbing.zig");
 const backend = @import("backend.zig");
 const Env = backend.Env;
-const ParseType = @import("frontend.zig").ParseType;
+const frontend = @import("frontend.zig");
+const ParseType = frontend.ParseType;
 
 // this test ensures that all code is semantically analyzed
 test {
@@ -152,6 +153,10 @@ pub fn main() !void {
 
     var output = try parser.parse();
     defer output.deinit(ally);
+
+    // fluent globals
+    try frontend.init(ally);
+    defer frontend.deinit(ally);
 
     // fluent env
     var env = try backend.generatePrelude(ally);

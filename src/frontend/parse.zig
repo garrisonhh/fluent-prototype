@@ -275,6 +275,20 @@ fn climb(p: *Parser, prec: usize) Allocator.Error!?RawExpr {
     return expr;
 }
 
+var TREE = auto.SyntaxNode{};
+
+pub fn init(ally: Allocator) Allocator.Error!void {
+    for (auto.SYNTAX) |ruleset, prec| {
+        for (ruleset) |*rule| {
+            try TREE.insert(ally, rule, prec, rule.fexprs);
+        }
+    }
+}
+
+pub fn deinit(ally: Allocator) void {
+    TREE.deinit(ally);
+}
+
 pub const ParseType = enum { file, expr };
 pub const Result = Message.Result(RawExpr);
 
@@ -297,10 +311,6 @@ pub fn parse(
     const lex_res = try lex.tokenize(ally, proj, file);
     const tokens = lex_res.get() orelse return lex_res.cast(RawExpr);
     defer ally.free(tokens);
-
-    for (tokens) |token| {
-        std.debug.print("[{s}] `{s}`\n", .{@tagName(token.tag), token.loc.slice(proj)});
-    }
 
     // parse, respecting behavior based on file vs. expr parsing
     var parser = Parser{
