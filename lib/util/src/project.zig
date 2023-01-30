@@ -118,11 +118,13 @@ pub const Loc = struct {
         );
 
         if (self.stop != self.start) {
+            const char_stop_display = if (char_stop > 0) char_stop - 1 else 0;
+
             source = try ctx.unify(
                 source,
                 up_arrow,
                 .{
-                    @intCast(isize, char_stop - 1),
+                    @intCast(isize, char_stop_display),
                     @intCast(isize, ctx.getSize(source)[1])
                 }
             );
