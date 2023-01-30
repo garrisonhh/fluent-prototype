@@ -95,12 +95,11 @@ pub const Form = enum {
 
 /// used by parseForm to encode syntax
 pub const FormExpr = union(enum) {
-    const Self = @This();
-    const Tag = std.meta.Tag(Self);
-
     pub const ClimbBehavior = enum { same, increase, reset };
+    pub const Flag = enum { one, opt, any, multi };
 
     pub const Expr = struct {
+        flag: Flag = .one,
         behavior: ClimbBehavior = .same,
 
         pub fn innerPrec(self: @This(), prec: usize) usize {
@@ -111,6 +110,9 @@ pub const FormExpr = union(enum) {
             };
         }
     };
+
+    const Self = @This();
+    const Tag = std.meta.Tag(Self);
 
     expr: Expr,
     word: []const u8, // TODO use common.Symbol
@@ -145,9 +147,16 @@ pub const FormExpr = union(enum) {
                 try writer.writeByte('$');
 
                 try writer.writeAll(switch (expr.behavior) {
-                    .same => "",
-                    .increase => "+",
-                    .reset => "0",
+                    .same => "-",
+                    .increase => "^",
+                    .reset => "_",
+                });
+
+                try writer.writeAll(switch (expr.flag) {
+                    .one => "",
+                    .opt => "?",
+                    .any => "*",
+                    .multi => "+",
                 });
             },
             .word => |word| {
@@ -195,9 +204,21 @@ pub const Syntax = struct {
                 },
                 '$' => switch (tok.len) {
                     1 => FormExpr{ .expr = .{} },
+                    2 => FormExpr{
+                        .expr = .{
+                            .flag = switch (tok[1]) {
+                                '?' => .opt,
+                                '*' => .any,
+                                '+' => .multi,
+                                else => badFormExpr(tok)
+                            },
+                        }
+                    },
                     else => badFormExpr(tok)
                 },
-                else => badFormExpr(tok)
+                else => {
+                    @compileError("`" ++ tok ++ "` is not a valid FormExpr");
+                }
             };
         }
     }
@@ -294,75 +315,95 @@ pub const Syntax = struct {
     }
 };
 
-pub const SyntaxNode = struct {
+/// data structure used to make syntax searches fast enough
+pub const SyntaxTable = struct {
     const Self = @This();
 
-    const Map = std.HashMapUnmanaged(
-        FormExpr,
-        SyntaxNode,
-        struct {
-            pub fn hash(_: @This(), fexpr: FormExpr) u64 {
-                return fexpr.hash();
-            }
-
-            pub fn eql(_: @This(), a: FormExpr, b: FormExpr) bool {
-                return a.eql(b);
-            }
-        },
-        std.hash_map.default_max_load_percentage
-    );
-
-    term: ?*const Syntax = null,
-    highest_prec: usize = 0,
-    next: Map = .{},
-
-    pub fn deinit(self: *Self, ally: Allocator) void {
-        var children = self.next.valueIterator();
-        while (children.next()) |child| child.deinit(ally);
-        self.next.deinit(ally);
-    }
-
-    pub fn insert(
-        self: *Self,
-        ally: Allocator,
-        term: *const Syntax,
+    const Term = struct {
         prec: usize,
-        fexprs: []const FormExpr,
-    ) Allocator.Error!void {
-        if (fexprs.len == 0) {
-            self.term = term;
-        } else {
-            self.highest_prec = @max(self.highest_prec, prec);
-
-            const res = try self.next.getOrPut(ally, fexprs[0]);
-            if (!res.found_existing) {
-                res.value_ptr.* = .{};
-            }
-
-            try res.value_ptr.insert(ally, term, prec, fexprs[1..]);
-        }
-    }
-
-    pub const AboveIterator = struct {
-        above: usize,
-        nodes: []const Self,
-        index: usize = 0,
-
-        pub fn next(self: *@This()) ?*const Self {
-            if (self.index < self.nodes.len) {
-                while (self.nodes[self.index].highest_prec < self.above) {
-                    defer self.index += 1;
-                    return &self.nodes[self.index];
-                }
-            }
-        }
+        rule: *const Syntax,
     };
 
-    pub fn above(self: Self, prec: usize) AboveIterator {
-        return AboveIterator{
-            .above = prec,
-            .nodes = self.next,
+    /// for rules that start with a word
+    prefixed: std.StringHashMapUnmanaged(Term) = .{},
+    /// for rules that start with an expr with flag `.one`, this maps to the
+    /// second position
+    infixed: std.StringHashMapUnmanaged(Term) = .{},
+    /// rules that are neither prefixed nor infixed
+    unfixed: std.ArrayListUnmanaged(Term) = .{},
+
+    pub fn deinit(self: *Self, ally: Allocator) void {
+        self.prefixed.deinit(ally);
+        self.infixed.deinit(ally);
+        self.unfixed.deinit(ally);
+    }
+
+    pub const PutError =
+        Allocator.Error
+     || error { OverwroteRule };
+
+    fn putUnique(
+        ally: Allocator,
+        map: *std.StringHashMapUnmanaged(Term),
+        key: []const u8,
+        term: Term,
+    ) PutError!void {
+        const res = try map.getOrPut(ally, key);
+        if (res.found_existing) {
+            return PutError.OverwroteRule;
+        }
+
+        res.value_ptr.* = term;
+    }
+
+    pub fn put(
+        self: *Self,
+        ally: Allocator,
+        rule: *const Syntax,
+        prec: usize,
+    ) PutError!void {
+        std.debug.assert(rule.fexprs.len > 0);
+
+        const term = Term{
+            .prec = prec,
+            .rule = rule,
         };
+
+        if (rule.fexprs[0] == .word) {
+            try putUnique(ally, &self.prefixed, rule.fexprs[0].word, term);
+        } else if (rule.fexprs.len > 1 and rule.fexprs[1] == .word) {
+            try putUnique(ally, &self.infixed, rule.fexprs[1].word, term);
+        } else {
+            try self.unfixed.append(ally, term);
+        }
+    }
+
+    /// debug print this table
+    pub fn dump(self: Self) void {
+        std.debug.print("[syntax table]\n", .{});
+
+        var prefixed = self.prefixed.iterator();
+        while (prefixed.next()) |entry| {
+            std.debug.print(
+                "`{s}` -> ({}) {}\n",
+                .{entry.key_ptr.*, entry.value_ptr.prec, entry.value_ptr.rule},
+            );
+        }
+        std.debug.print("\n", .{});
+
+        var infixed = self.infixed.iterator();
+        while (infixed.next()) |entry| {
+            std.debug.print(
+                "$ `{s}` -> ({}) {}\n",
+                .{entry.key_ptr.*, entry.value_ptr.prec, entry.value_ptr.rule},
+            );
+        }
+        std.debug.print("\n", .{});
+
+        for (self.unfixed.items) |term| {
+            std.debug.print("-> ({}) {}\n", .{term.prec, term.rule});
+        }
+        std.debug.print("\n", .{});
     }
 };
 
@@ -402,8 +443,12 @@ pub const SYNTAX = t: {
             x(.div,    .l, "$ `/ $"),
             x(.mod,    .l, "$ `% $"),
         },
+        &.{
+            x(.call,   .l, "$ $+"), // TODO actually parse multi flag
+        },
     };
 };
+pub const MAX_PRECEDENCE = SYNTAX.len;
 
 pub const KEYWORDS = comptimeStringSet(&.{
     "if", "then", "else", "def", "fn",

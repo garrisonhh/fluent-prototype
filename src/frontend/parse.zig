@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const stdout = std.io.getStdOut().writer();
+const builtin = @import("builtin");
 const kz = @import("kritzler");
 const util = @import("util");
 const Loc = util.Loc;
@@ -81,26 +82,17 @@ fn parseAtom(p: *Parser) Allocator.Error!?RawExpr {
     return switch (tok.tag) {
         .word => prefixed: {
             // try to parse any prefixed ops
-            // TODO this is absurdly trivially optimizable with a hashmap
             const word = tok.loc.slice(p.proj);
 
-            var i: usize = auto.SYNTAX.len;
-            while (i > 0) : (i -= 1) {
-                const prec = i - 1;
-                const ruleset = auto.SYNTAX[prec];
-
-                for (ruleset) |rule| {
-                    if (rule.hasPrefix(word)) {
-                        const res = try parsePrefixedSyntax(p, rule, prec);
-                        if (res) |expr| {
-                            return expr;
-                        }
-                    }
+            break :prefixed if (TABLE.prefixed.get(word)) |term| parse: {
+                const start_index = p.strm.index;
+                const res = try parsePrefixedSyntax(p, term.rule.*, term.prec);
+                if (res == null) {
+                    p.reset(start_index);
                 }
-            }
 
-            // no rule matched
-            break :prefixed null;
+                break :parse res;
+            } else null;
         },
         inline .ident, .number, .string => |tag| lit: {
             p.eat();
@@ -152,7 +144,6 @@ fn parseFormExprs(
     return exprs.toOwnedSlice();
 }
 
-/// parses syntax, doesn't reset parser on failure
 fn parsePrefixedSyntax(
     p: *Parser,
     syntax: Syntax,
@@ -160,12 +151,16 @@ fn parsePrefixedSyntax(
 ) Allocator.Error!?RawExpr {
     std.debug.assert(syntax.isPrefixed());
 
+    const start_index = p.strm.index;
+
     const next = p.peek() orelse {
+        p.reset(start_index);
         return null;
     };
     const start_loc = next.loc;
 
     const exprs = (try parseFormExprs(p, syntax.fexprs, prec)) orelse {
+        p.reset(start_index);
         return null;
     };
 
@@ -179,15 +174,15 @@ fn parsePrefixedSyntax(
     };
 }
 
-/// parses syntax, doesn't reset parser on failure
-/// allows left recursion
-fn parseUnprefixedSyntax(
+fn parseUnprefixed(
     p: *Parser,
     syntax: Syntax,
     prec: usize,
     leftmost: RawExpr,
 ) Allocator.Error!?RawExpr {
     std.debug.assert(!syntax.isPrefixed());
+
+    const start_index = p.strm.index;
 
     var exprs = std.ArrayList(RawExpr).init(p.ally);
     defer {
@@ -203,6 +198,7 @@ fn parseUnprefixedSyntax(
     // parse this left expr
     const fexprs = syntax.fexprs[1..];
     const rule_exprs = (try parseFormExprs(p, fexprs, prec)) orelse {
+        p.reset(start_index);
         return null;
     };
 
@@ -219,74 +215,108 @@ fn parseUnprefixedSyntax(
 }
 
 /// attempt to parse an expression at or above a certain precedence
-fn climb(p: *Parser, prec: usize) Allocator.Error!?RawExpr {
+fn climb(p: *Parser, min_prec: usize) Allocator.Error!?RawExpr {
     // atoms are always the highest precedence
-    if (prec >= auto.SYNTAX.len) {
+    if (min_prec >= auto.MAX_PRECEDENCE) {
         return parseAtom(p);
     }
 
     // try to parse all of the syntax
-    const start_index = p.strm.index;
-    const leftmost = try climb(p, prec + 1);
-
-    var expr = parse: for (auto.SYNTAX[prec]) |rule| {
-        var res: ?RawExpr = null;
-
-        if (leftmost) |left_expr| {
-            if (!rule.isPrefixed()) {
-                res = try parseUnprefixedSyntax(p, rule, prec, left_expr);
-            }
-        } else if (rule.isPrefixed()) {
-            res = try parsePrefixedSyntax(p, rule, prec);
-        }
-
-        if (res) |got| {
-            break :parse got;
-        }
-
-        p.reset(start_index);
-    } else {
-        // no rules found at this precedence, attempt climbing
-        break :parse (try climb(p, prec + 1)) orelse {
-            return null;
-        };
+    var expr = (try parseAtom(p)) orelse {
+        return null;
     };
 
-    // keep parsing LR rules until it's not possible anymore
-    parse_lr: while (true) {
-        const lr_start_index = p.strm.index;
+    // greedily parse as many rules at or above this precedence as possible
+    var max_prec = auto.MAX_PRECEDENCE;
+    loop: while (true) {
+        const next = p.peek() orelse {
+            break :loop;
+        };
 
-        next_lr: for (auto.SYNTAX[prec]) |rule| {
-            if (!rule.isLR()) continue;
+        if (next.tag == .word) {
+            // try infix
+            const word = next.loc.slice(p.proj);
 
-            const res = try parseUnprefixedSyntax(p, rule, prec, expr);
-            if (res) |got| {
-                expr = got;
-                break :next_lr;
+            const term = TABLE.infixed.get(word) orelse {
+                break :loop;
+            };
+
+            // rule must equal or supercede this rule's precedence. for
+            if (term.prec < min_prec or term.prec > max_prec) {
+                break :loop;
             }
 
-            p.reset(lr_start_index);
+            const res = try parseUnprefixed(
+                p,
+                term.rule.*,
+                term.prec,
+                expr,
+            );
+
+            expr = res orelse {
+                break :loop;
+            };
+
+            if (res) |got| {
+                expr = got;
+                max_prec = term.prec;
+                continue;
+            }
+
+            break :loop;
         } else {
-            // no more rules worked, break the outer loop
-            break :parse_lr;
+            // try unfix
+            unfix: for (TABLE.unfixed.items) |term| {
+                if (term.prec < min_prec) continue;
+
+                const res = try parseUnprefixed(
+                    p,
+                    term.rule.*,
+                    term.prec,
+                    expr,
+                );
+
+                if (res) |got| {
+                    expr = got;
+                    max_prec = term.prec;
+                    break :unfix;
+                }
+            } else {
+                // no rules have been matched!
+                break :loop;
+            }
         }
     }
 
     return expr;
 }
 
-var TREE = auto.SyntaxNode{};
+/// TODO remove
+fn timedClimb(p: *Parser) @typeInfo(@TypeOf(climb)).Fn.return_type.? {
+    const start = util.now();
+    const res = try climb(p, 0);
+    const stop = util.now();
 
-pub fn init(ally: Allocator) Allocator.Error!void {
+    const msg: []const u8 = if (res != null) "succeeded" else "failed";
+    std.debug.print("parsing {s} in {d:.6}ms\n", .{msg, stop - start});
+
+    return res;
+}
+
+var TABLE = auto.SyntaxTable{};
+
+pub fn init(ally: Allocator) auto.SyntaxTable.PutError!void {
     for (auto.SYNTAX) |ruleset, prec| {
         for (ruleset) |*rule| {
-            try TREE.insert(ally, rule, prec, rule.fexprs);
+            try TABLE.put(ally, rule, prec);
         }
     }
+
+    TABLE.dump();
 }
 
 pub fn deinit(ally: Allocator) void {
-    TREE.deinit(ally);
+    TABLE.deinit(ally);
 }
 
 pub const ParseType = enum { file, expr };
@@ -329,7 +359,7 @@ pub fn parse(
                 });
             }
 
-            if (try climb(&parser, 0)) |expr| {
+            if (try timedClimb(&parser)) |expr| {
                 if (!parser.done()) {
                     return syntaxError(&parser);
                 }
@@ -347,7 +377,7 @@ pub fn parse(
             }
 
             while (!parser.done()) {
-                if (try climb(&parser, 0)) |expr| {
+                if (try timedClimb(&parser)) |expr| {
                     try exprs.append(expr);
                 } else {
                     return syntaxError(&parser);
