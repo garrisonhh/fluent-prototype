@@ -11,9 +11,7 @@ pub const Form = enum {
 
     parens,
     dot,
-    anno,
     dict,
-    seq,
 
     // no children
     unit,
@@ -233,8 +231,12 @@ pub const Syntax = struct {
         comptime str: []const u8
     ) [fexprsCount(str)]FormExpr {
         comptime {
+            @setEvalBranchQuota(100_000);
+
             var fexprs: [fexprsCount(str)]FormExpr = undefined;
             var index: usize = 0;
+
+            std.debug.assert(fexprs.len > 0);
 
             var tokens = std.mem.tokenize(u8, str, " ");
             while (tokens.next()) |tok| : (index += 1) {
@@ -424,9 +426,13 @@ fn comptimeStringSet(comptime list: []const []const u8) type {
 }
 
 /// syntax organized by precedence in ascending order
+/// this is to be used for generating a SyntaxTable, not directly!
 pub const SYNTAX = t: {
     const x = Syntax.init;
     break :t &[_][]const Syntax {
+        &.{
+            x(.parens, .l, "$ `\n\n"),
+        },
         &.{
             x(.def,    .r, "$ `:: $"),
         },
@@ -444,17 +450,25 @@ pub const SYNTAX = t: {
             x(.mod,    .l, "$ `% $"),
         },
         &.{
-            x(.call,   .l, "$ $+"), // TODO actually parse multi flag
+            x(.call,   .l, "$ $+"),
+        },
+        &.{
+            x(.addr,   .l, "`& $"),
+        },
+        &.{
+            x(.dot,    .l, "$ `. $"),
         },
     };
 };
 pub const MAX_PRECEDENCE = SYNTAX.len;
 
 pub const KEYWORDS = comptimeStringSet(&.{
-    "if", "then", "else", "def", "fn",
+    "fn",
+    "if", "then", "else",
 });
 
 const SYMBOL_LIST = &[_][]const u8{
+    "\n\n",
     "&", ".", "=", "::", "->", ",", ";", ":",
     // math
     "=", "+", "-", "*", "/", "%",

@@ -120,23 +120,54 @@ fn parseFormExprs(
         exprs.deinit();
     }
 
+    const start_index = p.strm.index;
+
     for (fexprs) |fexpr| {
         switch (fexpr) {
             .word => |word| {
+                // accept word
                 const tok = p.peek() orelse return null;
                 const slice = tok.loc.slice(p.proj);
 
                 if (!std.mem.eql(u8, slice, word)) {
+                    p.reset(start_index);
                     return null;
                 }
 
                 p.eat();
             },
-            .expr => |meta| {
-                const expr = (try climb(p, meta.innerPrec(prec))) orelse {
-                    return null;
-                };
-                try exprs.append(expr);
+            .expr => |meta| switch (meta.flag) {
+                inline .one, .multi => |tag| {
+                    const inner_prec = meta.innerPrec(prec);
+                    const fst = (try climb(p, inner_prec)) orelse {
+                        p.reset(start_index);
+                        return null;
+                    };
+
+                    try exprs.append(fst);
+
+                    if (tag == .multi) {
+                        while (try climb(p, inner_prec)) |expr| {
+                            try exprs.append(expr);
+                        }
+                    }
+                },
+                inline .opt, .any => |tag| {
+                    const inner_prec = meta.innerPrec(prec);
+                    const fst_res = try climb(p, inner_prec);
+
+                    if (fst_res) |fst| {
+                        try exprs.append(fst);
+                    } else {
+                        p.reset(start_index);
+                    }
+
+                    if (fst_res != null and tag == .any) {
+                        while (try climb(p, inner_prec)) |expr| {
+                            try exprs.append(expr);
+                        }
+                    }
+                },
             },
         }
     }
@@ -144,6 +175,7 @@ fn parseFormExprs(
     return exprs.toOwnedSlice();
 }
 
+/// resets on failure
 fn parsePrefixedSyntax(
     p: *Parser,
     syntax: Syntax,
@@ -151,16 +183,12 @@ fn parsePrefixedSyntax(
 ) Allocator.Error!?RawExpr {
     std.debug.assert(syntax.isPrefixed());
 
-    const start_index = p.strm.index;
-
     const next = p.peek() orelse {
-        p.reset(start_index);
         return null;
     };
     const start_loc = next.loc;
 
     const exprs = (try parseFormExprs(p, syntax.fexprs, prec)) orelse {
-        p.reset(start_index);
         return null;
     };
 
@@ -174,15 +202,14 @@ fn parsePrefixedSyntax(
     };
 }
 
+/// resets to right after the left expr on failure
 fn parseUnprefixed(
     p: *Parser,
     syntax: Syntax,
     prec: usize,
-    leftmost: RawExpr,
+    left: RawExpr,
 ) Allocator.Error!?RawExpr {
     std.debug.assert(!syntax.isPrefixed());
-
-    const start_index = p.strm.index;
 
     var exprs = std.ArrayList(RawExpr).init(p.ally);
     defer {
@@ -193,19 +220,24 @@ fn parseUnprefixed(
         exprs.deinit();
     }
 
-    try exprs.append(leftmost);
+    // parse the leftmost expr
+    if (syntax.fexprs[0].expr.flag != .one) {
+        @panic("TODO parse unprefixed with flags on the left");
+    }
 
-    // parse this left expr
+    try exprs.append(left);
+
+    // parse the rest of the exprs
     const fexprs = syntax.fexprs[1..];
     const rule_exprs = (try parseFormExprs(p, fexprs, prec)) orelse {
-        p.reset(start_index);
         return null;
     };
+    defer p.ally.free(rule_exprs);
 
     try exprs.appendSlice(rule_exprs);
 
     // success
-    const loc = leftmost.loc.span(p.prev().loc);
+    const loc = left.loc.span(p.prev().loc);
 
     return RawExpr{
         .form = syntax.form,
@@ -241,7 +273,9 @@ fn climb(p: *Parser, min_prec: usize) Allocator.Error!?RawExpr {
                 break :loop;
             };
 
-            // rule must equal or supercede this rule's precedence. for
+            // rule must equal or supercede this rule's precedence. if I've
+            // parsed a rule already, the next rule precedence must not exceed
+            // the previous rules' precedence
             if (term.prec < min_prec or term.prec > max_prec) {
                 break :loop;
             }
@@ -291,8 +325,8 @@ fn climb(p: *Parser, min_prec: usize) Allocator.Error!?RawExpr {
     return expr;
 }
 
-/// TODO remove
-fn timedClimb(p: *Parser) @typeInfo(@TypeOf(climb)).Fn.return_type.? {
+/// NOTE remove when I no longer need to time parsing
+fn timedClimb(p: *Parser) Allocator.Error!?RawExpr {
     const start = util.now();
     const res = try climb(p, 0);
     const stop = util.now();

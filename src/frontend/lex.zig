@@ -35,6 +35,7 @@ const CharClass = enum {
     digit,
     comment,
     whitespace,
+    newline,
 };
 
 const Lexer = Stream(u8);
@@ -44,8 +45,10 @@ const Error = Allocator.Error || error { InvalidCharacter };
 fn classify(ch: u8) Error!CharClass {
     return switch (ch) {
         '0'...'9' => .digit,
-        ' ', '\n' => .whitespace,
+        ' ' => .whitespace,
+        '\n' => .newline,
         '#' => .comment,
+        '\t', '\r' => Error.InvalidCharacter,
         else => if (std.ascii.isPrint(ch)) .lexical else Error.InvalidCharacter
     };
 }
@@ -176,6 +179,15 @@ fn lex(
             .whitespace => lexer.eat(),
             .digit => try tokens.append(lexNumber(lexer, loc)),
             .lexical => try lexLexical(lexer, tokens, loc),
+            .newline => {
+                // insert a separator on two newlines in a row
+                lexer.eat();
+                if (lexer.peek() == @as(u8, '\n')) {
+                    lexer.eat();
+
+                    try tokens.append(Token.of(.word, lengthen(loc, 2)));
+                }
+            },
             .comment => {
                 // ignore comments
                 lexer.eat();
