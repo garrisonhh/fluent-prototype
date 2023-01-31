@@ -13,6 +13,7 @@ pub const Token = struct {
     const Self = @This();
 
     pub const Tag = enum {
+        separator,
         number,
         string,
         ident,
@@ -180,12 +181,14 @@ fn lex(
             .digit => try tokens.append(lexNumber(lexer, loc)),
             .lexical => try lexLexical(lexer, tokens, loc),
             .newline => {
-                // insert a separator on two newlines in a row
+                // insert a separator on a newline followed by an unindented
+                // character
                 lexer.eat();
-                if (lexer.peek() == @as(u8, '\n')) {
-                    lexer.eat();
-
-                    try tokens.append(Token.of(.word, lengthen(loc, 2)));
+                if (lexer.peek()) |next_ch| {
+                    switch (try classify(next_ch)) {
+                        .whitespace, .newline => {},
+                        else => try tokens.append(Token.of(.separator, loc)),
+                    }
                 }
             },
             .comment => {

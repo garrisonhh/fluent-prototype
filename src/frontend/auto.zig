@@ -3,21 +3,29 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
+const util = @import("util");
 
 pub const Form = enum {
     file,
     call,
     list,
-
-    parens,
-    dot,
     dict,
+    parens,
+    stmt,
+
+    // pure syntax
+    comma,
+    kv,
 
     // no children
     unit,
     number,
     string,
     symbol,
+
+    // access
+    addr,
+    dot,
 
     // math
     add,
@@ -33,14 +41,10 @@ pub const Form = enum {
     ge,
     le,
 
-    // ptrs
-    addr,
-
     // flow
-    stmt,
+    def,
     @"if",
     @"fn",
-    def,
 
     /// maps tagName to enum value. used for parsing form exprs.
     const map = map: {
@@ -67,6 +71,7 @@ pub const Form = enum {
         return switch (self) {
             .file, .call, .list, .unit, .symbol, .string, .number
                 => @tagName(self),
+            .comma => "sequence",
             .parens => "parentheses",
             .dict => "dictionary literal",
             .seq => "sequence",
@@ -82,11 +87,11 @@ pub const Form = enum {
             .lt => "less than operator",
             .ge => "greater than or equals operator",
             .le => "less than or equals operator",
-            .addr => "address of operator",
+            .addr => "addressing operator",
             .stmt => "statement expression",
+            .def => "declaration",
             .@"if" => "if expression",
             .@"fn" => "fn expression",
-            .def => "declaration",
         };
     }
 };
@@ -158,8 +163,11 @@ pub const FormExpr = union(enum) {
                 });
             },
             .word => |word| {
-                try writer.writeByte('`');
-                try writer.writeAll(word);
+                var buf: [512]u8 = undefined;
+                var fba = std.heap.FixedBufferAllocator.init(&buf);
+                const escaped = util.stringEscape(fba.allocator(), word)
+                    catch "this word is way too long :(";
+                try writer.print("`{s}`", .{escaped});
             }
         }
     }
@@ -174,13 +182,17 @@ pub const Syntax = struct {
     fexprs: []const FormExpr,
 
     fn fexprsCount(comptime str: []const u8) usize {
-        var count: usize = 0;
-        var tokens = std.mem.tokenize(u8, str, " ");
-        while (tokens.next()) |_| {
-            count += 1;
-        }
+        comptime {
+            @setEvalBranchQuota(100_000);
 
-        return count;
+            var count: usize = 0;
+            var tokens = std.mem.tokenize(u8, str, " ");
+            while (tokens.next()) |_| {
+                count += 1;
+            }
+
+            return count;
+        }
     }
 
     fn badFormExpr(comptime tok: []const u8) noreturn {
@@ -189,6 +201,8 @@ pub const Syntax = struct {
 
     fn parseFormExpr(comptime tok: []const u8) FormExpr {
         comptime {
+            @setEvalBranchQuota(100_000);
+
             return switch (tok[0]) {
                 '`' => word: {
                     const word = tok[1..];
@@ -411,6 +425,8 @@ pub const SyntaxTable = struct {
 
 fn comptimeStringSet(comptime list: []const []const u8) type {
     comptime {
+        @setEvalBranchQuota(100_000);
+
         // manipulate so it's consumable by ComptimeStringMap
         const KV = struct {
             @"0": []const u8,
@@ -427,36 +443,44 @@ fn comptimeStringSet(comptime list: []const []const u8) type {
 
 /// syntax organized by precedence in ascending order
 /// this is to be used for generating a SyntaxTable, not directly!
-pub const SYNTAX = t: {
+pub const SYNTAX: []const []const Syntax = t: {
+    @setEvalBranchQuota(1_000_000);
+
     const x = Syntax.init;
-    break :t &[_][]const Syntax {
+    break :t &[_][]const Syntax{
         &.{
-            x(.parens, .l, "$ `\n\n"),
+            x(Form.def,    .r, "$ `:: $"),
         },
         &.{
-            x(.def,    .r, "$ `:: $"),
+            x(Form.stmt,   .r, "$ `; $"),
+            x(Form.parens, .l, "`( $? `)"),
+            x(Form.dict,   .l, "`{ $? `}"),
+            x(Form.list,   .l, "`[ $? `]"),
+            x(Form.@"if",  .r, "`if $ `then $ `else $"),
         },
         &.{
-            x(.parens, .l, "`( $? `)"),
-            x(.@"if",  .r, "`if $ `then $ `else $"),
+            x(Form.comma,  .r, "$ `, $"),
         },
         &.{
-            x(.add,    .l, "$ `+ $"),
-            x(.sub,    .l, "$ `- $"),
+            x(Form.kv,     .r, "$ `: $"),
         },
         &.{
-            x(.mul,    .l, "$ `* $"),
-            x(.div,    .l, "$ `/ $"),
-            x(.mod,    .l, "$ `% $"),
+            x(Form.add,    .l, "$ `+ $"),
+            x(Form.sub,    .l, "$ `- $"),
         },
         &.{
-            x(.call,   .l, "$ $+"),
+            x(Form.mul,    .l, "$ `* $"),
+            x(Form.div,    .l, "$ `/ $"),
+            x(Form.mod,    .l, "$ `% $"),
         },
         &.{
-            x(.addr,   .l, "`& $"),
+            x(Form.call,   .l, "$ $+"),
         },
         &.{
-            x(.dot,    .l, "$ `. $"),
+            x(Form.addr,   .l, "`& $"),
+        },
+        &.{
+            x(Form.dot,    .l, "$ `. $"),
         },
     };
 };
@@ -468,7 +492,6 @@ pub const KEYWORDS = comptimeStringSet(&.{
 });
 
 const SYMBOL_LIST = &[_][]const u8{
-    "\n\n",
     "&", ".", "=", "::", "->", ",", ";", ":",
     // math
     "=", "+", "-", "*", "/", "%",

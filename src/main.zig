@@ -16,6 +16,16 @@ const Env = backend.Env;
 const frontend = @import("frontend.zig");
 const ParseType = frontend.ParseType;
 
+const ZEN =
+    \\(wip)
+    \\
+    \\programs should be:
+    \\- easy to reason about.
+    \\- well-understood by your tools.
+    \\- more declarative, more explicit, and more beautiful.
+    \\
+;
+
 // this test ensures that all code is semantically analyzed
 test {
     std.testing.refAllDeclsRecursive(@This());
@@ -122,6 +132,8 @@ fn dispatchArgs(
         const filepath = options.get("file").?.string;
         const file = try proj.load(env.ally, filepath);
         try execPrint(env, proj.*, file, .file);
+    } else if (output.match(&.{"zen"})) |_| {
+        try stdout.writeAll(ZEN);
     } else {
         unreachable;
     }
@@ -150,6 +162,9 @@ pub fn main() !void {
     try run_cmd.addHelp();
     try addLogFlags(run_cmd);
     try run_cmd.addPositional("file", "the file to run", .string);
+
+    const zen_cmd = try parser.addSubcommand("zen", "display the fluent zen");
+    try zen_cmd.addHelp();
 
     var output = try parser.parse();
     defer output.deinit(ally);

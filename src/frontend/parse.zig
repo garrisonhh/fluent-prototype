@@ -17,6 +17,38 @@ const Form = auto.Form;
 const FormExpr = auto.FormExpr;
 const Syntax = auto.Syntax;
 
+const TopLevelIterator = struct {
+    const Self = @This();
+
+    tokens: []const Token,
+
+    fn done(self: Self) bool {
+        return self.tokens.len == 0;
+    }
+
+    fn next(self: *Self) ?[]const Token {
+        // skip initial separators
+        while (self.tokens.len > 0 and self.tokens[0].tag == .separator) {
+            self.tokens = self.tokens[1..];
+        }
+
+        if (self.tokens.len == 0) {
+            return null;
+        }
+
+        // get line
+        for (self.tokens) |tok, i| {
+            if (tok.tag == .separator) {
+                defer self.tokens = self.tokens[i + 1..];
+                return self.tokens[0..i];
+            }
+        }
+
+        defer self.tokens = &.{};
+        return self.tokens;
+    }
+};
+
 /// context for parsing
 const Parser = struct {
     const Self = @This();
@@ -72,6 +104,11 @@ fn streamError(
     return parseError(p.ally, loc, fmt, args);
 }
 
+/// generic error at a location
+fn syntaxErrorAt(ally: Allocator, loc: Loc) Allocator.Error!Result {
+    return parseError(ally, loc, "syntax error", .{});
+}
+
 /// generic error at current parsing location
 fn syntaxError(p: *const Parser) Allocator.Error!Result {
     return streamError(p, "syntax error", .{});
@@ -80,6 +117,7 @@ fn syntaxError(p: *const Parser) Allocator.Error!Result {
 fn parseAtom(p: *Parser) Allocator.Error!?RawExpr {
     const tok = p.peek() orelse return null;
     return switch (tok.tag) {
+        .separator => unreachable,
         .word => prefixed: {
             // try to parse any prefixed ops
             const word = tok.loc.slice(p.proj);
@@ -357,47 +395,46 @@ pub fn parse(
     ally: Allocator,
     proj: Project,
     file: FileRef,
-    what: ParseType
+    what: ParseType,
 ) Allocator.Error!Result {
-    for (auto.SYNTAX) |prec, i| {
-        std.debug.print("[{} precedence]\n", .{i});
-        for (prec) |syntax| {
-            std.debug.print("{}\n", .{syntax});
-        }
-        std.debug.print("\n", .{});
-    }
-
     // lex
     const lex_res = try lex.tokenize(ally, proj, file);
     const tokens = lex_res.get() orelse return lex_res.cast(RawExpr);
     defer ally.free(tokens);
 
     // parse, respecting behavior based on file vs. expr parsing
+    var tl_iter = TopLevelIterator{
+        .tokens = tokens,
+    };
+
+    const first_tokens: []const Token = tl_iter.next() orelse &.{};
     var parser = Parser{
         .ally = ally,
-        .strm = Stream(Token).init(tokens, 0),
         .proj = proj,
         .file = file,
+        .strm = Stream(Token).init(first_tokens, 0),
     };
 
     switch (what) {
         .expr => {
             if (parser.done()) {
-                return Result.ok(RawExpr{
-                    .loc = Loc.of(file, 0, 0),
-                    .form = .unit,
-                });
+                return syntaxError(&parser);
             }
 
-            if (try timedClimb(&parser)) |expr| {
-                if (!parser.done()) {
-                    return syntaxError(&parser);
-                }
+            const expr = (try timedClimb(&parser)) orelse {
+                return syntaxError(&parser);
+            };
 
-                return Result.ok(expr);
+            if (!parser.done()) {
+                return syntaxError(&parser);
             }
 
-            return syntaxError(&parser);
+            // exprs are single expressions
+            if (tl_iter.next()) |next| {
+                return syntaxErrorAt(ally, next[0].loc);
+            }
+
+            return Result.ok(expr);
         },
         .file => {
             var exprs = std.ArrayList(RawExpr).init(ally);
@@ -407,10 +444,19 @@ pub fn parse(
             }
 
             while (!parser.done()) {
-                if (try timedClimb(&parser)) |expr| {
-                    try exprs.append(expr);
-                } else {
+                const expr = (try timedClimb(&parser)) orelse {
                     return syntaxError(&parser);
+                };
+
+                if (!parser.done()) {
+                    return syntaxError(&parser);
+                }
+
+                try exprs.append(expr);
+
+                // iterate toplevel
+                if (tl_iter.next()) |next_tokens| {
+                    parser.strm = Stream(Token).init(next_tokens, 0);
                 }
             }
 
