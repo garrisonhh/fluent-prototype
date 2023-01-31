@@ -11,7 +11,6 @@ pub const Form = enum {
     list,
     dict,
     parens,
-    stmt,
 
     // pure syntax
     comma,
@@ -42,9 +41,11 @@ pub const Form = enum {
     le,
 
     // flow
+    stmt,
     def,
     @"if",
     @"fn",
+    lambda,
 
     /// maps tagName to enum value. used for parsing form exprs.
     const map = map: {
@@ -69,7 +70,7 @@ pub const Form = enum {
     /// used for generating error messages etc.
     pub fn name(self: Form) []const u8 {
         return switch (self) {
-            .file, .call, .list, .unit, .symbol, .string, .number
+            .file, .call, .list, .unit, .symbol, .string, .number, .lambda
                 => @tagName(self),
             .comma => "sequence",
             .parens => "parentheses",
@@ -450,19 +451,26 @@ pub const SYNTAX: []const []const Syntax = t: {
     break :t &[_][]const Syntax{
         &.{
             x(Form.def,    .r, "$ `:: $"),
-        },
-        &.{
             x(Form.stmt,   .r, "$ `; $"),
             x(Form.parens, .l, "`( $? `)"),
             x(Form.dict,   .l, "`{ $? `}"),
             x(Form.list,   .l, "`[ $? `]"),
             x(Form.@"if",  .r, "`if $ `then $ `else $"),
+            x(Form.@"fn",  .l, "`fn $ `-> $"),
+            x(Form.lambda, .r, "`| $? `| $"),
         },
         &.{
             x(Form.comma,  .r, "$ `, $"),
         },
         &.{
             x(Form.kv,     .r, "$ `: $"),
+        },
+        &.{
+            x(Form.eq,     .l, "$ `== $"),
+            x(Form.gt,     .l, "$ `> $"),
+            x(Form.lt,     .l, "$ `< $"),
+            x(Form.ge,     .l, "$ `>= $"),
+            x(Form.le,     .l, "$ `<= $"),
         },
         &.{
             x(Form.add,    .l, "$ `+ $"),

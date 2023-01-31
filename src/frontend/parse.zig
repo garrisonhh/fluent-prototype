@@ -57,6 +57,7 @@ const Parser = struct {
     strm: Stream(Token),
     proj: Project,
     file: FileRef,
+    max_parsed: usize = 0,
 
     fn done(self: Self) bool {
         return self.strm.done();
@@ -71,6 +72,7 @@ const Parser = struct {
     }
 
     fn eat(self: *Self) void {
+        self.max_parsed = @max(self.max_parsed, self.strm.index);
         self.strm.eat();
     }
 
@@ -111,10 +113,13 @@ fn syntaxErrorAt(ally: Allocator, loc: Loc) Allocator.Error!Result {
 
 /// generic error at current parsing location
 fn syntaxError(p: *const Parser) Allocator.Error!Result {
-    return streamError(p, "syntax error", .{});
+    const max_loc = p.strm.tokens[p.max_parsed + 1].loc;
+    return syntaxErrorAt(p.ally, max_loc);
 }
 
-fn parseAtom(p: *Parser) Allocator.Error!?RawExpr {
+fn parseAtom(p: *Parser, out_prec: *usize) Allocator.Error!?RawExpr {
+    out_prec.* = auto.MAX_PRECEDENCE;
+
     const tok = p.peek() orelse return null;
     return switch (tok.tag) {
         .separator => unreachable,
@@ -127,6 +132,13 @@ fn parseAtom(p: *Parser) Allocator.Error!?RawExpr {
                 const res = try parsePrefixedSyntax(p, term.rule.*, term.prec);
                 if (res == null) {
                     p.reset(start_index);
+                }
+
+                // get next prec for this rule
+                const fexprs = term.rule.fexprs;
+                const final = fexprs[fexprs.len - 1];
+                if (final == .expr) {
+                    out_prec.* = final.expr.innerPrec(term.prec);
                 }
 
                 break :parse res;
@@ -180,24 +192,21 @@ fn parseFormExprs(
 
                     try exprs.append(fst);
 
-                    if (tag == .multi) {
+                    if (comptime tag == .multi) {
                         while (try climb(p, inner_prec)) |expr| {
                             try exprs.append(expr);
                         }
                     }
                 },
-                inline .opt, .any => |tag| {
-                    const inner_prec = meta.innerPrec(prec);
-                    const fst_res = try climb(p, inner_prec);
-
-                    if (fst_res) |fst| {
-                        try exprs.append(fst);
+                .opt => {
+                    if (try climb(p, meta.innerPrec(prec))) |expr| {
+                        try exprs.append(expr);
                     }
-
-                    if (fst_res != null and tag == .any) {
-                        while (try climb(p, inner_prec)) |expr| {
-                            try exprs.append(expr);
-                        }
+                },
+                .any => {
+                    const inner_prec = meta.innerPrec(prec);
+                    while (try climb(p, inner_prec)) |expr| {
+                        try exprs.append(expr);
                     }
                 },
             },
@@ -280,29 +289,25 @@ fn parseUnprefixed(
 
 /// attempt to parse an expression at or above a certain precedence
 fn climb(p: *Parser, min_prec: usize) Allocator.Error!?RawExpr {
-    // atoms are always the highest precedence
-    if (min_prec >= auto.MAX_PRECEDENCE) {
-        return parseAtom(p);
-    }
+    std.debug.print("climbing ({}) @{}\n", .{min_prec, p.strm.index});
 
-    // try to parse all of the syntax
-    var expr = (try parseAtom(p)) orelse {
+    var max_prec: usize = 0;
+    var expr = (try parseAtom(p, &max_prec)) orelse {
         return null;
     };
 
     // greedily parse as many rules at or above this precedence as possible
-    var max_prec = auto.MAX_PRECEDENCE;
     loop: while (true) {
         const next = p.peek() orelse {
             break :loop;
         };
 
-        if (next.tag == .word) {
+        if (next.tag == .word) infix: {
             // try infix
             const word = next.loc.slice(p.proj);
 
             const term = TABLE.infixed.get(word) orelse {
-                break :loop;
+                break :infix;
             };
 
             // rule must equal or supercede this rule's precedence. if I've
@@ -319,40 +324,36 @@ fn climb(p: *Parser, min_prec: usize) Allocator.Error!?RawExpr {
                 expr,
             );
 
-            expr = res orelse {
+            if (res) |got| {
+                expr = got;
+                max_prec = term.prec;
+                continue :loop;
+            } else {
                 break :loop;
-            };
+            }
+        }
+
+        // try unfix
+        unfix: for (TABLE.unfixed.items) |term| {
+            if (term.prec < min_prec or term.prec > max_prec) {
+                continue :unfix;
+            }
+
+            const res = try parseUnprefixed(
+                p,
+                term.rule.*,
+                term.prec,
+                expr,
+            );
 
             if (res) |got| {
                 expr = got;
                 max_prec = term.prec;
-                continue;
+                break :unfix;
             }
-
-            break :loop;
         } else {
-            // try unfix
-            unfix: for (TABLE.unfixed.items) |term| {
-                if (term.prec < min_prec or term.prec > max_prec) {
-                    continue;
-                }
-
-                const res = try parseUnprefixed(
-                    p,
-                    term.rule.*,
-                    term.prec,
-                    expr,
-                );
-
-                if (res) |got| {
-                    expr = got;
-                    max_prec = term.prec;
-                    break :unfix;
-                }
-            } else {
-                // no rules have been matched!
-                break :loop;
-            }
+            // no rules have been matched!
+            break :loop;
         }
     }
 
