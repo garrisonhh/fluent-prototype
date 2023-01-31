@@ -113,8 +113,8 @@ fn syntaxErrorAt(ally: Allocator, loc: Loc) Allocator.Error!Result {
 
 /// generic error at current parsing location
 fn syntaxError(p: *const Parser) Allocator.Error!Result {
-    const max_loc = p.strm.tokens[p.max_parsed + 1].loc;
-    return syntaxErrorAt(p.ally, max_loc);
+    const max_loc = p.strm.tokens[p.max_parsed].loc;
+    return syntaxErrorAt(p.ally, Loc.of(p.file, max_loc.stop, max_loc.stop));
 }
 
 fn parseAtom(p: *Parser, out_prec: *usize) Allocator.Error!?RawExpr {
@@ -289,8 +289,6 @@ fn parseUnprefixed(
 
 /// attempt to parse an expression at or above a certain precedence
 fn climb(p: *Parser, min_prec: usize) Allocator.Error!?RawExpr {
-    std.debug.print("climbing ({}) @{}\n", .{min_prec, p.strm.index});
-
     var max_prec: usize = 0;
     var expr = (try parseAtom(p, &max_prec)) orelse {
         return null;
@@ -360,18 +358,6 @@ fn climb(p: *Parser, min_prec: usize) Allocator.Error!?RawExpr {
     return expr;
 }
 
-/// NOTE remove when I no longer need to time parsing
-fn timedClimb(p: *Parser) Allocator.Error!?RawExpr {
-    const start = util.now();
-    const res = try climb(p, 0);
-    const stop = util.now();
-
-    const msg: []const u8 = if (res != null) "succeeded" else "failed";
-    std.debug.print("parsing {s} in {d:.6}ms\n", .{msg, stop - start});
-
-    return res;
-}
-
 var TABLE = auto.SyntaxTable{};
 
 pub fn init(ally: Allocator) auto.SyntaxTable.PutError!void {
@@ -422,7 +408,7 @@ pub fn parse(
                 return syntaxError(&parser);
             }
 
-            const expr = (try timedClimb(&parser)) orelse {
+            const expr = (try climb(&parser, 0)) orelse {
                 return syntaxError(&parser);
             };
 
@@ -445,7 +431,7 @@ pub fn parse(
             }
 
             while (!parser.done()) {
-                const expr = (try timedClimb(&parser)) orelse {
+                const expr = (try climb(&parser, 0)) orelse {
                     return syntaxError(&parser);
                 };
 

@@ -1,12 +1,12 @@
-# `fn` is a nice way to define top level functions
-calc :: fn {a: i32, b: i32}: i32 ->
-  (a + b) * 2
-
-# lambda syntax exists to prevent type-annotation stuttering syndrome when the
-# function type is obvious(-ly inferrable)
+# lambdas are the most unsugared form of functions, and are type inferred
 calc2 ::
   as (Fn [i32, i32] i32)
     |a, b| (a + b) * 2
+
+# `fn` is a nice way to define top level functions. this is entirely syntax
+# sugar for a lambda with a cast.
+calc :: fn {a: i32, b: i32} -> i32 =
+  (a + b) * 2
 
 # just here to show that there is nothing special about top level functions,
 # they are just top level constants like any other constant

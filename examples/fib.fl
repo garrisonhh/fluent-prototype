@@ -1,10 +1,10 @@
-fib_ :: fn {a: i64, b: i64, n: i64}: i64 ->
+fib_ :: fn {a: i64, b: i64, n: i64} -> i64 =
   if n == 0 then
     b
   else
     recur b (a + b) (n - 1)
 
-fib :: fn {n: i64}: i64 ->
+fib :: fn {n: i64} -> i64 =
   fib_ 0 1 n
 
 result ::

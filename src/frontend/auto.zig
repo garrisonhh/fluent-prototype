@@ -26,6 +26,9 @@ pub const Form = enum {
     addr,
     dot,
 
+    // types
+    arrow,
+
     // math
     add,
     sub,
@@ -73,6 +76,7 @@ pub const Form = enum {
             .file, .call, .list, .unit, .symbol, .string, .number, .lambda
                 => @tagName(self),
             .comma => "sequence",
+            .arrow => "arrow operator",
             .parens => "parentheses",
             .dict => "dictionary literal",
             .seq => "sequence",
@@ -445,7 +449,7 @@ fn comptimeStringSet(comptime list: []const []const u8) type {
 /// syntax organized by precedence in ascending order
 /// this is to be used for generating a SyntaxTable, not directly!
 pub const SYNTAX: []const []const Syntax = t: {
-    @setEvalBranchQuota(1_000_000);
+    @setEvalBranchQuota(100_000);
 
     const x = Syntax.init;
     break :t &[_][]const Syntax{
@@ -456,7 +460,7 @@ pub const SYNTAX: []const []const Syntax = t: {
             x(Form.dict,   .l, "`{ $? `}"),
             x(Form.list,   .l, "`[ $? `]"),
             x(Form.@"if",  .r, "`if $ `then $ `else $"),
-            x(Form.@"fn",  .l, "`fn $ `-> $"),
+            x(Form.@"fn",  .l, "`fn $ `= $"),
             x(Form.lambda, .r, "`| $? `| $"),
         },
         &.{
@@ -464,6 +468,9 @@ pub const SYNTAX: []const []const Syntax = t: {
         },
         &.{
             x(Form.kv,     .r, "$ `: $"),
+        },
+        &.{
+            x(Form.arrow,  .r, "$ `-> $"),
         },
         &.{
             x(Form.eq,     .l, "$ `== $"),
