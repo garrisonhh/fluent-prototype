@@ -24,6 +24,8 @@ pub const Form = enum {
 
     // access
     addr,
+    ptr,
+    mut,
     dot,
 
     // types
@@ -93,6 +95,8 @@ pub const Form = enum {
             .ge => "greater than or equals operator",
             .le => "less than or equals operator",
             .addr => "addressing operator",
+            .ptr => "pointer operator",
+            .mut => "mutablity qualifier",
             .stmt => "statement expression",
             .def => "declaration",
             .@"if" => "if expression",
@@ -492,7 +496,9 @@ pub const SYNTAX: []const []const Syntax = t: {
             x(Form.call,   .l, "$ $+"),
         },
         &.{
-            x(Form.addr,   .l, "`& $"),
+            x(Form.addr,   .r, "`& $"),
+            x(Form.ptr,    .r, "`* $"),
+            x(Form.mut,    .r, "`mut $"),
         },
         &.{
             x(Form.dot,    .l, "$ `. $"),
@@ -502,6 +508,7 @@ pub const SYNTAX: []const []const Syntax = t: {
 pub const MAX_PRECEDENCE = SYNTAX.len;
 
 pub const KEYWORDS = comptimeStringSet(&.{
+    "mut",
     "fn",
     "if", "then", "else",
 });
