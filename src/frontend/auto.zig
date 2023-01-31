@@ -437,7 +437,7 @@ pub const SYNTAX = t: {
             x(.def,    .r, "$ `:: $"),
         },
         &.{
-            x(.parens, .l, "`( $ `)"),
+            x(.parens, .l, "`( $? `)"),
             x(.@"if",  .r, "`if $ `then $ `else $"),
         },
         &.{

@@ -120,8 +120,6 @@ fn parseFormExprs(
         exprs.deinit();
     }
 
-    const start_index = p.strm.index;
-
     for (fexprs) |fexpr| {
         switch (fexpr) {
             .word => |word| {
@@ -130,7 +128,6 @@ fn parseFormExprs(
                 const slice = tok.loc.slice(p.proj);
 
                 if (!std.mem.eql(u8, slice, word)) {
-                    p.reset(start_index);
                     return null;
                 }
 
@@ -140,7 +137,6 @@ fn parseFormExprs(
                 inline .one, .multi => |tag| {
                     const inner_prec = meta.innerPrec(prec);
                     const fst = (try climb(p, inner_prec)) orelse {
-                        p.reset(start_index);
                         return null;
                     };
 
@@ -158,8 +154,6 @@ fn parseFormExprs(
 
                     if (fst_res) |fst| {
                         try exprs.append(fst);
-                    } else {
-                        p.reset(start_index);
                     }
 
                     if (fst_res != null and tag == .any) {
@@ -301,7 +295,9 @@ fn climb(p: *Parser, min_prec: usize) Allocator.Error!?RawExpr {
         } else {
             // try unfix
             unfix: for (TABLE.unfixed.items) |term| {
-                if (term.prec < min_prec) continue;
+                if (term.prec < min_prec or term.prec > max_prec) {
+                    continue;
+                }
 
                 const res = try parseUnprefixed(
                     p,
