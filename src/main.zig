@@ -50,7 +50,8 @@ fn execPrint(
 
             switch (try translate(ally, proj, rexpr)) {
                 .ok => |sexpr| {
-                    try stdout.print("[translated]\n{}\n", .{sexpr});
+                    try stdout.print("[translated]\n", .{});
+                    try kz.display(ally, .{ .force_parens = true }, sexpr, stdout);
                 },
                 .err => |msg| {
                     try kz.display(ally, proj, msg, stderr);
