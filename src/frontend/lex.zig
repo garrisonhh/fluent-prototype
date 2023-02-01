@@ -5,24 +5,19 @@ const Loc = util.Loc;
 const Message = util.Message;
 const FileRef = util.FileRef;
 const Project = util.Project;
+const kz = @import("kritzler");
 const Stream = @import("stream.zig").Stream;
+const auto = @import("auto.zig");
 
 pub const Token = struct {
     const Self = @This();
 
     pub const Tag = enum {
-        indent,
-
-        // literal-ish
+        separator,
         number,
         string,
-        symbol,
-
-        // reserved symbols
-        lparen,
-        rparen,
-        lbracket,
-        rbracket,
+        ident,
+        word,
     };
 
     tag: Tag,
@@ -39,11 +34,8 @@ pub const Token = struct {
 const CharClass = enum {
     lexical,
     digit,
-    lparen,
-    rparen,
-    lbracket,
-    rbracket,
-    space,
+    comment,
+    whitespace,
     newline,
 };
 
@@ -54,20 +46,11 @@ const Error = Allocator.Error || error { InvalidCharacter };
 fn classify(ch: u8) Error!CharClass {
     return switch (ch) {
         '0'...'9' => .digit,
-        ' ' => .space,
-        '(' => .lparen,
-        ')' => .rparen,
-        '[' => .lbracket,
-        ']' => .rbracket,
+        ' ' => .whitespace,
         '\n' => .newline,
+        '#' => .comment,
+        '\t', '\r' => Error.InvalidCharacter,
         else => if (std.ascii.isPrint(ch)) .lexical else Error.InvalidCharacter
-    };
-}
-
-fn isLexOrNum(ch: u8) Error!bool {
-    return switch (try classify(ch)) {
-        .digit, .lexical => true,
-        else => false
     };
 }
 
@@ -79,80 +62,143 @@ fn lengthen(loc: Loc, len: usize) Loc {
     return Loc.of(loc.file, loc.start, loc.start + len);
 }
 
-fn lexNumber(lexer: *Lexer, start: Loc) Error!Token {
-    var len: usize = 0;
+/// characters allowed as part of a number
+fn isNumeric(ch: u8) bool {
+    return switch (ch) {
+        '0'...'9', 'a'...'z', 'A'...'Z', '_' => true,
+        else => false,
+    };
+}
+
+fn lexNumber(lexer: *Lexer, loc: Loc) Token {
+    const start = lexer.index;
 
     // integral section
-    while (lexer.peek()) |ch| {
-        if (!try isLexOrNum(ch)) break;
-
-        lexer.mustSkip(1);
-        len += 1;
+    while (lexer.peek()) |ch| : (lexer.eat()) {
+        if (!isNumeric(ch)) break;
     }
 
     // test for int
     if (lexer.peek() != @as(u8, '.')) {
-        return Token.of(.number, lengthen(start, len));
+        return Token.of(.number, lengthen(loc, lexer.index - start));
     }
 
-    lexer.mustSkip(1);
-    len += 1;
+    lexer.eat();
 
     // float section
-    while (lexer.peek()) |ch| {
-        if (!try isLexOrNum(ch)) break;
-
-        lexer.mustSkip(1);
-        len += 1;
+    while (lexer.peek()) |ch| : (lexer.eat()) {
+        if (!isNumeric(ch)) break;
     }
 
-    return Token.of(.number, lengthen(start, len));
+    return Token.of(.number, lengthen(loc, lexer.index - start));
 }
 
-fn lexIdent(lexer: *Lexer, start: Loc) Error!Token {
-    var len: usize = 0;
-    while (lexer.peek()) |ch| {
-        if (!try isLexOrNum(ch)) break;
+fn tokenOfLexical(lexer: *const Lexer, loc: Loc) Token {
+    const str = lexer.tokens[loc.start..loc.stop];
+    const tag: Token.Tag =
+        if (auto.SYMBOLS.has(str) or auto.KEYWORDS.has(str)) .word
+        else .ident;
 
-        lexer.mustSkip(1);
-        len += 1;
+    return Token.of(tag, loc);
+}
+
+fn lexLexical(
+    lexer: *Lexer,
+    tokens: *std.ArrayList(Token),
+    loc: Loc
+) Error!void {
+    const start = lexer.index;
+
+    while (lexer.peek()) |ch| {
+        switch (try classify(ch)) {
+            .digit, .lexical => lexer.eat(),
+            else => break,
+        }
     }
 
-    return Token.of(.symbol, lengthen(start, len));
+    // split up token into symbols and keywords
+    const slice = lexer.tokens[start..lexer.index];
+
+    var i: usize = 0;
+    var word_start: usize = 0;
+    while (i < slice.len) {
+        // find the longest symbol possible
+        const found: ?usize = sym: {
+            var j: usize = @min(auto.MAX_SYMBOL_LEN, slice.len - i);
+            while (j > 0) : (j -= 1) {
+                if (auto.SYMBOLS.has(slice[i..i + j])) {
+                    break :sym j;
+                }
+            }
+
+            break :sym null;
+        };
+
+        if (found) |sym_len| {
+            const word_len = i - word_start;
+            if (word_len > 0) {
+                const word_loc = Loc{
+                    .file = loc.file,
+                    .start = start + word_start,
+                    .stop = start + i,
+                };
+                try tokens.append(tokenOfLexical(lexer, word_loc));
+            }
+
+            const sym_loc = Loc{
+                .file = loc.file,
+                .start = start + i,
+                .stop = start + i + sym_len,
+            };
+            try tokens.append(tokenOfLexical(lexer, sym_loc));
+
+            i += sym_len;
+            word_start = i;
+        } else {
+            i += 1;
+        }
+    }
+
+    if (start + word_start < lexer.index) {
+        const word_loc = Loc{
+            .file = loc.file,
+            .start = start + word_start,
+            .stop = lexer.index,
+        };
+        try tokens.append(tokenOfLexical(lexer, word_loc));
+    }
 }
 
-fn lexLine(
+fn lex(
     lexer: *Lexer,
     tokens: *std.ArrayList(Token),
     file: FileRef,
 ) Error!void {
-    // indentation
-    const start = here(lexer.*, file, 0);
-    var indent: usize = 0;
-    while (lexer.peek()) |ch| {
-        if (ch != ' ') break;
-
-        lexer.mustSkip(1);
-        indent += 1;
-    }
-
-    try tokens.append(Token.of(.indent, lengthen(start, indent)));
-
-    // other tokens
     while (lexer.peek()) |ch| {
         const loc = here(lexer.*, file, 1);
         switch (try classify(ch)) {
+            .whitespace => lexer.eat(),
+            .digit => try tokens.append(lexNumber(lexer, loc)),
+            .lexical => try lexLexical(lexer, tokens, loc),
             .newline => {
-                lexer.mustSkip(1);
-                break;
+                // insert a separator on a newline followed by an unindented
+                // character
+                lexer.eat();
+                if (lexer.peek()) |next_ch| {
+                    switch (try classify(next_ch)) {
+                        .whitespace, .newline => {},
+                        else => try tokens.append(Token.of(.separator, loc)),
+                    }
+                }
             },
-            .space => lexer.mustSkip(1),
-            .digit => try tokens.append(try lexNumber(lexer, loc)),
-            .lexical => try tokens.append(try lexIdent(lexer, loc)),
-            inline .lparen, .rparen, .lbracket, .rbracket => |tag| {
-                defer lexer.mustSkip(1);
-                const tok = Token.of(@field(Token.Tag, @tagName(tag)), loc);
-                try tokens.append(tok);
+            .comment => {
+                // ignore comments
+                lexer.eat();
+
+                while (lexer.peek()) |next| {
+                    lexer.eat();
+                    if (next == '\n') break;
+                }
             },
         }
     }
@@ -169,16 +215,14 @@ pub fn tokenize(
     var lexer = Lexer.init(proj.getText(file), 0);
     var tokens = std.ArrayList(Token).init(ally);
 
-    while (!lexer.completed()) {
-        lexLine(&lexer, &tokens, file) catch |e| switch (e) {
-            Error.OutOfMemory => return Error.OutOfMemory,
-            Error.InvalidCharacter => {
-                const loc = here(lexer, file, 0);
-                const fmt = "invalid character";
-                return try Message.err(ally, []Token, loc, fmt, .{});
-            }
-        };
-    }
+    lex(&lexer, &tokens, file) catch |e| switch (e) {
+        Error.OutOfMemory => return Error.OutOfMemory,
+        Error.InvalidCharacter => {
+            const loc = here(lexer, file, 0);
+            const fmt = "invalid character";
+            return try Message.err(ally, []Token, loc, fmt, .{});
+        }
+    };
 
     return Result.ok(tokens.toOwnedSlice());
 }

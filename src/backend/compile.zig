@@ -223,7 +223,7 @@ fn compileOp(
             try b.addInst(ally, Bc.xor(lhs, rhs, to));
             try b.addInst(ally, Bc.lnot(to, to));
         },
-        inline .mod, .fn_ty => |pure, tag| {
+        inline .mod, .fn_ty, .@"and", .@"or" => |pure, tag| {
             // binary ops
             const lhs = rmap.get(pure.params[0]);
             const rhs = rmap.get(pure.params[1]);
@@ -232,6 +232,8 @@ fn compileOp(
             const con = switch (comptime tag) {
                 .mod => Bc.imod,
                 .fn_ty => Bc.fn_ty,
+                .@"and" => Bc.land,
+                .@"or" => Bc.lor,
                 else => unreachable
             };
 

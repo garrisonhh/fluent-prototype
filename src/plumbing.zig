@@ -3,10 +3,13 @@
 
 const std = @import("std");
 const stdout = std.io.getStdOut().writer();
+const kz = @import("kritzler");
 const util = @import("util");
+const now = util.now;
 const FileRef = util.FileRef;
 const Project = util.Project;
 const frontend = @import("frontend.zig");
+const translate = @import("translate.zig").translate;
 const backend = @import("backend.zig");
 const Env = backend.Env;
 const TExpr = backend.TExpr;
@@ -17,13 +20,12 @@ pub fn exec(
     proj: Project,
     env: *Env,
     file: FileRef,
-    what: frontend.ParseType
+    what: frontend.ParseType,
 ) !eval.Result {
     const ally = env.ally;
 
-    const now = std.time.nanoTimestamp;
     const start = now();
-    var render_time: i128 = 0;
+    var render_time: f64 = 0;
 
     // parse
     const parse_res = try frontend.parse(ally, proj, file, what);
@@ -31,25 +33,24 @@ pub fn exec(
     defer ast.deinit(ally);
 
     // translate
-    const trans_res = try backend.translate(env.ally, proj, ast);
+    const trans_res = try translate(ally, proj, ast);
     const sexpr = trans_res.get() orelse return trans_res.cast(TExpr);
-    defer sexpr.deinit(env.ally);
+    defer sexpr.deinit(ally);
 
     if (util.options.log.translate) {
         const t = now();
-        try stdout.print("[Translated AST]\n{}\n\n", .{sexpr});
+        defer render_time += now() - t;
 
-        render_time += now() - t;
+        try stdout.print("[Translated AST]\n", .{});
+        try kz.display(ally, .{}, sexpr, stdout);
     }
 
     // time logging
-    const stop = std.time.nanoTimestamp();
-    const seconds = @intToFloat(f64, stop - start - render_time) * 1e-9;
+    const time = now() - start;
+    try stdout.print("frontend finished in {d:.6}ms.\n", .{time});
 
-    try stdout.print("frontend processing finished in {d:.6}s.\n", .{seconds});
     if (render_time > 0) {
-        const render_secs = @intToFloat(f64, render_time) * 1e-9;
-        try stdout.print("render time {d:.6}s.\n", .{render_secs});
+        try stdout.print("render time {d:.6}ms.\n", .{render_time});
     }
 
     // call backend

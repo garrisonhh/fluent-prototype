@@ -241,7 +241,7 @@ fn analyzeArray(
 ) SemaError!Result {
     const ally = env.ally;
 
-    const exprs = expr.data.array;
+    const exprs = expr.data.call[1..];
     const texprs = try ally.alloc(TExpr, exprs.len);
     errdefer ally.free(texprs);
 
@@ -306,7 +306,7 @@ const DeferredDef = struct {
 fn firstDefPass(
     env: *Env,
     scope: Name,
-    expr: SExpr
+    expr: SExpr,
 ) SemaError!DeferredDef.Result {
     const args = expr.data.call[1..];
 
@@ -464,8 +464,7 @@ fn analyzeRecur(
     return try unifyTExpr(env, final, outward);
 }
 
-/// analyze a call to a specific builtin
-fn analyzeBuiltin(
+fn analyzeBuiltinCall(
     env: *Env,
     scope: Name,
     expr: SExpr,
@@ -474,6 +473,7 @@ fn analyzeBuiltin(
 ) SemaError!Result {
     return switch (b) {
         .pie_stone => unreachable,
+        .array => try analyzeArray(env, scope, expr, outward),
         .cast => try analyzeAs(env, scope, expr, outward),
         .addr_of => try analyzeAddrOf(env, scope, expr, outward),
         .def => def: {
@@ -483,7 +483,7 @@ fn analyzeBuiltin(
         },
         .do => try analyzeDo(env, scope, expr, outward),
         .ns => try analyzeNamespace(env, scope, expr, outward),
-        .@"fn" => try analyzeFn(env, scope, expr, outward),
+        .lambda => try analyzeLambda(env, scope, expr, outward),
         .recur => try analyzeRecur(env, scope, expr, outward),
         .@"if" => try analyzeIf(env, scope, expr, outward),
         else => {
@@ -492,13 +492,11 @@ fn analyzeBuiltin(
     };
 }
 
-/// `fn` is a lambda expression taking an array of a number of unbound symbols
-/// and a body expression.
-fn analyzeFn(
+fn analyzeLambda(
     env: *Env,
     scope: Name,
     expr: SExpr,
-    outward: TypeId
+    outward: TypeId,
 ) SemaError!Result {
     const outer = env.tw.get(outward);
     if (outer.* != .func) {
@@ -511,13 +509,18 @@ fn analyzeFn(
     const exprs = expr.data.call;
 
     if (exprs.len != 3) {
-        const fmt = "`fn` requires parameters and a single body expression";
+        const fmt = "`lambda` requires parameters and a single body expression";
         return try Message.err(env.ally, TExpr, expr.loc, fmt, .{});
     }
 
+    if (builtin.mode == .Debug) {
+        @panic("help");
+    }
+
+    // TODO check params
     const params_expr = exprs[1];
-    if (params_expr.data != .array) {
-        const fmt = "`fn` parameters expects an array";
+    if (false) {
+        const fmt = "`lambda` requires parameters";
         const loc = params_expr.loc;
         return try Message.err(env.ally, TExpr, loc, fmt, .{});
     }
@@ -603,7 +606,7 @@ fn analyzeCall(
 
         const bound = env.get(head_expr.data.name);
         const b = bound.data.builtin;
-        return try analyzeBuiltin(env, scope, expr, b, outward);
+        return try analyzeBuiltinCall(env, scope, expr, b, outward);
     }
 
     // analyze a regular call
@@ -704,12 +707,10 @@ fn analyzeExpr(
 ) SemaError!Result {
     return switch (expr.data) {
         .call => try analyzeCall(env, scope, expr, outward),
-        .array => try analyzeArray(env, scope, expr, outward),
         .symbol => try analyzeSymbol(env, scope, expr, outward),
         else => lit: {
             // construct equivalent literal TExpr
             const ty = switch (expr.data) {
-                .@"bool" => try env.identify(Type{ .@"bool" = {} }),
                 .number => |num| try typeOfNumber(env, num),
                 // string literals are (Array N u8)
                 .string => |str| try env.identify(Type{
@@ -720,10 +721,9 @@ fn analyzeExpr(
                         }),
                     }
                 }),
-                .call, .array, .symbol => unreachable,
+                .call, .symbol => unreachable,
             };
             const data = switch (expr.data) {
-                .@"bool" => |val| TExpr.Data{ .@"bool" = val },
                 .number => |num| TExpr.Data{ .number = num },
                 .string => |sym| TExpr.Data{
                     .string = try sym.clone(env.ally)

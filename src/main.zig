@@ -13,19 +13,30 @@ const Project = util.Project;
 const plumbing = @import("plumbing.zig");
 const backend = @import("backend.zig");
 const Env = backend.Env;
-const ParseType = @import("frontend.zig").ParseType;
+const frontend = @import("frontend.zig");
+const ParseType = frontend.ParseType;
+
+const ZEN =
+    \\(wip)
+    \\
+    \\programs should be:
+    \\- easy to reason about.
+    \\- well-understood by your tools.
+    \\- more declarative, more explicit, and more beautiful.
+    \\
+;
 
 // this test ensures that all code is semantically analyzed
 test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-/// put the `ep` in repl. reusable by `fluent run`.
+/// put the `ep` in repl
 fn execPrint(
-    proj: Project,
     env: *Env,
+    proj: Project,
     ref: FileRef,
-    what: ParseType
+    what: ParseType,
 ) !void {
     switch (try plumbing.exec(proj, env, ref, what)) {
         .ok => |value| {
@@ -39,13 +50,17 @@ fn execPrint(
 }
 
 /// look for a `.fluentinit` script to run on repl startup
-fn runFluentInit(proj: *Project, env: *Env) !void {
-    const file = proj.load(".fluentinit") catch return;
-    try execPrint(proj.*, env, file, .file);
+fn runFluentInit(env: *Env, proj: *Project) !void {
+    const ally = env.ally;
+
+    const file = proj.load(ally, ".fluentinit") catch return;
+    try execPrint(env, proj.*, file, .file);
 }
 
-fn repl(ally: Allocator, proj: *Project, env: *Env) !void {
-    try runFluentInit(proj, env);
+fn repl(env: *Env, proj: *Project) !void {
+    const ally = env.ally;
+
+    try runFluentInit(env, proj);
 
     if (builtin.mode == .Debug) {
         try stdout.writeAll("[Env]\n");
@@ -59,14 +74,14 @@ fn repl(ally: Allocator, proj: *Project, env: *Env) !void {
     while (try ln.linenoise("> ")) |line| {
         try ln.history.add(line);
 
-        const input = try proj.register("repl", line);
-        try execPrint(proj.*, env, input, .expr);
+        const input = try proj.register(ally, "repl", line);
+        try execPrint(env, proj.*, input, .expr);
     }
 }
 
 const LOG_FIELDS = @typeInfo(@TypeOf(util.options.log)).Struct.fields;
 
-fn addLogArgs(parser: *cli.Parser) !void {
+fn addLogFlags(parser: *cli.Parser) !void {
     inline for (LOG_FIELDS) |field| {
         const name = "log-" ++ field.name;
         const desc = "enable logging for the " ++ field.name ++ " stage";
@@ -84,11 +99,10 @@ fn checkLogFlags(options: *const cli.Output.Options) void {
 }
 
 fn dispatchArgs(
-    ally: Allocator,
     parser: cli.Parser,
     output: cli.Output,
+    env: *Env,
     proj: *Project,
-    env: *Env
 ) !void {
     try output.filterHelp(&parser);
 
@@ -97,13 +111,15 @@ fn dispatchArgs(
     } else if (output.match(&.{"repl"})) |options| {
         checkLogFlags(options);
 
-        try repl(ally, proj, env);
+        try repl(env, proj);
     } else if (output.match(&.{"run"})) |options| {
         checkLogFlags(options);
 
         const filepath = options.get("file").?.string;
-        const file = try proj.load(filepath);
-        try execPrint(proj.*, env, file, .file);
+        const file = try proj.load(env.ally, filepath);
+        try execPrint(env, proj.*, file, .file);
+    } else if (output.match(&.{"zen"})) |_| {
+        try stdout.writeAll(ZEN);
     } else {
         unreachable;
     }
@@ -126,22 +142,29 @@ pub fn main() !void {
 
     const repl_cmd = try parser.addSubcommand("repl", "start the fluent repl");
     try repl_cmd.addHelp();
-    try addLogArgs(repl_cmd);
+    try addLogFlags(repl_cmd);
 
     const run_cmd = try parser.addSubcommand("run", "run a fluent program");
     try run_cmd.addHelp();
-    try addLogArgs(run_cmd);
+    try addLogFlags(run_cmd);
     try run_cmd.addPositional("file", "the file to run", .string);
+
+    const zen_cmd = try parser.addSubcommand("zen", "display the fluent zen");
+    try zen_cmd.addHelp();
 
     var output = try parser.parse();
     defer output.deinit(ally);
 
-    // fluent env
-    var proj = util.Project.init(ally);
-    defer proj.deinit();
+    // fluent globals
+    try frontend.init(ally);
+    defer frontend.deinit(ally);
 
+    // fluent env
     var env = try backend.generatePrelude(ally);
     defer env.deinit();
 
-    try dispatchArgs(ally, parser, output, &proj, &env);
+    var proj = util.Project.init();
+    defer proj.deinit(env.ally);
+
+    try dispatchArgs(parser, output, &env, &proj);
 }

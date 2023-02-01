@@ -118,11 +118,13 @@ pub const Loc = struct {
         );
 
         if (self.stop != self.start) {
+            const char_stop_display = if (char_stop > 0) char_stop - 1 else 0;
+
             source = try ctx.unify(
                 source,
                 up_arrow,
                 .{
-                    @intCast(isize, char_stop - 1),
+                    @intCast(isize, char_stop_display),
                     @intCast(isize, ctx.getSize(source)[1])
                 }
             );
@@ -134,6 +136,8 @@ pub const Loc = struct {
 };
 
 /// project is the central storage for files
+///
+/// struct itself can be passed around by value
 pub const Project = struct {
     const Self = @This();
 
@@ -142,23 +146,28 @@ pub const Project = struct {
         text: []u8,
     };
 
-    ally: Allocator,
+    comptime {
+        // I want this struct to remain smallish
+        if (@sizeOf(Self) > 32) {
+            @compileLog(@sizeOf(Self)); // project struct is too large
+        }
+    }
+
     cwd: fs.Dir,
     files: std.ArrayListUnmanaged(File) = .{},
 
-    pub fn init(ally: Allocator,) Self {
+    pub fn init() Self {
         return Self{
-            .ally = ally,
             .cwd = fs.cwd(),
         };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *Self, ally: Allocator) void {
         for (self.files.items) |file| {
-            self.ally.free(file.name);
-            self.ally.free(file.text);
+            ally.free(file.name);
+            ally.free(file.text);
         }
-        self.files.deinit(self.ally);
+        self.files.deinit(ally);
     }
 
     fn get(self: Self, ref: FileRef) File {
@@ -180,13 +189,14 @@ pub const Project = struct {
 
     pub fn register(
         self: *Self,
+        ally: Allocator,
         name: []const u8,
         text: []const u8
     ) Allocator.Error!FileRef {
         const ref = FileRef.of(self.files.items.len);
-        try self.files.append(self.ally, File{
-            .name = try self.ally.dupe(u8, name),
-            .text = try self.ally.dupe(u8, text),
+        try self.files.append(ally, File{
+            .name = try ally.dupe(u8, name),
+            .text = try ally.dupe(u8, text),
         });
 
         return ref;
@@ -199,20 +209,24 @@ pub const Project = struct {
      || std.os.GetCwdError;
 
     /// load file from disk
-    pub fn load(self: *Self, path: []const u8) LoadError!FileRef {
+    pub fn load(
+        self: *Self,
+        ally: Allocator,
+        path: []const u8
+    ) LoadError!FileRef {
         // load file text
         const file = try self.cwd.openFile(path, .{ .mode = .read_only });
         defer file.close();
 
         const size = (try file.stat()).size;
-        const text = try file.readToEndAlloc(self.ally, size);
+        const text = try file.readToEndAlloc(ally, size);
 
         // normalize relative path
-        const name = try fs.path.relative(self.ally, ".", path);
-        defer self.ally.free(name);
+        const name = try fs.path.relative(ally, ".", path);
+        defer ally.free(name);
 
         // register file
-        return self.register(name, text);
+        return self.register(ally, name, text);
     }
 };
 
@@ -227,11 +241,13 @@ pub const Message = struct {
     pub const Tag = enum {
         log,
         @"error",
+        internal,
 
         fn render(tag: Tag, ctx: *kz.Context) Allocator.Error!kz.Ref {
             const sty: kz.Style = switch (tag) {
                 .log => .{ .fg = .cyan },
                 .@"error" => .{ .fg = .red },
+                .internal => .{ .fg = .green },
             };
 
             return try ctx.stack(
@@ -264,7 +280,7 @@ pub const Message = struct {
         };
     }
 
-    /// generate void error monad
+    /// TODO remove this, it's too much. use local helpers instead.
     pub fn err(
         ally: Allocator,
         comptime T: type,

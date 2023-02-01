@@ -7,8 +7,11 @@ pub const Builtin = enum {
     ns,
     def,
 
+    // data
+    array,
+
     // control flow
-    @"fn",
+    lambda,
     recur,
     do,
     @"if",
@@ -16,6 +19,7 @@ pub const Builtin = enum {
     // value operators
     cast,
     addr_of,
+    access,
 
     eq,
     add,

@@ -6,29 +6,28 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const kz = @import("kritzler");
 const util = @import("util");
 const Symbol = util.Symbol;
 const Loc = util.Loc;
 const canon = @import("canon.zig");
-const Number = canon.Number;
 
 const Self = @This();
 
 pub const Tag = std.meta.Tag(Data);
+pub const Number = canon.Number;
 
 pub const Data = union(enum) {
-    @"bool": bool,
     number: Number,
     string: Symbol,
     symbol: Symbol,
     call: []Self,
-    array: []Self,
 
     pub fn clone(data: Data, ally: Allocator) Allocator.Error!Data {
         return switch (data) {
             .number => data,
-            .string => |sym| Data{ .string = try sym.clone(ally) },
-            .symbol => |sym| Data{ .symbol = try sym.clone(ally) },
+            inline .string, .symbol => |sym, tag|
+                @unionInit(Data, @tagName(tag), try sym.clone(ally)),
             inline .call, .array => |exprs, tag| many: {
                 const cloned = try ally.alloc(Self, exprs.len);
                 for (exprs) |expr, i| cloned[i] = try expr.clone(ally);
@@ -42,57 +41,16 @@ pub const Data = union(enum) {
 data: Data,
 loc: Loc,
 
-/// expects input to be already owned
-pub fn initCall(loc: Loc, exprs: []Self) Self {
+pub fn init(loc: Loc, data: Data) Self {
     return Self{
-        .data = .{ .call = exprs },
-        .loc = loc
-    };
-}
-
-pub fn initBool(loc: Loc, @"bool": bool) Self {
-    return Self{
-        .data = .{ .@"bool" = @"bool" },
         .loc = loc,
+        .data = data,
     };
-}
-
-pub fn initNumber(loc: Loc, num: Number) Self {
-    return Self{
-        .data = .{ .number = num },
-        .loc = loc,
-    };
-}
-
-pub fn initSymbol(
-    ally: Allocator,
-    loc: Loc,
-    str: []const u8
-) Allocator.Error!Self {
-    return Self{
-        .data = .{ .symbol = Symbol.init(try ally.dupe(u8, str)) },
-        .loc = loc,
-    };
-}
-
-pub fn initOwnedString(loc: Loc, str: []const u8) Self {
-    return Self{
-        .data = .{ .string = Symbol.init(str) },
-        .loc = loc,
-    };
-}
-
-pub fn initString(
-    ally: Allocator,
-    loc: Loc,
-    str: []const u8
-) Allocator.Error!Self {
-    return Self.initOwnedString(loc, try ally.dupe(u8, str));
 }
 
 pub fn deinit(self: Self, ally: Allocator) void {
     switch (self.data) {
-        .call, .array => |children| {
+        .call => |children| {
             for (children) |child| child.deinit(ally);
             ally.free(children);
         },
@@ -115,7 +73,6 @@ pub fn format(
     writer: anytype,
 ) @TypeOf(writer).Error!void {
     switch (self.data) {
-        .@"bool" => |val| try writer.print("{}", .{val}),
         .number => |num| try writer.print("{}", .{num}),
         .string => |sym| try writer.print("\"{s}\"", .{sym.str}),
         .symbol => |sym| try writer.print("{s}", .{sym.str}),
@@ -127,13 +84,72 @@ pub fn format(
             }
             try writer.writeByte(')');
         },
-        .array => |exprs| {
-            try writer.writeByte('[');
-            for (exprs) |expr, i| {
-                if (i > 0) try writer.writeByte(' ');
-                try writer.print("{}", .{expr});
-            }
-            try writer.writeByte(']');
-        }
     }
+}
+
+pub const RenderOptions = struct {
+    indented: bool = true,
+    force_parens: bool = false,
+};
+
+pub fn render(
+    self: Self,
+    ctx: *kz.Context,
+    env: RenderOptions,
+) Allocator.Error!kz.Ref {
+    const INDENT = 2;
+
+    const magenta = kz.Style{ .fg = .magenta };
+    const green =   kz.Style{ .fg = .green };
+
+    return switch (self.data) {
+        .number => |num| try ctx.print(magenta, "{}", .{num}),
+        .string => |sym| try ctx.print(green, "\"{s}\"", .{sym.str}),
+        .symbol => |sym| try ctx.print(.{}, "{s}", .{sym.str}),
+        .call => |exprs| {
+            // unit special case
+            if (exprs.len == 0) {
+                return try ctx.print(.{}, "()", .{});
+            }
+
+            const indented =
+                env.indented and exprs.len > 1
+                and for (exprs) |child| {
+                    if (child.data == .call) {
+                        break true;
+                    }
+                } else false;
+
+            // render children
+            var ref = try exprs[0].render(ctx, RenderOptions{
+                .indented = false,
+                .force_parens = true,
+            });
+
+            if (indented) {
+                for (exprs[1..]) |child| {
+                    const height = @intCast(isize, ctx.getSize(ref)[1]);
+                    const child_ref = try child.render(ctx, env);
+
+                    ref = try ctx.unify(ref, child_ref, .{INDENT, height});
+                }
+            } else {
+                for (exprs[1..]) |child| {
+                    const child_ref = try child.render(ctx, env);
+                    ref = try ctx.slap(ref, child_ref, .right, .{ .space = 1 });
+                }
+            }
+
+            // parentheses
+            if (env.force_parens or !env.indented) {
+                const lparen = try ctx.print(.{}, "(", .{});
+                const rparen = try ctx.print(.{}, ")", .{});
+
+                ref = try ctx.slap(ref, lparen, .left, .{});
+                ref = try ctx.slap(ref, rparen, .right, .{ .aln = .far });
+            }
+
+            return ref;
+        },
+    };
 }

@@ -1,5 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const stdout = std.io.getStdOut().writer();
+const builtin = @import("builtin");
+const kz = @import("kritzler");
 const util = @import("util");
 const Loc = util.Loc;
 const FileRef = util.FileRef;
@@ -8,299 +11,460 @@ const Message = util.Message;
 const lex = @import("lex.zig");
 const Token = lex.Token;
 const Stream = @import("stream.zig").Stream;
+const RawExpr = @import("raw_expr.zig");
+const auto = @import("auto.zig");
+const Form = auto.Form;
+const FormExpr = auto.FormExpr;
+const Syntax = auto.Syntax;
+const desugar = @import("desugar.zig").desugar;
 
-pub const Error = Allocator.Error;
-
-const Parser = Stream(Token);
-const Result = Message.Result(RawExpr);
-
-/// a structured but still very raw textual representation of the AST
-pub const RawExpr = struct {
+const TopLevelIterator = struct {
     const Self = @This();
 
-    pub const Tag = enum {
-        file,
-        group,
+    tokens: []const Token,
 
-        // literal-ish
-        number,
-        string,
-        symbol,
-
-        // syntax
-        array,
-    };
-
-    tag: Tag,
-    loc: Loc,
-    children: ?[]RawExpr,
-
-    fn init(tag: Tag, loc: Loc, children: ?[]RawExpr) Self {
-        return Self{
-            .tag = tag,
-            .loc = loc,
-            .children = children,
-        };
+    fn done(self: Self) bool {
+        return self.tokens.len == 0;
     }
 
-    pub fn deinit(self: Self, ally: Allocator) void {
-        if (self.children) |children| {
-            for (children) |child| child.deinit(ally);
-            ally.free(children);
+    fn next(self: *Self) ?[]const Token {
+        // skip initial separators
+        while (self.tokens.len > 0 and self.tokens[0].tag == .separator) {
+            self.tokens = self.tokens[1..];
         }
+
+        if (self.tokens.len == 0) {
+            return null;
+        }
+
+        // get line
+        for (self.tokens) |tok, i| {
+            if (tok.tag == .separator) {
+                defer self.tokens = self.tokens[i + 1..];
+                return self.tokens[0..i];
+            }
+        }
+
+        defer self.tokens = &.{};
+        return self.tokens;
     }
 };
 
-fn unexpectedEof(proj: Project, parser: Parser) Allocator.Error!Result {
-    const loc = parser.prev().?.loc;
-    return try Message.err(proj.ally, RawExpr, loc, "unexpected EOF", .{});
-}
+/// context for parsing
+const Parser = struct {
+    const Self = @This();
 
-fn skipWhitespace(parser: *Parser) void {
-    while (parser.peek()) |tok| {
-        if (tok.tag != .indent) break;
-        parser.mustSkip(1);
-    }
-}
-
-fn expectGroup(
     ally: Allocator,
+    strm: Stream(Token),
     proj: Project,
     file: FileRef,
-    parser: *Parser
-) Error!Result {
-    // collect
-    var children = std.ArrayList(RawExpr).init(ally);
+    max_parsed: usize = 0,
 
-    const lparen = parser.next().?;
-    std.debug.assert(lparen.tag == .lparen);
-
-    skipWhitespace(parser);
-
-    while (true) {
-        const next = parser.peek() orelse {
-            return try unexpectedEof(proj, parser.*);
-        };
-
-        if (next.tag == .rparen) break;
-
-        // expect next element
-        const res = try expectExpr(ally, proj, file, parser);
-        const child = res.get() orelse return res;
-        try children.append(child);
-
-        skipWhitespace(parser);
+    fn done(self: Self) bool {
+        return self.strm.done();
     }
 
-    const rparen = parser.next().?;
-    std.debug.assert(rparen.tag == .rparen);
-
-    // collect into a rawexpr
-    const loc = lparen.loc.span(rparen.loc);
-    return Result.ok(RawExpr.init(.group, loc, children.toOwnedSlice()));
-}
-
-/// helper for expectExpr
-fn expectArray(
-    ally: Allocator,
-    proj: Project,
-    file: FileRef,
-    parser: *Parser
-) Error!Result {
-    // collect
-    var children = std.ArrayList(RawExpr).init(ally);
-
-    const lbracket = parser.next().?;
-    std.debug.assert(lbracket.tag == .lbracket);
-
-    skipWhitespace(parser);
-
-    while (true) {
-        const next = parser.peek() orelse {
-            return try unexpectedEof(proj, parser.*);
-        };
-
-        if (next.tag == .rbracket) break;
-
-        // expect next element
-        const res = try expectExpr(ally, proj, file, parser);
-        const child = res.get() orelse return res;
-        try children.append(child);
-
-        skipWhitespace(parser);
+    fn reset(self: *Self, index: usize) void {
+        self.strm.index = index;
     }
 
-    const rbracket = parser.next().?;
-    std.debug.assert(rbracket.tag == .rbracket);
+    fn peek(self: Self) ?Token {
+        return self.strm.peek();
+    }
 
-    // collect into a rawexpr
-    const loc = lbracket.loc.span(rbracket.loc);
-    return Result.ok(RawExpr.init(.array, loc, children.toOwnedSlice()));
-}
+    fn eat(self: *Self) void {
+        self.max_parsed = @max(self.max_parsed, self.strm.index);
+        self.strm.eat();
+    }
 
-/// expects a non-whitespace-aware expr
-fn expectExpr(
-    ally: Allocator,
-    proj: Project,
-    file: FileRef,
-    parser: *Parser
-) Error!Result {
-    const fst = parser.peek() orelse {
-        return unexpectedEof(proj, parser.*);
-    };
+    fn prev(self: Self) Token {
+        return self.strm.prev();
+    }
+};
 
-    return switch (fst.tag) {
-        inline .number, .string, .symbol => |tag| lit: {
-            parser.mustSkip(1);
-
-            const raw_tag = @field(RawExpr.Tag, @tagName(tag));
-            break :lit Result.ok(RawExpr.init(raw_tag, fst.loc, null));
-        },
-        .lparen => try expectGroup(ally, proj, file, parser),
-        .lbracket => try expectArray(ally, proj, file, parser),
-        .rparen, .rbracket, =>
-            try Message.err(ally, RawExpr, fst.loc, "expected expression", .{}),
-        .indent => unreachable,
-    };
-}
-
-fn unexpectedIndent(
+fn parseError(
     ally: Allocator,
     loc: Loc,
-    expected: usize
+    comptime fmt: []const u8,
+    args: anytype
 ) Allocator.Error!Result {
-    const fmt = "expected indentation level of {}";
-    return try Message.err(ally, RawExpr, loc, fmt, .{expected});
+    return try Message.err(ally, RawExpr, loc, fmt, args);
 }
 
-fn skipEmptyLines(parser: *Parser) void {
-    // skip empty lines
-    while (parser.peek()) |tok| {
-        const zero_len_line = tok.tag == .indent and tok.loc.length() == 0;
-        const empty_line = tok.tag == .indent and next_nl: {
-            const next = parser.get(1) orelse break :next_nl true;
-            break :next_nl next.tag == .indent;
+fn streamError(
+    p: *const Parser,
+    comptime fmt: []const u8,
+    args: anytype
+) Allocator.Error!Result {
+    const loc =
+        if (p.peek()) |tok| tok.loc
+        else if (p.strm.tokens.len == 0) Loc.of(p.file, 0, 0)
+        else eof: {
+            const final = p.strm.tokens[p.strm.index - 1].loc;
+            break :eof Loc.of(p.file, final.stop, final.stop);
         };
 
-        if (!(zero_len_line or empty_line)) {
-            break;
-        }
-
-        parser.mustSkip(1);
-    }
+    return parseError(p.ally, loc, fmt, args);
 }
 
-/// whitespace awareness
-fn expectIndented(
-    ally: Allocator,
-    proj: Project,
-    file: FileRef,
-    parser: *Parser,
-    parent_level: usize
-) Error!Result {
-    var children = std.ArrayList(RawExpr).init(ally);
-    defer children.deinit();
+/// generic error at a location
+fn syntaxErrorAt(ally: Allocator, loc: Loc) Allocator.Error!Result {
+    return parseError(ally, loc, "syntax error", .{});
+}
 
-    // parse non-indented children
-    while (parser.peek()) |tok| {
-        if (tok.tag == .indent) break;
-        const res = try expectExpr(ally, proj, file, parser);
-        const child = res.get() orelse return res;
-        try children.append(child);
-    }
+/// generic error at current parsing location
+fn syntaxError(p: *const Parser) Allocator.Error!Result {
+    const max_loc = p.strm.tokens[p.max_parsed].loc;
+    return syntaxErrorAt(p.ally, Loc.of(p.file, max_loc.stop, max_loc.stop));
+}
 
-    // indented children
-    if (parser.peek()) |next_expr| {
-        const level = proj.getSlice(next_expr.loc).len;
-        if (next_expr.tag == .indent and level > parent_level) {
-            parser.mustSkip(1); // now we can skip this indent
+fn parseAtom(p: *Parser, out_prec: *usize) Allocator.Error!?RawExpr {
+    out_prec.* = auto.MAX_PRECEDENCE;
 
-            while (true) {
-                // parse child
-                const res = try expectIndented(ally, proj, file, parser, level);
-                const child = res.get() orelse return res;
-                try children.append(child);
+    const tok = p.peek() orelse return null;
+    return switch (tok.tag) {
+        .separator => unreachable,
+        .word => prefixed: {
+            // try to parse any prefixed ops
+            const word = tok.loc.slice(p.proj);
 
-                // verify next indent
-                const next = parser.peek() orelse break;
-                const len = next.loc.stop - next.loc.start;
-                if (next.tag != .indent or len < level) {
-                    break;
-                } else if (len > level) {
-                    return unexpectedIndent(ally, next.loc, level);
+            break :prefixed if (TABLE.prefixed.get(word)) |term| parse: {
+                const start_index = p.strm.index;
+                const res = try parsePrefixedSyntax(p, term.rule.*, term.prec);
+                if (res == null) {
+                    p.reset(start_index);
                 }
 
-                // found another indent, so continue
-                parser.mustSkip(1);
-            }
-        }
-    }
+                // get next prec for this rule
+                const fexprs = term.rule.fexprs;
+                const final = fexprs[fexprs.len - 1];
+                if (final == .expr) {
+                    out_prec.* = final.expr.innerPrec(term.prec);
+                }
 
-    // extrapolate to RawExpr
-    return switch (children.items.len) {
-        0 => unreachable,
-        1 => Result.ok(children.items[0]),
-        else => group: {
-            const start = children.items[0].loc;
-            const stop = children.items[children.items.len - 1].loc;
-            const loc = start.span(stop);
-            const expr = RawExpr.init(.group, loc, children.toOwnedSlice());
-            break :group Result.ok(expr);
-        }
+                break :parse res;
+            } else null;
+        },
+        inline .ident, .number, .string => |tag| lit: {
+            p.eat();
+            break :lit RawExpr{
+                .form = comptime switch (tag) {
+                    .ident => .symbol,
+                    .number => .number,
+                    .string => .string,
+                    else => unreachable
+                },
+                .loc = tok.loc,
+            };
+        },
     };
 }
 
-fn expectFile(
-    ally: Allocator,
-    proj: Project,
-    file: FileRef,
-    parser: *Parser
-) Error!Result {
-    var exprs = std.ArrayList(RawExpr).init(ally);
-
-    // collect all the exprs in the file
-    while (!parser.completed()) {
-        const res = try expectIndented(ally, proj, file, parser, 0);
-        const expr = res.get() orelse return res;
-        try exprs.append(expr);
-
-        skipEmptyLines(parser);
+fn parseFormExprs(
+    p: *Parser,
+    fexprs: []const FormExpr,
+    prec: usize,
+) Allocator.Error!?[]RawExpr {
+    var exprs = std.ArrayList(RawExpr).init(p.ally);
+    defer {
+        for (exprs.items) |expr| expr.deinit(p.ally);
+        exprs.deinit();
     }
 
-    // return file as a RawExpr
-    const loc = Loc.of(file, 0, proj.getText(file).len - 1);
-    return Result.ok(RawExpr.init(.file, loc, exprs.toOwnedSlice()));
+    for (fexprs) |fexpr| {
+        switch (fexpr) {
+            .word => |word| {
+                // accept word
+                const tok = p.peek() orelse return null;
+                const slice = tok.loc.slice(p.proj);
+
+                if (!std.mem.eql(u8, slice, word)) {
+                    return null;
+                }
+
+                p.eat();
+            },
+            .expr => |meta| switch (meta.flag) {
+                inline .one, .multi => |tag| {
+                    const inner_prec = meta.innerPrec(prec);
+                    const fst = (try climb(p, inner_prec)) orelse {
+                        return null;
+                    };
+
+                    try exprs.append(fst);
+
+                    if (comptime tag == .multi) {
+                        while (try climb(p, inner_prec)) |expr| {
+                            try exprs.append(expr);
+                        }
+                    }
+                },
+                .opt => {
+                    if (try climb(p, meta.innerPrec(prec))) |expr| {
+                        try exprs.append(expr);
+                    }
+                },
+                .any => {
+                    const inner_prec = meta.innerPrec(prec);
+                    while (try climb(p, inner_prec)) |expr| {
+                        try exprs.append(expr);
+                    }
+                },
+            },
+        }
+    }
+
+    return exprs.toOwnedSlice();
+}
+
+/// resets on failure
+fn parsePrefixedSyntax(
+    p: *Parser,
+    syntax: Syntax,
+    prec: usize,
+) Allocator.Error!?RawExpr {
+    std.debug.assert(syntax.isPrefixed());
+
+    const next = p.peek() orelse {
+        return null;
+    };
+    const start_loc = next.loc;
+
+    const exprs = (try parseFormExprs(p, syntax.fexprs, prec)) orelse {
+        return null;
+    };
+
+    // success
+    const stop_loc = p.prev().loc;
+
+    return RawExpr{
+        .form = syntax.form,
+        .loc = start_loc.span(stop_loc),
+        .exprs = exprs,
+    };
+}
+
+/// resets to right after the left expr on failure
+fn parseUnprefixed(
+    p: *Parser,
+    syntax: Syntax,
+    prec: usize,
+    left: RawExpr,
+) Allocator.Error!?RawExpr {
+    std.debug.assert(!syntax.isPrefixed());
+
+    var exprs = std.ArrayList(RawExpr).init(p.ally);
+    defer {
+        if (exprs.items.len > 1) {
+            // leftmost expr is not managed by this function
+            for (exprs.items[1..]) |expr| expr.deinit(p.ally);
+        }
+        exprs.deinit();
+    }
+
+    // parse the leftmost expr
+    if (syntax.fexprs[0].expr.flag != .one) {
+        @panic("TODO parse unprefixed with flags on the left");
+    }
+
+    try exprs.append(left);
+
+    // parse the rest of the exprs
+    const fexprs = syntax.fexprs[1..];
+    const rule_exprs = (try parseFormExprs(p, fexprs, prec)) orelse {
+        return null;
+    };
+    defer p.ally.free(rule_exprs);
+
+    try exprs.appendSlice(rule_exprs);
+
+    // success
+    const loc = left.loc.span(p.prev().loc);
+
+    return RawExpr{
+        .form = syntax.form,
+        .loc = loc,
+        .exprs = exprs.toOwnedSlice(),
+    };
+}
+
+/// attempt to parse an expression at or above a certain precedence
+fn climb(p: *Parser, min_prec: usize) Allocator.Error!?RawExpr {
+    var max_prec: usize = 0;
+    var expr = (try parseAtom(p, &max_prec)) orelse {
+        return null;
+    };
+
+    // greedily parse as many rules at or above this precedence as possible
+    loop: while (true) {
+        const next = p.peek() orelse {
+            break :loop;
+        };
+
+        if (next.tag == .word) infix: {
+            // try infix
+            const word = next.loc.slice(p.proj);
+
+            const term = TABLE.infixed.get(word) orelse {
+                break :infix;
+            };
+
+            // rule must equal or supercede this rule's precedence. if I've
+            // parsed a rule already, the next rule precedence must not exceed
+            // the previous rules' precedence
+            if (term.prec < min_prec or term.prec > max_prec) {
+                break :loop;
+            }
+
+            const res = try parseUnprefixed(
+                p,
+                term.rule.*,
+                term.prec,
+                expr,
+            );
+
+            if (res) |got| {
+                expr = got;
+                max_prec = term.prec;
+                continue :loop;
+            } else {
+                break :loop;
+            }
+        }
+
+        // try unfix
+        unfix: for (TABLE.unfixed.items) |term| {
+            if (term.prec < min_prec or term.prec > max_prec) {
+                continue :unfix;
+            }
+
+            const res = try parseUnprefixed(
+                p,
+                term.rule.*,
+                term.prec,
+                expr,
+            );
+
+            if (res) |got| {
+                expr = got;
+                max_prec = term.prec;
+                break :unfix;
+            }
+        } else {
+            // no rules have been matched!
+            break :loop;
+        }
+    }
+
+    return expr;
+}
+
+var TABLE = auto.SyntaxTable{};
+
+pub fn init(ally: Allocator) auto.SyntaxTable.PutError!void {
+    for (auto.SYNTAX) |ruleset, prec| {
+        for (ruleset) |*rule| {
+            try TABLE.put(ally, rule, prec);
+        }
+    }
+}
+
+pub fn deinit(ally: Allocator) void {
+    TABLE.deinit(ally);
 }
 
 pub const ParseType = enum { file, expr };
+pub const Result = Message.Result(RawExpr);
 
 /// parses a token string, providing errors
 pub fn parse(
     ally: Allocator,
     proj: Project,
     file: FileRef,
-    what: ParseType
-) Error!Result {
+    what: ParseType,
+) Allocator.Error!Result {
     // lex
     const lex_res = try lex.tokenize(ally, proj, file);
     const tokens = lex_res.get() orelse return lex_res.cast(RawExpr);
     defer ally.free(tokens);
 
-    // parse
-    var parser = Parser.init(tokens, 0);
-    skipEmptyLines(&parser);
-
-    // check for empty input
-    if (parser.completed()) {
-        const loc = Loc.of(file, 0, 0);
-        return try Message.err(ally, RawExpr, loc, "nothing to parse", .{});
-    }
-
-    return switch (what) {
-        .file => try expectFile(ally, proj, file, &parser),
-        .expr => expr: {
-            // TODO check for tokens left over in token stream
-            break :expr expectIndented(ally, proj, file, &parser, 0);
-        }
+    // parse, respecting behavior based on file vs. expr parsing
+    var tl_iter = TopLevelIterator{
+        .tokens = tokens,
     };
+
+    const first_tokens: []const Token = tl_iter.next() orelse &.{};
+    var parser = Parser{
+        .ally = ally,
+        .proj = proj,
+        .file = file,
+        .strm = Stream(Token).init(first_tokens, 0),
+    };
+
+    const expr = switch (what) {
+        .expr => expr: {
+            if (parser.done()) {
+                return syntaxError(&parser);
+            }
+
+            const expr = (try climb(&parser, 0)) orelse {
+                return syntaxError(&parser);
+            };
+
+            if (!parser.done()) {
+                return syntaxError(&parser);
+            }
+
+            // exprs are single expressions
+            if (tl_iter.next()) |next| {
+                return syntaxErrorAt(ally, next[0].loc);
+            }
+
+            break :expr expr;
+        },
+        .file => file: {
+            var exprs = std.ArrayList(RawExpr).init(ally);
+            defer {
+                for (exprs.items) |expr| expr.deinit(ally);
+                exprs.deinit();
+            }
+
+            while (!parser.done()) {
+                const expr = (try climb(&parser, 0)) orelse {
+                    return syntaxError(&parser);
+                };
+
+                if (!parser.done()) {
+                    return syntaxError(&parser);
+                }
+
+                try exprs.append(expr);
+
+                // iterate toplevel
+                if (tl_iter.next()) |next_tokens| {
+                    parser.strm = Stream(Token).init(next_tokens, 0);
+                }
+            }
+
+            // files need to be wrapped in a file expr
+            const loc = switch (exprs.items.len) {
+                0 => Loc.of(file, 0, 0),
+                1 => exprs.items[0].loc,
+                else => many: {
+                    const first = exprs.items[0].loc;
+                    const last = exprs.items[exprs.items.len - 1].loc;
+                    break :many first.span(last);
+                }
+            };
+
+            break :file RawExpr{
+                .loc = loc,
+                .form = .file,
+                .exprs = exprs.toOwnedSlice(),
+            };
+        },
+    };
+
+    // postprocess and return
+    return try desugar(ally, proj, expr);
 }

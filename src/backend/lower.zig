@@ -265,7 +265,7 @@ fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
                 const tail = expr.data.call[1..];
                 return try lowerOperator(env, ref, block, b, tail, expr.ty);
             },
-            .@"fn" => return try lowerLambda(env, ref, block, expr),
+            .lambda => return try lowerLambda(env, ref, block, expr),
             .@"if" => return try lowerIf(env, ref, block, expr),
             else => |b| {
                 std.debug.panic("TODO lower builtin {s}", .{@tagName(b)});

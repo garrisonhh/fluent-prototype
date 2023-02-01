@@ -157,13 +157,15 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     const type_slice_ty = try env.identify(Type.initPtr(.slice, @"type"));
     const fn_ty = try fnType(&env, &.{type_slice_ty, @"type"}, @"type");
 
-    try defBuiltin(&env, "ns", flbuiltin, .ns);
-    try defBuiltin(&env, "def", flbuiltin, .def);
-    try defBuiltin(&env, "as", flbuiltin, .cast);
-    try defBuiltin(&env, "&", flbuiltin, .addr_of);
-    try defBuiltin(&env, "fn", flbuiltin, .@"fn");
-    try defBuiltin(&env, "recur", flbuiltin, .recur);
-    try defBuiltin(&env, "if", flbuiltin, .@"if");
+    try defBuiltin(&env, "ns",     flbuiltin, .ns);
+    try defBuiltin(&env, "def",    flbuiltin, .def);
+    try defBuiltin(&env, "as",     flbuiltin, .cast);
+    try defBuiltin(&env, "&",      flbuiltin, .addr_of);
+    try defBuiltin(&env, ".",      flbuiltin, .access);
+    try defBuiltin(&env, "array",  flbuiltin, .array);
+    try defBuiltin(&env, "lambda", flbuiltin, .lambda);
+    try defBuiltin(&env, "recur",  flbuiltin, .recur);
+    try defBuiltin(&env, "if",     flbuiltin, .@"if");
 
     try defBuiltin(&env, "=", bin_i64_cond, .eq);
     try defBuiltin(&env, "+", bin_i64, .add);

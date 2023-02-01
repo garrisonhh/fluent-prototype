@@ -124,7 +124,7 @@ pub fn resurrect(
     value: Value,
     mem: []const u8,
     loc: ?Loc,
-    tid: TypeId
+    tid: TypeId,
 ) ResError!TExpr {
     const ally = env.ally;
     const ty = env.tw.get(tid);
