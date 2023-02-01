@@ -8,13 +8,17 @@ const util = @import("util");
 pub const Form = enum {
     file,
     call,
-    list,
-    dict,
-    parens,
 
-    // pure syntax
+    // data structures
+    array,
+    tuple,
+
+    // pure sugar, eliminated on desugar step
+    parens,
     comma,
     kv,
+    dict,
+    stmt,
 
     // no children
     unit,
@@ -46,8 +50,8 @@ pub const Form = enum {
     le,
 
     // flow
-    stmt,
     def,
+    block,
     @"if",
     @"fn",
     lambda,
@@ -75,14 +79,15 @@ pub const Form = enum {
     /// used for generating error messages etc.
     pub fn name(self: Form) []const u8 {
         return switch (self) {
-            .file, .call, .list, .unit, .symbol, .string, .number, .lambda
+            .file, .call, .array, .tuple, .unit, .symbol, .string, .number,
+            .lambda
                 => @tagName(self),
             .comma => "sequence",
+            .stmt => "statement expression",
             .arrow => "arrow operator",
             .parens => "parentheses",
             .dict => "dictionary literal",
-            .seq => "sequence",
-            .anno => "annotation",
+            .kv => "key/value pair",
             .dot => "field access",
             .add => "add operator",
             .sub => "subtract operator",
@@ -97,8 +102,8 @@ pub const Form = enum {
             .addr => "addressing operator",
             .ptr => "pointer operator",
             .mut => "mutablity qualifier",
-            .stmt => "statement expression",
             .def => "declaration",
+            .block => "block",
             .@"if" => "if expression",
             .@"fn" => "fn expression",
         };
@@ -432,7 +437,7 @@ pub const SyntaxTable = struct {
     }
 };
 
-fn comptimeStringSet(comptime list: []const []const u8) type {
+fn comptimeStringSet(comptime array: []const []const u8) type {
     comptime {
         @setEvalBranchQuota(100_000);
 
@@ -441,8 +446,8 @@ fn comptimeStringSet(comptime list: []const []const u8) type {
             @"0": []const u8,
             @"1": void = {},
         };
-        var kvs: [list.len]KV = undefined;
-        for (list) |keyword, i| {
+        var kvs: [array.len]KV = undefined;
+        for (array) |keyword, i| {
             kvs[i] = KV{ .@"0" = keyword };
         }
 
@@ -462,7 +467,7 @@ pub const SYNTAX: []const []const Syntax = t: {
             x(Form.stmt,   .r, "$ `; $"),
             x(Form.parens, .l, "`( $? `)"),
             x(Form.dict,   .l, "`{ $? `}"),
-            x(Form.list,   .l, "`[ $? `]"),
+            x(Form.array,  .l, "`[ $? `]"),
             x(Form.@"if",  .r, "`if $ `then $ `else $"),
             x(Form.@"fn",  .l, "`fn $ `= $"),
             x(Form.lambda, .r, "`| $? `| $"),
@@ -516,7 +521,7 @@ pub const KEYWORDS = comptimeStringSet(&.{
 const SYMBOL_LIST = &[_][]const u8{
     "&", ".", "=", "::", "->", ",", ";", ":",
     // math
-    "=", "+", "-", "*", "/", "%",
+    "+", "-", "*", "/", "%",
     // cond
     "==", ">", "<", ">=", "<=",
     // matched

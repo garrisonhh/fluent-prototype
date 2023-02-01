@@ -16,6 +16,7 @@ const auto = @import("auto.zig");
 const Form = auto.Form;
 const FormExpr = auto.FormExpr;
 const Syntax = auto.Syntax;
+const desugar = @import("desugar.zig").desugar;
 
 const TopLevelIterator = struct {
     const Self = @This();
@@ -366,8 +367,6 @@ pub fn init(ally: Allocator) auto.SyntaxTable.PutError!void {
             try TABLE.put(ally, rule, prec);
         }
     }
-
-    TABLE.dump();
 }
 
 pub fn deinit(ally: Allocator) void {
@@ -402,8 +401,8 @@ pub fn parse(
         .strm = Stream(Token).init(first_tokens, 0),
     };
 
-    switch (what) {
-        .expr => {
+    const expr = switch (what) {
+        .expr => expr: {
             if (parser.done()) {
                 return syntaxError(&parser);
             }
@@ -421,9 +420,9 @@ pub fn parse(
                 return syntaxErrorAt(ally, next[0].loc);
             }
 
-            return Result.ok(expr);
+            break :expr expr;
         },
-        .file => {
+        .file => file: {
             var exprs = std.ArrayList(RawExpr).init(ally);
             defer {
                 for (exprs.items) |expr| expr.deinit(ally);
@@ -458,11 +457,14 @@ pub fn parse(
                 }
             };
 
-            return Result.ok(RawExpr{
+            break :file RawExpr{
                 .loc = loc,
                 .form = .file,
                 .exprs = exprs.toOwnedSlice(),
-            });
+            };
         },
-    }
+    };
+
+    // postprocess and return
+    return try desugar(ally, proj, expr);
 }

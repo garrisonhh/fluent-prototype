@@ -241,11 +241,13 @@ pub const Message = struct {
     pub const Tag = enum {
         log,
         @"error",
+        internal,
 
         fn render(tag: Tag, ctx: *kz.Context) Allocator.Error!kz.Ref {
             const sty: kz.Style = switch (tag) {
                 .log => .{ .fg = .cyan },
                 .@"error" => .{ .fg = .red },
+                .internal => .{ .fg = .green },
             };
 
             return try ctx.stack(
@@ -278,7 +280,7 @@ pub const Message = struct {
         };
     }
 
-    /// generate void error monad
+    /// TODO remove this, it's too much. use local helpers instead.
     pub fn err(
         ally: Allocator,
         comptime T: type,

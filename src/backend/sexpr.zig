@@ -10,25 +10,23 @@ const util = @import("util");
 const Symbol = util.Symbol;
 const Loc = util.Loc;
 const canon = @import("canon.zig");
-const Number = canon.Number;
 
 const Self = @This();
 
 pub const Tag = std.meta.Tag(Data);
+pub const Number = canon.Number;
 
 pub const Data = union(enum) {
-    @"bool": bool,
     number: Number,
     string: Symbol,
     symbol: Symbol,
     call: []Self,
-    array: []Self,
 
     pub fn clone(data: Data, ally: Allocator) Allocator.Error!Data {
         return switch (data) {
             .number => data,
-            .string => |sym| Data{ .string = try sym.clone(ally) },
-            .symbol => |sym| Data{ .symbol = try sym.clone(ally) },
+            inline .string, .symbol => |sym, tag|
+                @unionInit(Data, @tagName(tag), try sym.clone(ally)),
             inline .call, .array => |exprs, tag| many: {
                 const cloned = try ally.alloc(Self, exprs.len);
                 for (exprs) |expr, i| cloned[i] = try expr.clone(ally);
@@ -42,52 +40,11 @@ pub const Data = union(enum) {
 data: Data,
 loc: Loc,
 
-/// expects input to be already owned
-pub fn initCall(loc: Loc, exprs: []Self) Self {
+pub fn init(loc: Loc, data: Data) Self {
     return Self{
-        .data = .{ .call = exprs },
-        .loc = loc
-    };
-}
-
-pub fn initBool(loc: Loc, @"bool": bool) Self {
-    return Self{
-        .data = .{ .@"bool" = @"bool" },
         .loc = loc,
+        .data = data,
     };
-}
-
-pub fn initNumber(loc: Loc, num: Number) Self {
-    return Self{
-        .data = .{ .number = num },
-        .loc = loc,
-    };
-}
-
-pub fn initSymbol(
-    ally: Allocator,
-    loc: Loc,
-    str: []const u8
-) Allocator.Error!Self {
-    return Self{
-        .data = .{ .symbol = Symbol.init(try ally.dupe(u8, str)) },
-        .loc = loc,
-    };
-}
-
-pub fn initOwnedString(loc: Loc, str: []const u8) Self {
-    return Self{
-        .data = .{ .string = Symbol.init(str) },
-        .loc = loc,
-    };
-}
-
-pub fn initString(
-    ally: Allocator,
-    loc: Loc,
-    str: []const u8
-) Allocator.Error!Self {
-    return Self.initOwnedString(loc, try ally.dupe(u8, str));
 }
 
 pub fn deinit(self: Self, ally: Allocator) void {
