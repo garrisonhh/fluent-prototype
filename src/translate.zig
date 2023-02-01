@@ -117,7 +117,6 @@ pub fn translate(
 
         // translate to call with head
         else => |tag| tagged: {
-            const head_loc = Loc.of(loc.file, loc.start, loc.start);
             const head_sym = tag.builtin() orelse {
                 return Result.err(try Message.print(
                     ally,
@@ -127,7 +126,7 @@ pub fn translate(
                     .{@tagName(tag)}
                 ));
             };
-            const head = SExpr.init(head_loc, .{
+            const head = SExpr.init(loc, .{
                 .symbol = try head_sym.clone(ally)
             });
 

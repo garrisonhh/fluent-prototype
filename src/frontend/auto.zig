@@ -114,7 +114,6 @@ pub const Form = enum {
     pub fn builtin(self: Form) ?Symbol {
         const builtin_map = comptime map: {
             const by_name = [_]Form{
-                .file,
                 .block,
                 .def,
                 .@"if",
@@ -125,6 +124,8 @@ pub const Form = enum {
             };
 
             const pairs = .{
+                .{.file,  "ns"},
+
                 .{.add,   "+"},
                 .{.sub,   "-"},
                 .{.mul,   "*"},

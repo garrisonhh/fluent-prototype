@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const now = @import("util").now;
 const Program = @import("bytecode.zig").Program;
 const types = @import("../types.zig");
 const Type = types.Type;
@@ -123,10 +124,6 @@ fn makeFnType(
             .returns = TypeId{ .index = return_id },
         }
     });
-}
-
-fn now() f64 {
-    return @intToFloat(f64, std.time.nanoTimestamp()) * 1e-6;
 }
 
 /// debug prints state of vm

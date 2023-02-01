@@ -31,47 +31,22 @@ test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-/// put the `ep` in repl. reusable by `fluent run`.
+/// put the `ep` in repl
 fn execPrint(
     env: *Env,
     proj: Project,
     ref: FileRef,
-    what: ParseType
+    what: ParseType,
 ) !void {
-    const ally = env.ally;
-
-    const translate = @import("translate.zig").translate;
-
-    switch (try frontend.parse(ally, proj, ref, what)) {
-        .ok => |rexpr| {
-            defer rexpr.deinit(ally);
-            try stdout.print("[parsed]\n", .{});
-            try kz.display(ally, proj, rexpr, stdout);
-
-            switch (try translate(ally, proj, rexpr)) {
-                .ok => |sexpr| {
-                    try stdout.print("[translated]\n", .{});
-                    try kz.display(ally, .{ .force_parens = true }, sexpr, stdout);
-                },
-                .err => |msg| {
-                    try kz.display(ally, proj, msg, stderr);
-                },
-            }
+    switch (try plumbing.exec(proj, env, ref, what)) {
+        .ok => |value| {
+            defer value.deinit(env.ally);
+            try kz.display(env.ally, env.*, value, stdout);
         },
         .err => |msg| {
-            try kz.display(ally, proj, msg, stderr);
+            try kz.display(env.ally, proj, msg, stderr);
         },
     }
-
-    // switch (try plumbing.exec(proj, env, ref, what)) {
-        // .ok => |value| {
-            // defer value.deinit(env.ally);
-            // try kz.display(env.ally, env.*, value, stdout);
-        // },
-        // .err => |msg| {
-            // try kz.display(env.ally, proj, msg, stderr);
-        // },
-    // }
 }
 
 /// look for a `.fluentinit` script to run on repl startup
