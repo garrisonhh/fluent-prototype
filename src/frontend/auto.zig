@@ -4,6 +4,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const util = @import("util");
+const Symbol = util.Symbol;
 
 pub const Form = enum {
     file,
@@ -107,6 +108,59 @@ pub const Form = enum {
             .@"if" => "if expression",
             .@"fn" => "fn expression",
         };
+    }
+
+    /// the name of the form as a builtin (if it exists)
+    pub fn builtin(self: Form) ?Symbol {
+        const builtin_map = comptime map: {
+            const by_name = [_]Form{
+                .file,
+                .block,
+                .def,
+                .@"if",
+                .@"fn",
+
+                .array,
+                .tuple,
+            };
+
+            const pairs = .{
+                .{.add,   "+"},
+                .{.sub,   "-"},
+                .{.mul,   "*"},
+                .{.div,   "/"},
+                .{.mod,   "%"},
+
+                .{.eq,    "=="},
+                .{.gt,    ">"},
+                .{.lt,    "<"},
+                .{.ge,    ">="},
+                .{.le,    "<="},
+
+                .{.arrow, "->"},
+            };
+
+            // strings -> symbols
+            const LPair = struct {
+                @"0": []const u8,
+                @"1": Symbol,
+            };
+
+            var data: [pairs.len + by_name.len]LPair = undefined;
+            for (pairs) |pair, i| {
+                data[i].@"0" = @tagName(@as(Form, pair[0]));
+                data[i].@"1" = Symbol.init(pair[1]);
+            }
+
+            for (by_name) |form, i| {
+                data[pairs.len + i].@"0" = @tagName(form);
+                data[pairs.len + i].@"1" = Symbol.init(@tagName(form));
+            }
+
+            break :map std.ComptimeStringMap(Symbol, data);
+        };
+
+        return builtin_map.get(@tagName(self));
     }
 };
 

@@ -39,13 +39,23 @@ fn execPrint(
     what: ParseType
 ) !void {
     const ally = env.ally;
-    const parse = @import("frontend.zig").parse;
 
-    switch (try parse(ally, proj, ref, what)) {
+    const translate = @import("translate.zig").translate;
+
+    switch (try frontend.parse(ally, proj, ref, what)) {
         .ok => |rexpr| {
             defer rexpr.deinit(ally);
             try stdout.print("[parsed]\n", .{});
             try kz.display(ally, proj, rexpr, stdout);
+
+            switch (try translate(ally, proj, rexpr)) {
+                .ok => |sexpr| {
+                    try stdout.print("[translated]\n{}\n", .{sexpr});
+                },
+                .err => |msg| {
+                    try kz.display(ally, proj, msg, stderr);
+                },
+            }
         },
         .err => |msg| {
             try kz.display(ally, proj, msg, stderr);

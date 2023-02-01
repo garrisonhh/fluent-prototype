@@ -49,7 +49,7 @@ pub fn init(loc: Loc, data: Data) Self {
 
 pub fn deinit(self: Self, ally: Allocator) void {
     switch (self.data) {
-        .call, .array => |children| {
+        .call => |children| {
             for (children) |child| child.deinit(ally);
             ally.free(children);
         },
@@ -72,7 +72,6 @@ pub fn format(
     writer: anytype,
 ) @TypeOf(writer).Error!void {
     switch (self.data) {
-        .@"bool" => |val| try writer.print("{}", .{val}),
         .number => |num| try writer.print("{}", .{num}),
         .string => |sym| try writer.print("\"{s}\"", .{sym.str}),
         .symbol => |sym| try writer.print("{s}", .{sym.str}),
@@ -84,13 +83,5 @@ pub fn format(
             }
             try writer.writeByte(')');
         },
-        .array => |exprs| {
-            try writer.writeByte('[');
-            for (exprs) |expr, i| {
-                if (i > 0) try writer.writeByte(' ');
-                try writer.print("{}", .{expr});
-            }
-            try writer.writeByte(']');
-        }
     }
 }

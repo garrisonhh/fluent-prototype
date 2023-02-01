@@ -4,6 +4,7 @@
 const std = @import("std");
 const stdout = std.io.getStdOut().writer();
 const util = @import("util");
+const now = util.now;
 const FileRef = util.FileRef;
 const Project = util.Project;
 const frontend = @import("frontend.zig");
@@ -21,9 +22,8 @@ pub fn exec(
 ) !eval.Result {
     const ally = env.ally;
 
-    const now = std.time.nanoTimestamp;
     const start = now();
-    var render_time: i128 = 0;
+    var render_time: f64 = 0;
 
     // parse
     const parse_res = try frontend.parse(ally, proj, file, what);
