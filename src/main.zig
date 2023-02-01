@@ -6,10 +6,10 @@ const builtin = @import("builtin");
 const kz = @import("kritzler");
 const linenoize = @import("linenoize");
 const Linenoise = linenoize.Linenoise;
-const util = @import("util");
-const cli = util.cli;
-const FileRef = util.FileRef;
-const Project = util.Project;
+const com = @import("common");
+const cli = com.cli;
+const FileRef = com.FileRef;
+const Project = com.Project;
 const plumbing = @import("plumbing.zig");
 const backend = @import("backend.zig");
 const Env = backend.Env;
@@ -79,7 +79,7 @@ fn repl(env: *Env, proj: *Project) !void {
     }
 }
 
-const LOG_FIELDS = @typeInfo(@TypeOf(util.options.log)).Struct.fields;
+const LOG_FIELDS = @typeInfo(@TypeOf(com.options.log)).Struct.fields;
 
 fn addLogFlags(parser: *cli.Parser) !void {
     inline for (LOG_FIELDS) |field| {
@@ -93,7 +93,7 @@ fn checkLogFlags(options: *const cli.Output.Options) void {
     inline for (LOG_FIELDS) |field| {
         const name = "log-" ++ field.name;
         if (options.get(name) != null) {
-            @field(util.options.log, field.name) = true;
+            @field(com.options.log, field.name) = true;
         }
     }
 }
@@ -163,7 +163,7 @@ pub fn main() !void {
     var env = try backend.generatePrelude(ally);
     defer env.deinit();
 
-    var proj = util.Project.init();
+    var proj = com.Project.init();
     defer proj.deinit(env.ally);
 
     try dispatchArgs(parser, output, &env, &proj);

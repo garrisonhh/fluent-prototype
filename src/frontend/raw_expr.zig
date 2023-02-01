@@ -1,9 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const kz = @import("kritzler");
-const util = @import("util");
-const Loc = util.Loc;
-const Project = util.Project;
+const com = @import("common");
+const Loc = com.Loc;
+const Project = com.Project;
 const auto = @import("auto.zig");
 const Form = auto.Form;
 

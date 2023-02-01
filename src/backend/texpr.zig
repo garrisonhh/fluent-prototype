@@ -6,10 +6,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
-const util = @import("util");
-const Symbol = util.Symbol;
-const Name = util.Name;
-const Loc = util.Loc;
+const com = @import("common");
+const Symbol = com.Symbol;
+const Name = com.Name;
+const Loc = com.Loc;
 const kz = @import("kritzler");
 const types = @import("types.zig");
 const TypeId = types.TypeId;
@@ -190,12 +190,12 @@ pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         .unit, .ty, .@"bool", .number, .name, .builtin, .param, .func_ref
             => self.data,
         .ptr => |child| Data{
-            .ptr = try util.placeOn(ally, try child.clone(ally))
+            .ptr = try com.placeOn(ally, try child.clone(ally))
         },
         .func => |func| Data{
             .func = .{
                 .name = func.name,
-                .body = try util.placeOn(ally, try func.body.clone(ally))
+                .body = try com.placeOn(ally, try func.body.clone(ally))
             }
         },
         .string => |sym| Data{ .string = try sym.clone(ally) },

@@ -4,8 +4,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Wyhash = std.hash.Wyhash;
-const util = @import("util");
-const Name = util.Name;
+const com = @import("common");
+const Name = com.Name;
 const builtin = @import("builtin");
 
 pub const TypeId = packed struct {
@@ -143,7 +143,7 @@ pub const TypeWelt = struct {
             const id = TypeId{ .index = self.types.items.len };
 
             // allocate for type and clone
-            const cloned = try util.placeOn(ally, try ty.clone(ally));
+            const cloned = try com.placeOn(ally, try ty.clone(ally));
 
             // store in internal data structures
             res.key_ptr.* = cloned;
@@ -165,7 +165,7 @@ pub const Type = union(enum) {
     pub const Number = struct {
         // number literals don't always have a bit count
         bits: ?u8,
-        layout: util.Number.Layout,
+        layout: com.Number.Layout,
     };
 
     /// arrays are stack allocated slices with a size known before execution

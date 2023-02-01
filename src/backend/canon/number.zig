@@ -4,10 +4,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
-const util = @import("util");
+const com = @import("common");
 const Value = @import("value.zig");
 
-pub const Layout = util.Number.Layout;
+pub const Layout = com.Number.Layout;
 
 const Self = @This();
 
@@ -24,7 +24,7 @@ pub const Concrete = union(Layout) {
 bits: ?u8,
 data: Concrete,
 
-pub fn from(num: util.Number) util.ParseNumberError!Self {
+pub fn from(num: com.Number) com.ParseNumberError!Self {
     return Self{
         .bits = num.bits,
         .data = if (num.layout) |layout| switch (layout) {
@@ -36,7 +36,7 @@ pub fn from(num: util.Number) util.ParseNumberError!Self {
     };
 }
 
-pub fn cast(self: Self, bits: ?u8, layout: util.Number.Layout) Self {
+pub fn cast(self: Self, bits: ?u8, layout: com.Number.Layout) Self {
     const data = switch (self.data) {
         .int => |i| switch (layout) {
             .int => self.data,

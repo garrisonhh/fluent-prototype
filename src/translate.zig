@@ -3,11 +3,11 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const util = @import("util");
-const Symbol = util.Symbol;
-const Project = util.Project;
-const Message = util.Message;
-const Loc = util.Loc;
+const com = @import("common");
+const Symbol = com.Symbol;
+const Project = com.Project;
+const Message = com.Message;
+const Loc = com.Loc;
 const RawExpr = @import("frontend.zig").RawExpr;
 const SExpr = @import("backend.zig").SExpr;
 
@@ -22,7 +22,7 @@ fn translateNumber(
     loc: Loc,
     slice: []const u8,
 ) Allocator.Error!Result {
-    const num = util.parseNumber(ally, slice) catch |e| switch (e) {
+    const num = com.parseNumber(ally, slice) catch |e| switch (e) {
         Allocator.Error.OutOfMemory => return Allocator.Error.OutOfMemory,
         else => return try numberError(ally, loc)
     };

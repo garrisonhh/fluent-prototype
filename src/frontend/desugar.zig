@@ -9,9 +9,9 @@ const std = @import("std");
 const stderr = std.io.getStdErr().writer();
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
-const util = @import("util");
-const Message = util.Message;
-const Project = util.Project;
+const com = @import("common");
+const Message = com.Message;
+const Project = com.Project;
 const RawExpr = @import("raw_expr.zig");
 
 const Result = Message.Result(RawExpr);

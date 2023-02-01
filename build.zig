@@ -14,15 +14,15 @@ fn addPackages(step: *std.build.LibExeObjStep) void {
         .name = "kritzler",
         .source = rel_fs("lib/kritzler/kritzler.zig"),
     };
-    const util = Pkg{
-        .name = "util",
-        .source = rel_fs("lib/util/util.zig"),
+    const common = Pkg{
+        .name = "common",
+        .source = rel_fs("lib/common/common.zig"),
         .dependencies = &[_]Pkg{kritzler},
     };
 
     step.addPackage(linenoize);
     step.addPackage(kritzler);
-    step.addPackage(util);
+    step.addPackage(common);
 }
 
 pub fn build(b: *std.build.Builder) void {

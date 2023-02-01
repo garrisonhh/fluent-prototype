@@ -3,9 +3,9 @@
 const std = @import("std");
 const stdout = std.io.getStdOut().writer();
 const kz = @import("kritzler");
-const util = @import("util");
-const Name = util.Name;
-const Message = util.Message;
+const com = @import("common");
+const Name = com.Name;
+const Message = com.Message;
 const TExpr = @import("texpr.zig");
 const SExpr = @import("sexpr.zig");
 const Env = @import("env.zig");
@@ -48,7 +48,7 @@ pub fn evalTyped(
     const texpr = sema_res.get() orelse return sema_res;
     defer texpr.deinit(env.ally);
 
-    if (util.options.log.sema) {
+    if (com.options.log.sema) {
         const t = now();
         defer render_time += now() - t;
 
@@ -62,7 +62,7 @@ pub fn evalTyped(
     const final = final: {
         // values don't need further execution
         if (texpr.known_const) {
-            if (util.options.log.sema) {
+            if (com.options.log.sema) {
                 const msg_start = now();
                 try stdout.writeAll("analyzed a constant.\n");
                 render_time += now() - msg_start;
@@ -74,7 +74,7 @@ pub fn evalTyped(
         // lower to ssa ir
         const ssa = try lower(env, scope, texpr);
 
-        if (util.options.log.ssa) {
+        if (com.options.log.ssa) {
             const t = now();
             defer render_time += now() - t;
 
@@ -88,7 +88,7 @@ pub fn evalTyped(
 
         const prog = env.bc.build(ssa);
 
-        if (util.options.log.bytecode) {
+        if (com.options.log.bytecode) {
             const t = now();
             defer render_time += now() - t;
 
@@ -119,7 +119,7 @@ pub fn evalTyped(
     };
 
     // render final value
-    if (util.options.log.eval) {
+    if (com.options.log.eval) {
         const t = now();
         defer render_time += now() - t;
 

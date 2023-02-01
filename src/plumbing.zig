@@ -4,10 +4,10 @@
 const std = @import("std");
 const stdout = std.io.getStdOut().writer();
 const kz = @import("kritzler");
-const util = @import("util");
-const now = util.now;
-const FileRef = util.FileRef;
-const Project = util.Project;
+const com = @import("common");
+const now = com.now;
+const FileRef = com.FileRef;
+const Project = com.Project;
 const frontend = @import("frontend.zig");
 const translate = @import("translate.zig").translate;
 const backend = @import("backend.zig");
@@ -37,12 +37,12 @@ pub fn exec(
     const sexpr = trans_res.get() orelse return trans_res.cast(TExpr);
     defer sexpr.deinit(ally);
 
-    if (util.options.log.translate) {
+    if (com.options.log.translate) {
         const t = now();
         defer render_time += now() - t;
 
         try stdout.print("[Translated AST]\n", .{});
-        try kz.display(ally, .{}, sexpr, stdout);
+        try kz.display(ally, .{ .force_parens = true }, sexpr, stdout);
     }
 
     // time logging

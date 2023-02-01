@@ -16,11 +16,11 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const util = @import("util");
-const Symbol = util.Symbol;
-const Name = util.Name;
-const NameMap = util.NameMap;
-const Loc = util.Loc;
+const com = @import("common");
+const Symbol = com.Symbol;
+const Name = com.Name;
+const NameMap = com.NameMap;
+const Loc = com.Loc;
 const kz = @import("kritzler");
 const types = @import("types.zig");
 const TypeWelt = types.TypeWelt;
@@ -154,7 +154,7 @@ pub fn get(self: *Self, name: Name) TExpr {
 
 // definitions =================================================================
 
-pub const DefError = util.NameError || TypeWelt.RenameError;
+pub const DefError = com.NameError || TypeWelt.RenameError;
 
 /// expects value to be owned
 pub fn def(self: *Self, scope: Name, sym: Symbol, value: TExpr) DefError!Name {

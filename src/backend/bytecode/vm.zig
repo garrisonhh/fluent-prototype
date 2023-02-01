@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const now = @import("util").now;
+const now = @import("common").now;
 const Program = @import("bytecode.zig").Program;
 const types = @import("../types.zig");
 const Type = types.Type;

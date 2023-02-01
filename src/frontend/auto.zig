@@ -3,8 +3,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
-const util = @import("util");
-const Symbol = util.Symbol;
+const com = @import("common");
+const Symbol = com.Symbol;
 
 pub const Form = enum {
     file,
@@ -138,6 +138,8 @@ pub const Form = enum {
             const pairs = .{
                 .{.file,  "ns"},
 
+                .{.addr,  "&"},
+
                 .{.add,   "+"},
                 .{.sub,   "-"},
                 .{.mul,   "*"},
@@ -199,7 +201,7 @@ pub const FormExpr = union(enum) {
     const Tag = std.meta.Tag(Self);
 
     expr: Expr,
-    word: []const u8, // TODO use common.Symbol
+    word: []const u8, // TODO use com.Symbol
 
     pub fn hash(self: Self) u64 {
         var hasher = std.hash.Wyhash.init(0);
@@ -246,7 +248,7 @@ pub const FormExpr = union(enum) {
             .word => |word| {
                 var buf: [512]u8 = undefined;
                 var fba = std.heap.FixedBufferAllocator.init(&buf);
-                const escaped = util.stringEscape(fba.allocator(), word)
+                const escaped = com.stringEscape(fba.allocator(), word)
                     catch "this word is way too long :(";
                 try writer.print("`{s}`", .{escaped});
             }

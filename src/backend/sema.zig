@@ -1,11 +1,11 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
-const util = @import("util");
-const Symbol = util.Symbol;
-const Name = util.Name;
-const Loc = util.Loc;
-const Message = util.Message;
+const com = @import("common");
+const Symbol = com.Symbol;
+const Name = com.Name;
+const Loc = com.Loc;
+const Message = com.Message;
 const types = @import("types.zig");
 const TypeId = types.TypeId;
 const Type = types.Type;
@@ -147,7 +147,7 @@ fn analyzeAddrOf(
     const ptr_ty = try env.identify(Type.initPtr(.single, subexpr.ty));
 
     const texpr = TExpr.init(expr.loc, false, ptr_ty, TExpr.Data{
-        .ptr = try util.placeOn(ally, subexpr)
+        .ptr = try com.placeOn(ally, subexpr)
     });
     return try unifyTExpr(env, texpr, outward);
 }
@@ -566,7 +566,7 @@ fn analyzeLambda(
     const final = TExpr.init(expr.loc, false, outward, .{
         .func = TExpr.Func{
             .name = local,
-            .body = try util.placeOn(env.ally, body),
+            .body = try com.placeOn(env.ally, body),
         }
     });
 
@@ -755,7 +755,7 @@ fn pruneDoBlocks(env: Env, texpr: *TExpr) void {
 }
 
 /// after analysis, it's possible that types that fluent can't actually lower
-/// are produced (e.g. Any and common type sets like Int). this
+/// are produced (e.g. Any and com type sets like Int). this
 fn verifyDynamic(env: Env, texpr: TExpr) SemaError!void {
     // check that the class isn't analysis
     const class = env.tw.get(texpr.ty).classifyRuntime(env.tw);

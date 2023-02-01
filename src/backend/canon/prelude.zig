@@ -2,8 +2,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const util = @import("util");
-const Symbol = util.Symbol;
+const com = @import("common");
+const Symbol = com.Symbol;
 const types = @import("../types.zig");
 const Type = types.Type;
 const TypeId = types.TypeId;
@@ -50,7 +50,7 @@ fn defType(
 fn defNumeric(
     env: *Env,
     comptime str: []const u8,
-    layout: util.Number.Layout,
+    layout: com.Number.Layout,
     bits: ?u8
 ) Allocator.Error!TypeId {
     return try defType(env, str, Type{

@@ -5,8 +5,8 @@ const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const Env = @import("../env.zig");
 const TExpr = @import("../texpr.zig");
-const util = @import("util");
-const Message = util.Message;
+const com = @import("common");
+const Message = com.Message;
 
 const Result = Message.Result(void);
 
@@ -28,7 +28,7 @@ fn pruneDoBlocks(env: Env, texpr: *TExpr) void {
 }
 
 /// after analysis, it's possible that types that fluent can't actually lower
-/// are produced (e.g. Any and common type sets like Int).
+/// are produced (e.g. Any and com type sets like Int).
 fn verifyDynamic(env: Env, texpr: TExpr) Allocator.Error!Result {
     // check that the class isn't analysis
     const class = env.tw.get(texpr.ty).classifyRuntime(env.tw);

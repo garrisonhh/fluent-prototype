@@ -1,6 +1,6 @@
 //! SSA IR primitives.
 //!
-//! the goal for this is to be a common target between static compilation and
+//! the goal for this is to be a com target between static compilation and
 //! dynamic execution. the dynamic vm will want extra processing to do things
 //! like stack allocation and optimizing byte loads for the cache, but for
 //! compiling to qbe or llvm or whatever backend the goal is for this to be
@@ -9,8 +9,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const kz = @import("kritzler");
-const util = @import("util");
-const Name = util.Name;
+const com = @import("common");
+const Name = com.Name;
 const builtin = @import("builtin");
 const types = @import("../types.zig");
 const TypeId = types.TypeId;

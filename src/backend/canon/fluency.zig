@@ -3,8 +3,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const util = @import("util");
-const Loc = util.Loc;
+const com = @import("common");
+const Loc = com.Loc;
 const TExpr = @import("../texpr.zig");
 const Env = @import("../env.zig");
 const types = @import("../types.zig");
@@ -175,7 +175,7 @@ pub fn resurrect(
 
                 // resurrect self from the child data
                 const child = try resurrect(env, val, mem, loc, ptr.to);
-                break :ptr TExpr.Data{ .ptr = try util.placeOn(ally, child) };
+                break :ptr TExpr.Data{ .ptr = try com.placeOn(ally, child) };
             },
             .slice => slice: {
                 // get struct data
