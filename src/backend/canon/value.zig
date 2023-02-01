@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const builtin = @import("builtin");
 
 const Self = @This();
 
@@ -23,12 +24,26 @@ pub fn deinit(self: Self, ally: Allocator) void {
 }
 
 /// bitcast to the type desired
+/// tolerates different widths, assuming no (non-zero) data is lost
 pub fn as(self: Self, comptime T: type) T {
     // bitcast
     var t: T = undefined;
     const view = std.mem.asBytes(&t);
+    const len = @min(view.len, self.buf.len);
+
+    if (builtin.mode == .Debug) {
+        for (self.buf[len..]) |byte| {
+            if (byte != 0) {
+                std.debug.panic(
+                    "attempted bad Value bitcast:\nfrom {d}\n to {}\n",
+                    .{self.buf, T},
+                );
+            }
+        }
+    }
+
     std.mem.set(u8, view, 0);
-    std.mem.copy(u8, view, self.buf);
+    std.mem.copy(u8, view, self.buf[0..len]);
 
     return t;
 }

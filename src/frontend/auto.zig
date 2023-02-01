@@ -36,6 +36,11 @@ pub const Form = enum {
     // types
     arrow,
 
+    // bool
+    @"and",
+    @"or",
+    not,
+
     // math
     add,
     sub,
@@ -90,6 +95,9 @@ pub const Form = enum {
             .dict => "dictionary literal",
             .kv => "key/value pair",
             .dot => "field access",
+            .@"and" => "logical and",
+            .@"or" => "logical or",
+            .not => "logical not",
             .add => "add operator",
             .sub => "subtract operator",
             .mul => "multiply operator",
@@ -121,6 +129,10 @@ pub const Form = enum {
 
                 .array,
                 .tuple,
+
+                .@"and",
+                .@"or",
+                .not,
             };
 
             const pairs = .{
@@ -537,6 +549,11 @@ pub const SYNTAX: []const []const Syntax = t: {
             x(Form.arrow,  .r, "$ `-> $"),
         },
         &.{
+            x(Form.@"and", .l, "$ `and $"),
+            x(Form.@"or",  .l, "$ `or $"),
+            x(Form.@"or",  .r, "`! $"),
+        },
+        &.{
             x(Form.eq,     .l, "$ `== $"),
             x(Form.gt,     .l, "$ `> $"),
             x(Form.lt,     .l, "$ `< $"),
@@ -569,12 +586,13 @@ pub const MAX_PRECEDENCE = SYNTAX.len;
 
 pub const KEYWORDS = comptimeStringSet(&.{
     "mut",
+    "and", "or",
     "fn",
     "if", "then", "else",
 });
 
 const SYMBOL_LIST = &[_][]const u8{
-    "&", ".", "=", "::", "->", ",", ";", ":",
+    "&", ".", "=", "::", "->", ",", ";", ":", "!",
     // math
     "+", "-", "*", "/", "%",
     // cond
