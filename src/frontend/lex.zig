@@ -43,14 +43,23 @@ const Lexer = Stream(u8);
 
 const Error = Allocator.Error || error{InvalidCharacter};
 
-fn classify(ch: u8) Error!CharClass {
+fn classify(ch: u8) error{InvalidCharacter}!CharClass {
     return switch (ch) {
         '0'...'9' => .digit,
         ' ' => .whitespace,
         '\n' => .newline,
         '#' => .comment,
-        '\t', '\r' => Error.InvalidCharacter,
-        else => if (std.ascii.isPrint(ch)) .lexical else Error.InvalidCharacter,
+        // essentially alphabetical characters and punctuation
+        'a'...'z',
+        'A'...'Z',
+        '!',
+        '"',
+        '$'...'/',
+        ':'...'@',
+        '['...'`',
+        '{'...'~',
+        => .lexical,
+        else => Error.InvalidCharacter,
     };
 }
 
@@ -93,15 +102,21 @@ fn lexNumber(lexer: *Lexer, loc: Loc) Token {
     return Token.of(.number, lengthen(loc, lexer.index - start));
 }
 
-fn tokenOfLexical(lexer: *const Lexer, loc: Loc) Token {
+fn tokenOfLexical(lexer: *const Lexer, loc: Loc) Error!Token {
     const str = lexer.tokens[loc.start..loc.stop];
+    std.debug.assert(str.len > 0);
+
+    // zig fmt: off
     const tag: Token.Tag =
-        if (auto.SYMBOLS.has(str) or auto.KEYWORDS.has(str)) .word else .ident;
+        if ((try classify(str[0])) == .digit) .number
+        else if (auto.SYMBOLS.has(str) or auto.KEYWORDS.has(str)) .word
+        else .ident;
+    // zig fmt: on
 
     return Token.of(tag, loc);
 }
 
-fn lexLexical(
+fn lexWords(
     lexer: *Lexer,
     tokens: *std.ArrayList(Token),
     loc: Loc,
@@ -141,7 +156,7 @@ fn lexLexical(
                     .start = start + word_start,
                     .stop = start + i,
                 };
-                try tokens.append(tokenOfLexical(lexer, word_loc));
+                try tokens.append(try tokenOfLexical(lexer, word_loc));
             }
 
             const sym_loc = Loc{
@@ -149,7 +164,7 @@ fn lexLexical(
                 .start = start + i,
                 .stop = start + i + sym_len,
             };
-            try tokens.append(tokenOfLexical(lexer, sym_loc));
+            try tokens.append(try tokenOfLexical(lexer, sym_loc));
 
             i += sym_len;
             word_start = i;
@@ -164,7 +179,7 @@ fn lexLexical(
             .start = start + word_start,
             .stop = lexer.index,
         };
-        try tokens.append(tokenOfLexical(lexer, word_loc));
+        try tokens.append(try tokenOfLexical(lexer, word_loc));
     }
 }
 
@@ -177,8 +192,7 @@ fn lex(
         const loc = here(lexer.*, file, 1);
         switch (try classify(ch)) {
             .whitespace => lexer.eat(),
-            .digit => try tokens.append(lexNumber(lexer, loc)),
-            .lexical => try lexLexical(lexer, tokens, loc),
+            .digit, .lexical => try lexWords(lexer, tokens, loc),
             .newline => {
                 // insert a separator on a newline followed by an unindented
                 // character
