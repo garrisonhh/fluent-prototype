@@ -112,7 +112,10 @@ fn murder(self: *Self, local: Local) void {
 pub fn get(self: Self, local: Local) Register {
     if (builtin.mode == .Debug) {
         if (self.map[local.index] == null) {
-            std.debug.print("at pos {} tried to get dead {}\n", .{self.pos, local});
+            std.debug.print(
+                "at pos {} tried to get dead {}\n",
+                .{ self.pos, local },
+            );
         }
     }
 

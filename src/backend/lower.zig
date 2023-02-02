@@ -25,7 +25,7 @@ fn lowerLoadConst(
     env: *Env,
     ref: FuncRef,
     block: Label,
-    expr: TExpr
+    expr: TExpr,
 ) Error!Local {
     std.debug.assert(expr.known_const);
 
@@ -40,7 +40,7 @@ fn lowerLoadConst(
 /// boilerplate I otherwise end up rewriting constantly.
 fn lowerU64(env: *Env, ref: FuncRef, block: Label, n: u64) Error!Local {
     const @"u64" = try env.identify(Type{
-        .number = .{ .bits = 64, .layout = .uint }
+        .number = .{ .bits = 64, .layout = .uint },
     });
     const expr = TExpr.init(null, true, @"u64", .{
         .number = TExpr.Number{
@@ -58,7 +58,7 @@ fn lowerOperator(
     block: *Label,
     b: Builtin,
     args: []const TExpr,
-    returns: TypeId
+    returns: TypeId,
 ) Error!Local {
     const ally = env.ally;
 
@@ -71,9 +71,11 @@ fn lowerOperator(
     // generate operation
     return switch (b) {
         // binary ops
+        // zig fmt: off
         inline .eq, .add, .sub, .mul, .div, .mod, .@"and", .@"or", .fn_ty, .not,
-        .cast, .slice_ty
-            => |tag| op: {
+        .cast, .slice_ty,
+        // zig fmt: on
+        => |tag| op: {
             // TODO make sure this is checked in sema
             const to = try ref.addLocal(env, returns);
             const op = @unionInit(Op, @tagName(tag), Op.Pure{
@@ -84,7 +86,7 @@ fn lowerOperator(
 
             break :op to;
         },
-        else => unreachable
+        else => unreachable,
     };
 }
 
@@ -105,10 +107,7 @@ fn lowerArray(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     const arr_ptr = try ref.addLocal(env, arr_ptr_ty);
 
     try ref.addOp(env, block.*, Op{
-        .alloca = .{
-            .size = env.sizeOf(expr.ty),
-            .to = arr_ptr
-        }
+        .alloca = .{ .size = env.sizeOf(expr.ty), .to = arr_ptr },
     });
 
     // for a zero-length array, everything is done
@@ -124,7 +123,7 @@ fn lowerArray(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
 
     if (elements.len == 1) {
         // single element arrays only need 1 store operation
-        const sto = try Op.initImpure(ally, .store, &.{elements[0], cur_ptr});
+        const sto = try Op.initImpure(ally, .store, &.{ elements[0], cur_ptr });
         try ref.addOp(env, block.*, sto);
 
         return arr_ptr;
@@ -136,14 +135,14 @@ fn lowerArray(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     // store each element
     for (elements) |elem, i| {
         // store this element at the current array ptr
-        const sto = try Op.initImpure(ally, .store, &.{elem, cur_ptr});
+        const sto = try Op.initImpure(ally, .store, &.{ elem, cur_ptr });
         try ref.addOp(env, block.*, sto);
 
         // increment the current ptr, unless this is the last element
         if (i < elements.len - 1) {
             const next_ptr = try ref.addLocal(env, el_ptr_ty);
             const add =
-                try Op.initPure(ally, .add, next_ptr, &.{cur_ptr, el_size});
+                try Op.initPure(ally, .add, next_ptr, &.{ cur_ptr, el_size });
             try ref.addOp(env, block.*, add);
 
             cur_ptr = next_ptr;
@@ -154,21 +153,27 @@ fn lowerArray(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
 }
 
 /// lowers the operation of taking the stack address of a subexpr
-fn lowerAddrOf(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
+fn lowerAddrOf(
+    env: *Env,
+    ref: FuncRef,
+    block: *Label,
+    expr: TExpr,
+) Error!Local {
     // lower subexpr
     const subexpr = expr.data.ptr.*;
     const sub = try lowerExpr(env, ref, block, subexpr);
 
     // with structured data, lowering automatically places the data on the stack
     const lty = env.tw.get(ref.getLocal(env.*, sub));
-    if (lty.* == .ptr and lty.ptr.kind == .single
-    and lty.ptr.to.eql(subexpr.ty)) {
-        // super trivial!
-        return sub;
-    }
 
-    @panic("TODO lowering taking the address of something not automatically "
-        ++ "stack allocated");
+    // zig fmt: off
+    const on_stack = lty.* == .ptr and lty.ptr.kind == .single
+                 and lty.ptr.to.eql(subexpr.ty);
+    // zig fmt: on
+
+    if (on_stack) return sub;
+
+    @panic("TODO lowering taking the address of something not stack allocated");
 }
 
 /// functions get lowered as their own Func and then stored in the env. for
@@ -177,7 +182,7 @@ fn lowerLambda(
     env: *Env,
     ref: FuncRef,
     block: *Label,
-    expr: TExpr
+    expr: TExpr,
 ) Error!Local {
     // lower function expr
     const ty = env.tw.get(expr.ty);
@@ -196,12 +201,7 @@ fn lowerLambda(
 }
 
 /// if exprs get lowered into two branching blocks
-fn lowerIf(
-    env: *Env,
-    ref: FuncRef,
-    block: *Label,
-    expr: TExpr
-) Error!Local {
+fn lowerIf(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     const ally = env.ally;
     const exprs = expr.data.call;
 
@@ -214,14 +214,14 @@ fn lowerIf(
 
     const cond = try lowerExpr(env, ref, block, exprs[1]);
     try ref.addOp(env, block.*, Op{
-        .br = .{ .cond = cond, .a = branches[0], .b = branches[1] }
+        .br = .{ .cond = cond, .a = branches[0], .b = branches[1] },
     });
 
     // lower branches, jump to final block
     for (branches) |*branch, i| {
         const local = try lowerExpr(env, ref, branch, exprs[2 + i]);
         try ref.addOp(env, branch.*, Op{
-            .jmp = .{ .data = local, .dst = final_block }
+            .jmp = .{ .data = local, .dst = final_block },
         });
     }
 
@@ -243,25 +243,31 @@ fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     const head = switch (raw_head.data) {
         .name => |name| name: {
             const got = env.get(name);
-
             if (builtin.mode == .Debug and got.isBuiltin(.pie_stone)) {
                 std.debug.panic("called pie_stone {}", .{name});
             }
 
             break :name got;
         },
-        .builtin => |b|
-            if (b == .recur) TExpr.initFuncRef(raw_head.loc, raw_head.ty, ref)
-            else raw_head,
-        else => raw_head
+        .builtin => |b| b: {
+            if (b == .recur) {
+                break :b TExpr.initFuncRef(raw_head.loc, raw_head.ty, ref);
+            } else {
+                break :b raw_head;
+            }
+        },
+        else => raw_head,
     };
 
     // dispatch on builtins (except for recur)
     if (head.data == .builtin) {
         switch (head.data.builtin) {
             .recur => unreachable,
+            // zig fmt: off
             .eq, .add, .sub, .mul, .div, .mod, .@"and", .@"or", .not, .cast,
-            .slice_ty, .fn_ty => |b| {
+            .slice_ty, .fn_ty,
+            // zig fmt: on
+            => |b| {
                 const tail = expr.data.call[1..];
                 return try lowerOperator(env, ref, block, b, tail, expr.ty);
             },
@@ -269,7 +275,7 @@ fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
             .@"if" => return try lowerIf(env, ref, block, expr),
             else => |b| {
                 std.debug.panic("TODO lower builtin {s}", .{@tagName(b)});
-            }
+            },
         }
     }
 
@@ -317,14 +323,14 @@ fn lowerExpr(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
                     "attempted to lower builtin `{s}` through lowerExpr",
-                    .{@tagName(b)}
+                    .{@tagName(b)},
                 );
             } else unreachable;
         },
         else => {
             const tag = @tagName(expr.data);
             std.debug.panic("TODO lower {s} exprs\n", .{tag});
-        }
+        },
     };
 }
 

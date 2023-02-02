@@ -43,7 +43,7 @@ fn compileAlloca(
     b: *Builder,
     rmap: *RegisterMap,
     size: u64,
-    dst: Register
+    dst: Register,
 ) Error!void {
     const size_reg = rmap.getTemp();
     defer rmap.dropTemp(size_reg);
@@ -104,8 +104,12 @@ fn compileOp(
             const src_ty = env.tw.get(ref.getLocal(env.*, pure.params[0]));
             const dst_ty = env.tw.get(ref.getLocal(env.*, pure.to));
 
-            if (dst_ty.* == .ptr and dst_ty.ptr.kind == .slice
-            and src_ty.* == .ptr) {
+            // zig fmt: off
+            const coerceable = dst_ty.* == .ptr and dst_ty.ptr.kind == .slice
+                           and src_ty.* == .ptr;
+            // zig fmt: on
+
+            if (coerceable) {
                 // coerce ptr to array to slice
                 const arr_size = env.tw.get(src_ty.ptr.to).array.size;
 
@@ -210,7 +214,7 @@ fn compileOp(
 
             const con = switch (comptime tag) {
                 .slice_ty => Bc.slice_ty,
-                else => unreachable
+                else => unreachable,
             };
 
             try b.addInst(ally, con(operand, to));
@@ -234,7 +238,7 @@ fn compileOp(
                 .fn_ty => Bc.fn_ty,
                 .@"and" => Bc.land,
                 .@"or" => Bc.lor,
-                else => unreachable
+                else => unreachable,
             };
 
             try b.addInst(ally, con(lhs, rhs, to));
@@ -258,13 +262,13 @@ fn compileOp(
                     .mul => Bc.imul,
                     .div => Bc.idiv,
                     .mod => Bc.imod,
-                    else => unreachable
+                    else => unreachable,
                 };
 
                 try b.addInst(ally, con(lhs, rhs, to));
             }
         },
-        else => |tag| std.debug.panic("TODO compile op {}", .{tag})
+        else => |tag| std.debug.panic("TODO compile op {}", .{tag}),
     }
 }
 
@@ -291,7 +295,7 @@ fn compileFunc(env: *Env, super: *Builder, ref: FuncRef) Error!void {
         try b.resolve(ally, Pos.of(ref, label, 0), b.here());
 
         // comment block
-        try b.addComment(ally, "{} @{}", .{func.name, label.index});
+        try b.addComment(ally, "{} @{}", .{ func.name, label.index });
 
         // compile block ops
         for (block.ops.items) |op| {

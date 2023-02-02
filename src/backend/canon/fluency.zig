@@ -42,7 +42,7 @@ fn rawCrucify(env: Env, buf: []u8, texpr: TExpr) CrucifyError!void {
             const seg = @divExact(buf.len, children.len);
             for (children) |child, i| {
                 const index = i * seg;
-                try rawCrucify(env, buf[index..index + seg], child);
+                try rawCrucify(env, buf[index .. index + seg], child);
             }
         },
         .func_ref => |ref| {
@@ -50,12 +50,12 @@ fn rawCrucify(env: Env, buf: []u8, texpr: TExpr) CrucifyError!void {
             const bc_ref = env.compiled.get(ref) orelse {
                 std.debug.panic(
                     "failed to get bcref for `{}` in crucify\n",
-                    .{env.getFuncConst(ref).name}
+                    .{env.getFuncConst(ref).name},
                 );
             };
             writeCanon(buf, bc_ref.index);
         },
-        else => |tag| std.debug.panic("TODO crucify {}\n", .{tag})
+        else => |tag| std.debug.panic("TODO crucify {}\n", .{tag}),
     }
 }
 
@@ -73,7 +73,7 @@ pub fn crucify(env: Env, texpr: TExpr) CrucifyError!Value {
 
 // resurrection ================================================================
 
-pub const ResError = Allocator.Error || error { Unresurrectable };
+pub const ResError = Allocator.Error || error{Unresurrectable};
 
 fn valueToNumber(value: Value, bits: u8, layout: Number.Layout) Number {
     const concrete: Number.Concrete = switch (layout) {
@@ -84,7 +84,7 @@ fn valueToNumber(value: Value, bits: u8, layout: Number.Layout) Number {
                         .signedness = switch (tag) {
                             .int => .signed,
                             .uint => .unsigned,
-                            else => unreachable
+                            else => unreachable,
                         },
                         .bits = known_bits,
                     },
@@ -93,10 +93,10 @@ fn valueToNumber(value: Value, bits: u8, layout: Number.Layout) Number {
                 break :res @unionInit(
                     Number.Concrete,
                     @tagName(tag),
-                    value.as(T)
+                    value.as(T),
                 );
             },
-            else => unreachable
+            else => unreachable,
         },
         .float => switch (bits) {
             inline 32, 64 => |known_bits| res: {
@@ -104,7 +104,7 @@ fn valueToNumber(value: Value, bits: u8, layout: Number.Layout) Number {
 
                 break :res .{ .float = value.as(T) };
             },
-            else => unreachable
+            else => unreachable,
         },
     };
 
@@ -132,9 +132,7 @@ pub fn resurrect(
         .@"bool" => .{ .@"bool" = value.as(u8) > 0 },
         .number => |num| num: {
             const bits = num.bits orelse 64;
-            break :num .{
-                .number = valueToNumber(value, bits, num.layout)
-            };
+            break :num .{ .number = valueToNumber(value, bits, num.layout) };
         },
         .ty => ty: {
             const index = canon.to(value.buf);
@@ -155,7 +153,7 @@ pub fn resurrect(
 
             var i: usize = 0;
             while (i < arr.size) : (i += 1) {
-                const src = value.buf[i * el_size..(i + 1) * el_size];
+                const src = value.buf[i * el_size .. (i + 1) * el_size];
                 std.mem.copy(u8, el_val.buf, src);
 
                 children[i] = try resurrect(env, el_val, mem, loc, arr.of);
@@ -170,7 +168,7 @@ pub fn resurrect(
                 const size = env.sizeOf(ptr.to);
                 const index = canon.to(value.buf);
 
-                const val = try Value.init(ally, mem[index..index + size]);
+                const val = try Value.init(ally, mem[index .. index + size]);
                 defer val.deinit(ally);
 
                 // resurrect self from the child data
@@ -180,7 +178,7 @@ pub fn resurrect(
             .slice => slice: {
                 // get struct data
                 const struct_index = canon.to(value.buf);
-                const struct_data = mem[struct_index..struct_index + 16];
+                const struct_data = mem[struct_index .. struct_index + 16];
 
                 // get ptr + len
                 const index = canon.to(struct_data[0..8]);
@@ -196,9 +194,9 @@ pub fn resurrect(
                 var i: usize = 0;
                 while (i < len) : (i += 1) {
                     const start = index + i * el_size;
-                    std.mem.copy(u8, el.buf, mem[start..start + el_size]);
+                    std.mem.copy(u8, el.buf, mem[start .. start + el_size]);
 
-                    slice[i] = try resurrect(env, el, mem, loc,ptr.to);
+                    slice[i] = try resurrect(env, el, mem, loc, ptr.to);
                 }
 
                 break :slice TExpr.Data{ .slice = slice };
@@ -216,7 +214,7 @@ pub fn resurrect(
             defer ally.free(text);
 
             std.debug.panic("TODO resurrect type {s}", .{text});
-        }
+        },
     };
 
     return TExpr.init(loc, true, tid, data);

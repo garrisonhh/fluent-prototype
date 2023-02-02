@@ -40,7 +40,7 @@ const TopLevelIterator = struct {
         // get line
         for (self.tokens) |tok, i| {
             if (tok.tag == .separator) {
-                defer self.tokens = self.tokens[i + 1..];
+                defer self.tokens = self.tokens[i + 1 ..];
                 return self.tokens[0..i];
             }
         }
@@ -86,7 +86,7 @@ fn parseError(
     ally: Allocator,
     loc: Loc,
     comptime fmt: []const u8,
-    args: anytype
+    args: anytype,
 ) Allocator.Error!Result {
     return try Message.err(ally, RawExpr, loc, fmt, args);
 }
@@ -94,8 +94,9 @@ fn parseError(
 fn streamError(
     p: *const Parser,
     comptime fmt: []const u8,
-    args: anytype
+    args: anytype,
 ) Allocator.Error!Result {
+    // zig fmt: off
     const loc =
         if (p.peek()) |tok| tok.loc
         else if (p.strm.tokens.len == 0) Loc.of(p.file, 0, 0)
@@ -103,6 +104,7 @@ fn streamError(
             const final = p.strm.tokens[p.strm.index - 1].loc;
             break :eof Loc.of(p.file, final.stop, final.stop);
         };
+    // zig fmt: on
 
     return parseError(p.ally, loc, fmt, args);
 }
@@ -152,7 +154,7 @@ fn parseAtom(p: *Parser, out_prec: *usize) Allocator.Error!?RawExpr {
                     .ident => .symbol,
                     .number => .number,
                     .string => .string,
-                    else => unreachable
+                    else => unreachable,
                 },
                 .loc = tok.loc,
             };
@@ -454,7 +456,7 @@ pub fn parse(
                     const first = exprs.items[0].loc;
                     const last = exprs.items[exprs.items.len - 1].loc;
                     break :many first.span(last);
-                }
+                },
             };
 
             break :file RawExpr{

@@ -8,10 +8,7 @@ hash: u64,
 str: []const u8,
 
 pub fn init(str: []const u8) Self {
-    return Self{
-        .hash = hash(str),
-        .str = str
-    };
+    return Self{ .hash = hash(str), .str = str };
 }
 
 pub fn hash(str: []const u8) u64 {
@@ -34,7 +31,7 @@ pub fn format(
     self: Self,
     comptime fmt: []const u8,
     options: std.fmt.FormatOptions,
-    writer: anytype
+    writer: anytype,
 ) @TypeOf(writer).Error!void {
     _ = fmt;
     _ = options;

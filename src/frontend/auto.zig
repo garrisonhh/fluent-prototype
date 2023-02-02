@@ -85,9 +85,11 @@ pub const Form = enum {
     /// used for generating error messages etc.
     pub fn name(self: Form) []const u8 {
         return switch (self) {
+            // zig fmt: off
             .file, .call, .array, .tuple, .unit, .symbol, .string, .number,
-            .lambda
-                => @tagName(self),
+            .lambda,
+            // zig fmt: on
+            => @tagName(self),
             .comma => "sequence",
             .stmt => "statement expression",
             .arrow => "arrow operator",
@@ -136,23 +138,23 @@ pub const Form = enum {
             };
 
             const pairs = .{
-                .{.file,  "ns"},
+                .{ .file, "ns" },
 
-                .{.addr,  "&"},
+                .{ .addr, "&" },
 
-                .{.add,   "+"},
-                .{.sub,   "-"},
-                .{.mul,   "*"},
-                .{.div,   "/"},
-                .{.mod,   "%"},
+                .{ .add, "+" },
+                .{ .sub, "-" },
+                .{ .mul, "*" },
+                .{ .div, "/" },
+                .{ .mod, "%" },
 
-                .{.eq,    "=="},
-                .{.gt,    ">"},
-                .{.lt,    "<"},
-                .{.ge,    ">="},
-                .{.le,    "<="},
+                .{ .eq, "==" },
+                .{ .gt, ">" },
+                .{ .lt, "<" },
+                .{ .ge, ">=" },
+                .{ .le, "<=" },
 
-                .{.arrow, "->"},
+                .{ .arrow, "->" },
             };
 
             // strings -> symbols
@@ -248,10 +250,11 @@ pub const FormExpr = union(enum) {
             .word => |word| {
                 var buf: [512]u8 = undefined;
                 var fba = std.heap.FixedBufferAllocator.init(&buf);
-                const escaped = com.stringEscape(fba.allocator(), word)
-                    catch "this word is way too long :(";
+                const ally = fba.allocator();
+
+                const escaped = com.stringEscape(ally, word) catch "<long str>";
                 try writer.print("`{s}`", .{escaped});
-            }
+            },
         }
     }
 };
@@ -291,7 +294,7 @@ pub const Syntax = struct {
                     const word = tok[1..];
                     if (!SYMBOLS.has(word) and !KEYWORDS.has(word)) {
                         @compileError(
-                            "`" ++ word ++ "` is not a symbol or keyword"
+                            "`" ++ word ++ "` is not a symbol or keyword",
                         );
                     }
 
@@ -299,21 +302,19 @@ pub const Syntax = struct {
                 },
                 '$' => switch (tok.len) {
                     1 => FormExpr{ .expr = .{} },
-                    2 => FormExpr{
-                        .expr = .{
-                            .flag = switch (tok[1]) {
-                                '?' => .opt,
-                                '*' => .any,
-                                '+' => .multi,
-                                else => badFormExpr(tok)
-                            },
-                        }
-                    },
-                    else => badFormExpr(tok)
+                    2 => FormExpr{ .expr = .{
+                        .flag = switch (tok[1]) {
+                            '?' => .opt,
+                            '*' => .any,
+                            '+' => .multi,
+                            else => badFormExpr(tok),
+                        },
+                    } },
+                    else => badFormExpr(tok),
                 },
                 else => {
                     @compileError("`" ++ tok ++ "` is not a valid FormExpr");
-                }
+                },
             };
         }
     }
@@ -325,7 +326,7 @@ pub const Syntax = struct {
     ///   which represent their regex counterparts
     fn parseForm(
         comptime dir: Direction,
-        comptime str: []const u8
+        comptime str: []const u8,
     ) [fexprsCount(str)]FormExpr {
         comptime {
             @setEvalBranchQuota(100_000);
@@ -356,9 +357,11 @@ pub const Syntax = struct {
             // and precedence should be reset when parsing it
             var i: usize = 1;
             while (i < fexprs.len - 1) : (i += 1) {
+                // zig fmt: off
                 const is_container = fexprs[i] == .expr
                                  and fexprs[i - 1] == .word
                                  and fexprs[i + 1] == .word;
+                // zig fmt: on
 
                 if (is_container) {
                     fexprs[i].expr.behavior = .reset;
@@ -372,7 +375,7 @@ pub const Syntax = struct {
     pub fn init(
         form: Form,
         comptime dir: Direction,
-        comptime syntax: []const u8
+        comptime syntax: []const u8,
     ) Self {
         const fexprs = &parseForm(dir, syntax);
         std.debug.assert(fexprs.len > 0);
@@ -438,8 +441,7 @@ pub const SyntaxTable = struct {
     }
 
     pub const PutError =
-        Allocator.Error
-     || error { OverwroteRule };
+        Allocator.Error || error{OverwroteRule};
 
     fn putUnique(
         ally: Allocator,
@@ -485,7 +487,11 @@ pub const SyntaxTable = struct {
         while (prefixed.next()) |entry| {
             std.debug.print(
                 "`{s}` -> ({}) {}\n",
-                .{entry.key_ptr.*, entry.value_ptr.prec, entry.value_ptr.rule},
+                .{
+                    entry.key_ptr.*,
+                    entry.value_ptr.prec,
+                    entry.value_ptr.rule,
+                },
             );
         }
         std.debug.print("\n", .{});
@@ -494,13 +500,17 @@ pub const SyntaxTable = struct {
         while (infixed.next()) |entry| {
             std.debug.print(
                 "$ `{s}` -> ({}) {}\n",
-                .{entry.key_ptr.*, entry.value_ptr.prec, entry.value_ptr.rule},
+                .{
+                    entry.key_ptr.*,
+                    entry.value_ptr.prec,
+                    entry.value_ptr.rule,
+                },
             );
         }
         std.debug.print("\n", .{});
 
         for (self.unfixed.items) |term| {
-            std.debug.print("-> ({}) {}\n", .{term.prec, term.rule});
+            std.debug.print("-> ({}) {}\n", .{ term.prec, term.rule });
         }
         std.debug.print("\n", .{});
     }
@@ -532,55 +542,55 @@ pub const SYNTAX: []const []const Syntax = t: {
     const x = Syntax.init;
     break :t &[_][]const Syntax{
         &.{
-            x(Form.def,    .r, "$ `:: $"),
-            x(Form.stmt,   .r, "$ `; $"),
+            x(Form.def, .r, "$ `:: $"),
+            x(Form.stmt, .r, "$ `; $"),
             x(Form.parens, .l, "`( $? `)"),
-            x(Form.dict,   .l, "`{ $? `}"),
-            x(Form.array,  .l, "`[ $? `]"),
-            x(Form.@"if",  .r, "`if $ `then $ `else $"),
-            x(Form.@"fn",  .l, "`fn $ `= $"),
+            x(Form.dict, .l, "`{ $? `}"),
+            x(Form.array, .l, "`[ $? `]"),
+            x(Form.@"if", .r, "`if $ `then $ `else $"),
+            x(Form.@"fn", .l, "`fn $ `= $"),
             x(Form.lambda, .r, "`| $? `| $"),
         },
         &.{
-            x(Form.comma,  .r, "$ `, $"),
+            x(Form.comma, .r, "$ `, $"),
         },
         &.{
-            x(Form.kv,     .r, "$ `: $"),
+            x(Form.kv, .r, "$ `: $"),
         },
         &.{
-            x(Form.arrow,  .r, "$ `-> $"),
+            x(Form.arrow, .r, "$ `-> $"),
         },
         &.{
             x(Form.@"and", .l, "$ `and $"),
-            x(Form.@"or",  .l, "$ `or $"),
-            x(Form.@"or",  .r, "`! $"),
+            x(Form.@"or", .l, "$ `or $"),
+            x(Form.@"or", .r, "`! $"),
         },
         &.{
-            x(Form.eq,     .l, "$ `== $"),
-            x(Form.gt,     .l, "$ `> $"),
-            x(Form.lt,     .l, "$ `< $"),
-            x(Form.ge,     .l, "$ `>= $"),
-            x(Form.le,     .l, "$ `<= $"),
+            x(Form.eq, .l, "$ `== $"),
+            x(Form.gt, .l, "$ `> $"),
+            x(Form.lt, .l, "$ `< $"),
+            x(Form.ge, .l, "$ `>= $"),
+            x(Form.le, .l, "$ `<= $"),
         },
         &.{
-            x(Form.add,    .l, "$ `+ $"),
-            x(Form.sub,    .l, "$ `- $"),
+            x(Form.add, .l, "$ `+ $"),
+            x(Form.sub, .l, "$ `- $"),
         },
         &.{
-            x(Form.mul,    .l, "$ `* $"),
-            x(Form.div,    .l, "$ `/ $"),
-            x(Form.mod,    .l, "$ `% $"),
+            x(Form.mul, .l, "$ `* $"),
+            x(Form.div, .l, "$ `/ $"),
+            x(Form.mod, .l, "$ `% $"),
         },
         &.{
-            x(Form.call,   .l, "$ $+"),
+            x(Form.call, .l, "$ $+"),
         },
         &.{
-            x(Form.addr,   .r, "`& $"),
-            x(Form.ptr,    .r, "`* $"),
-            x(Form.mut,    .r, "`mut $"),
+            x(Form.addr, .r, "`& $"),
+            x(Form.ptr, .r, "`* $"),
+            x(Form.mut, .r, "`mut $"),
         },
         &.{
-            x(Form.dot,    .l, "$ `. $"),
+            x(Form.dot, .l, "$ `. $"),
         },
     };
 };
@@ -588,19 +598,23 @@ pub const MAX_PRECEDENCE = SYNTAX.len;
 
 pub const KEYWORDS = comptimeStringSet(&.{
     "mut",
-    "and", "or",
+    "and",
+    "or",
     "fn",
-    "if", "then", "else",
+    "if",
+    "then",
+    "else",
 });
 
 const SYMBOL_LIST = &[_][]const u8{
-    "&", ".", "=", "::", "->", ",", ";", ":", "!",
+    "&",  ".", "=", "::", "->", ",",  ";", ":", "!",
     // math
-    "+", "-", "*", "/", "%",
+    "+",  "-", "*", "/",  "%",
     // cond
-    "==", ">", "<", ">=", "<=",
+     "==", ">", "<", ">=",
+    "<=",
     // matched
-    "(", ")", "[", "]", "{", "}", "|",
+    "(", ")", "[",  "]",  "{",  "}", "|",
 };
 
 pub const SYMBOLS = comptimeStringSet(SYMBOL_LIST);

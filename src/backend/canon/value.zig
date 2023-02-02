@@ -36,7 +36,7 @@ pub fn as(self: Self, comptime T: type) T {
             if (byte != 0) {
                 std.debug.panic(
                     "attempted bad Value bitcast:\nfrom {d}\n to {}\n",
-                    .{self.buf, T},
+                    .{ self.buf, T },
                 );
             }
         }

@@ -72,7 +72,7 @@ pub const Builder = struct {
     pub fn append(
         self: *Self,
         ally: Allocator,
-        other: Self
+        other: Self,
     ) Allocator.Error!void {
         const offset = @intCast(u32, self.program.items.len);
 
@@ -118,7 +118,7 @@ pub const Builder = struct {
     fn getBackref(
         self: *Self,
         ally: Allocator,
-        sp: Pos
+        sp: Pos,
     ) Allocator.Error!*BackRef {
         const res = try self.refs.getOrPut(ally, sp);
         if (!res.found_existing) {
@@ -134,7 +134,7 @@ pub const Builder = struct {
     pub fn addBranch(
         self: *Self,
         ally: Allocator,
-        sp: Pos
+        sp: Pos,
     ) Allocator.Error!void {
         const backref = try self.getBackref(ally, sp);
         try backref.assoc.append(ally, self.here());
@@ -146,7 +146,7 @@ pub const Builder = struct {
         self: *Self,
         ally: Allocator,
         sp: Pos,
-        to: InstRef
+        to: InstRef,
     ) Allocator.Error!void {
         const backref = try self.getBackref(ally, sp);
         backref.ref = to;
@@ -173,7 +173,7 @@ pub const Builder = struct {
     pub fn addInst(
         self: *Self,
         ally: Allocator,
-        inst: Inst
+        inst: Inst,
     ) Allocator.Error!void {
         try self.program.append(ally, inst);
     }
@@ -183,7 +183,7 @@ pub const Builder = struct {
         ally: Allocator,
         ref: InstRef,
         comptime fmt: []const u8,
-        args: anytype
+        args: anytype,
     ) Allocator.Error!void {
         const res = try self.comments.getOrPut(ally, ref);
         if (!res.found_existing) {
@@ -198,7 +198,7 @@ pub const Builder = struct {
         self: *Self,
         ally: Allocator,
         comptime fmt: []const u8,
-        args: anytype
+        args: anytype,
     ) Allocator.Error!void {
         try self.addCommentAt(ally, self.here(), fmt, args);
     }
@@ -208,12 +208,12 @@ pub const Builder = struct {
         ally: Allocator,
         func: FuncRef,
         start: InstRef,
-        stop: InstRef
+        stop: InstRef,
     ) Allocator.Error!void {
         std.debug.assert(start.index < stop.index);
         try self.regions.put(ally, func, Region{
             .start = start,
-            .stop = stop
+            .stop = stop,
         });
     }
 
@@ -227,7 +227,7 @@ pub const Builder = struct {
     pub fn removeFunc(
         self: *Self,
         ally: Allocator,
-        ref: FuncRef
+        ref: FuncRef,
     ) Allocator.Error!void {
         // remove the function's associated region
         const region = self.regions.get(ref).?;

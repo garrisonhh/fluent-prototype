@@ -8,7 +8,7 @@ const ssa = @import("ssa.zig");
 const Func = ssa.Func;
 const Env = @import("../env.zig");
 
-pub const Error = error {
+pub const Error = error{
     ConstTooLarge,
 };
 

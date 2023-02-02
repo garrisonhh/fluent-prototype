@@ -57,7 +57,7 @@ fn desugarExpr(
             const seq_form = switch (tag) {
                 .comma => .comma,
                 .stmt => .block,
-                else => unreachable
+                else => unreachable,
             };
 
             var coll = std.ArrayList(RawExpr).init(ally);
@@ -116,7 +116,7 @@ fn desugarExpr(
                 const coll_form = switch (tag) {
                     .parens => .tuple,
                     .dict, .array => .array,
-                    else => unreachable
+                    else => unreachable,
                 };
 
                 break :coll RawExpr{
@@ -126,7 +126,7 @@ fn desugarExpr(
                 };
             }
         },
-        else => expr
+        else => expr,
     };
 
     // desugar children

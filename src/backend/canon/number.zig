@@ -28,11 +28,14 @@ pub fn from(num: com.Number) com.ParseNumberError!Self {
     return Self{
         .bits = num.bits,
         .data = if (num.layout) |layout| switch (layout) {
-            .int  => .{ .int = try num.to(Int) },
-            .uint  => .{ .uint = try num.to(UInt) },
+            .int => .{ .int = try num.to(Int) },
+            .uint => .{ .uint = try num.to(UInt) },
             .float => .{ .float = try num.to(Float) },
-        } else if (num.post.len > 0) .{ .float = try num.to(Float) }
-        else .{ .int = try num.to(Int) }
+        } else if (num.post.len > 0) .{
+            .float = try num.to(Float),
+        } else .{
+            .int = try num.to(Int),
+        },
     };
 }
 
@@ -73,15 +76,16 @@ pub fn asValue(self: @This(), ally: Allocator) Allocator.Error!Value {
     std.debug.assert(bits % 8 == 0 and bits / 8 <= 8);
     std.debug.assert(builtin.target.cpu.arch.endian() == .Little);
 
-    return try Value.init(ally, data[0..bits / 8]);
+    return try Value.init(ally, data[0 .. bits / 8]);
 }
 
 pub fn eql(self: @This(), other: @This()) bool {
     // compare type
-    if (self.bits != other.bits
-     or @as(Layout, self.data) != @as(Layout, other.data)) {
-        return false;
-    }
+    // zig fmt: off
+    const types_match = self.bits == other.bits
+                    and @as(Layout, self.data) == @as(Layout, other.data);
+    // zig fmt: on
+    if (!types_match) return false;
 
     // compare bytes
     var mem: [32]u8 = undefined;

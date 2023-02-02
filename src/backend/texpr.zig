@@ -74,13 +74,14 @@ pub const Data = union(enum) {
         return @as(Tag, data) != @as(Tag, other) and switch (data) {
             .unit => true,
             .ptr => |to| to.eql(other.ptr.*),
+            // zig fmt: off
             // primitives
-            inline .@"bool", .builtin => |x, tag|
-                x == @field(other, @tagName(tag)),
+            inline .@"bool", .builtin
+            => |x, tag| x == @field(other, @tagName(tag)),
             // types with .eql
             inline .number, .string, .name, .ty, .func, .func_ref, .param
-                => |x, tag|
-                x.eql(@field(other, @tagName(tag))),
+            // zig fmt: on
+            => |x, tag| x.eql(@field(other, @tagName(tag))),
             // backed by slices
             inline .call, .array, .slice => |xs, tag| xs: {
                 const ys = @field(other, @tagName(tag));
@@ -125,8 +126,11 @@ pub fn init(loc: ?Loc, known_const: bool, ty: TypeId, data: Data) Self {
 
         // stored data must not require some kind of execution
         break :con switch (self.data) {
+            // zig fmt: off
             .unit, .ty, .@"bool", .number, .string, .builtin, .func_ref, .ptr,
-            .array, .slice => true,
+            .array, .slice,
+            // zig fmt: on
+            => true,
             .name, .call, .func, .param => false,
         };
     };
@@ -143,7 +147,7 @@ pub fn initCall(
     ally: Allocator,
     loc: ?Loc,
     ty: TypeId,
-    exprs: []const Self
+    exprs: []const Self,
 ) Allocator.Error!Self {
     const cloned = try ally.alloc(Self, exprs.len);
     for (exprs) |expr, i| {
@@ -172,7 +176,7 @@ pub fn deinit(self: Self, ally: Allocator) void {
         .call, .array, .slice => |children| {
             for (children) |child| child.deinit(ally);
             ally.free(children);
-        }
+        },
     }
 }
 
@@ -187,17 +191,17 @@ fn cloneChildren(ally: Allocator, exprs: []Self) Allocator.Error![]Self {
 
 pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
     const data = switch (self.data) {
+        // zig fmt: off
         .unit, .ty, .@"bool", .number, .name, .builtin, .param, .func_ref
-            => self.data,
+        // zig fmt: on
+        => self.data,
         .ptr => |child| Data{
-            .ptr = try com.placeOn(ally, try child.clone(ally))
+            .ptr = try com.placeOn(ally, try child.clone(ally)),
         },
-        .func => |func| Data{
-            .func = .{
-                .name = func.name,
-                .body = try com.placeOn(ally, try func.body.clone(ally))
-            }
-        },
+        .func => |func| Data{ .func = .{
+            .name = func.name,
+            .body = try com.placeOn(ally, try func.body.clone(ally)),
+        } },
         .string => |sym| Data{ .string = try sym.clone(ally) },
         .call => |children| Data{ .call = try cloneChildren(ally, children) },
         .array => |children| Data{ .array = try cloneChildren(ally, children) },
@@ -224,7 +228,7 @@ pub fn getChildren(self: Self) []Self {
         .call, .array, .slice => |xs| xs,
         .ptr => |child| @ptrCast(*[1]Self, child),
         .func => |func| @ptrCast(*[1]Self, func.body),
-        else => &.{}
+        else => &.{},
     };
 }
 
@@ -251,18 +255,23 @@ pub fn render(
 
     // other inline header stuff
     const data = switch (self.data) {
-        .call, .array, .slice, .ptr, .func
-            => try ctx.print(.{}, "{s}", .{@tagName(self.data)}),
+        .call, .array, .slice, .ptr, .func => try ctx.print(
+            .{},
+            "{s}",
+            .{@tagName(self.data)},
+        ),
         .unit => try ctx.print(.{}, "()", .{}),
-        .func_ref => |fr|
-            try ctx.slap(
-                try ctx.print(.{}, "&func ", .{}),
-                try ctx.print(red, "{}", .{env.getFuncConst(fr).name}),
-                .right,
-                .{}
-            ),
-        .param => |p|
-            try ctx.print(.{}, "parameter {d} of {}", .{p.index, p.func}),
+        .func_ref => |fr| try ctx.slap(
+            try ctx.print(.{}, "&func ", .{}),
+            try ctx.print(red, "{}", .{env.getFuncConst(fr).name}),
+            .right,
+            .{},
+        ),
+        .param => |p| try ctx.print(
+            .{},
+            "parameter {d} of {}",
+            .{ p.index, p.func },
+        ),
         .ty => |ty| ty: {
             const str = try env.tw.get(ty).writeAlloc(ctx.ally, env.tw);
             defer ctx.ally.free(str);
@@ -286,6 +295,6 @@ pub fn render(
     }
 
     // slap and return everything
-    const offset = kz.Offset{INDENT, @intCast(isize, ctx.getSize(header)[1])};
+    const offset = kz.Offset{ INDENT, @intCast(isize, ctx.getSize(header)[1]) };
     return try ctx.unify(header, children, offset);
 }

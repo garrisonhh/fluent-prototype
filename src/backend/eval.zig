@@ -20,9 +20,7 @@ const canon = @import("canon.zig");
 const Value = canon.Value;
 
 pub const Error =
-    std.mem.Allocator.Error
- || canon.ResError
- || @TypeOf(stdout).Error;
+    std.mem.Allocator.Error || canon.ResError || @TypeOf(stdout).Error;
 
 pub const Result = Message.Result(TExpr);
 
@@ -37,7 +35,7 @@ pub fn evalTyped(
     env: *Env,
     scope: Name,
     sexpr: SExpr,
-    expected: TypeId
+    expected: TypeId,
 ) Error!Result {
     const now = std.time.nanoTimestamp;
     const start = now();

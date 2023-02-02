@@ -62,8 +62,8 @@ fn assertCurrent(self: *Self, ref: Ref) void {
     if (builtin.mode == .Debug) {
         if (!self.isAlive(ref)) {
             std.debug.panic(
-                "mismatched chunk generation. remember to clone your chunks.",
-                .{}
+                "mismatched ref gen. remember to clone your chunks.",
+                .{},
             );
         }
     }
@@ -139,7 +139,7 @@ pub fn blank(self: *Self, size: Pos) Allocator.Error!Ref {
 
 /// create a chunk without a size (useful in some situations)
 pub fn stub(self: *Self) Allocator.Error!Ref {
-    return self.new(.{0, 0});
+    return self.new(.{ 0, 0 });
 }
 
 /// create a copy of another chunk
@@ -161,7 +161,7 @@ pub fn print(
     self: *Self,
     sty: Style,
     comptime fmt: []const u8,
-    args: anytype
+    args: anytype,
 ) PrintError!Ref {
     // get naive printed text
     const text = try std.fmt.allocPrint(self.ally, fmt, args);
@@ -232,15 +232,10 @@ fn blit(dst: *Chunk, src: *const Chunk, pos: Pos) void {
 
 /// draw chunk `b` over chunk `a` at offset `to`
 /// drops both chunks
-pub fn unify(
-    self: *Self,
-    a: Ref,
-    b: Ref,
-    to: Offset
-) Allocator.Error!Ref {
+pub fn unify(self: *Self, a: Ref, b: Ref, to: Offset) Allocator.Error!Ref {
     // find size of new chunk
     const target = Rect.init(to, self.getSize(b));
-    const unified = target.unionWith(Rect.init(.{0, 0}, self.getSize(a)));
+    const unified = target.unionWith(Rect.init(.{ 0, 0 }, self.getSize(a)));
 
     // create new chunk and blit
     const ref = try self.blank(unified.size);
@@ -276,13 +271,13 @@ fn slapOffset(size: Pos, dir: SlapDirection, aln: SlapAlign) Offset {
 
     // find side vertices
     const a: Offset = switch (dir) {
-        .left, .top => .{0, 0},
-        .right => .{ssize[0], 0},
-        .bottom => .{0, ssize[1]},
+        .left, .top => .{ 0, 0 },
+        .right => .{ ssize[0], 0 },
+        .bottom => .{ 0, ssize[1] },
     };
     const b: Offset = switch (dir) {
-        .left => .{0, ssize[1]},
-        .top => .{ssize[0], 0},
+        .left => .{ 0, ssize[1] },
+        .top => .{ ssize[0], 0 },
         .right, .bottom => ssize,
     };
 
@@ -297,10 +292,10 @@ fn slapOffset(size: Pos, dir: SlapDirection, aln: SlapAlign) Offset {
 fn slapSpacing(dir: SlapDirection, space: usize) Offset {
     const ispace = @intCast(isize, space);
     return switch (dir) {
-        .left => .{-ispace, 0},
-        .right => .{ispace, 0},
-        .top => .{0, -ispace},
-        .bottom => .{0, ispace},
+        .left => .{ -ispace, 0 },
+        .right => .{ ispace, 0 },
+        .top => .{ 0, -ispace },
+        .bottom => .{ 0, ispace },
     };
 }
 
@@ -318,7 +313,7 @@ pub fn slap(
     a: Ref,
     b: Ref,
     dir: SlapDirection,
-    opt: SlapOpt
+    opt: SlapOpt,
 ) Allocator.Error!Ref {
     const dst_offset = slapOffset(self.getSize(a), dir, opt.aln);
     const src_offset = slapOffset(self.getSize(b), dir.flip(), opt.aln);
@@ -335,7 +330,7 @@ pub fn stack(
     self: *Self,
     refs: []const Ref,
     dir: SlapDirection,
-    opt: SlapOpt
+    opt: SlapOpt,
 ) Allocator.Error!Ref {
     return switch (refs.len) {
         0 => self.stub(),
@@ -347,7 +342,7 @@ pub fn stack(
             }
 
             break :stack stacked;
-        }
+        },
     };
 }
 
@@ -362,7 +357,7 @@ const WriteBuffer = struct {
         self: *@This(),
         sty: Style,
         ch: u8,
-        writer: anytype
+        writer: anytype,
     ) @TypeOf(writer).Error!void {
         std.debug.assert(ch != '\n');
 
@@ -382,7 +377,7 @@ const WriteBuffer = struct {
     fn newline(self: *@This(), writer: anytype) @TypeOf(writer).Error!void {
         try writer.print(
             "{}{s}{}\n",
-            .{ self.style, self.buf[0..self.filled], &Style{} }
+            .{ self.style, self.buf[0..self.filled], &Style{} },
         );
 
         self.style = .{};
@@ -400,7 +395,7 @@ const WriteBuffer = struct {
 pub fn write(
     self: *Self,
     ref: Ref,
-    writer: anytype
+    writer: anytype,
 ) @TypeOf(writer).Error!void {
     const chunk = self.get(ref);
     defer self.drop(ref);

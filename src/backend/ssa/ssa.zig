@@ -102,50 +102,48 @@ pub const Op = union(enum) {
         ally: Allocator,
         to: Local,
         func: Local,
-        params: []const Local
+        params: []const Local,
     ) Allocator.Error!Self {
-        return Self{
-            .call = .{
-                .to = to,
-                .func = func,
-                .params = try ally.dupe(Local, params),
-            }
-        };
+        return Self{ .call = .{
+            .to = to,
+            .func = func,
+            .params = try ally.dupe(Local, params),
+        } };
     }
 
     pub fn initPhi(
         ally: Allocator,
         to: Local,
-        from: []const Label
+        from: []const Label,
     ) Allocator.Error!Self {
-        return Self{
-            .phi = .{
-                .to = to,
-                .from = try ally.dupe(Label, from),
-            }
-        };
+        return Self{ .phi = .{
+            .to = to,
+            .from = try ally.dupe(Label, from),
+        } };
     }
 
     pub fn initPure(
         ally: Allocator,
         comptime tag: std.meta.Tag(Self),
         to: Local,
-        params: []const Local
+        params: []const Local,
     ) Allocator.Error!Self {
         return @unionInit(Self, @tagName(tag), Pure{
             .to = to,
-            .params = try ally.dupe(Local, params)
+            .params = try ally.dupe(Local, params),
         });
     }
 
     pub fn initImpure(
         ally: Allocator,
         comptime tag: std.meta.Tag(Self),
-        params: []const Local
+        params: []const Local,
     ) Allocator.Error!Self {
-        return @unionInit(Self, @tagName(tag), Impure{
-            .params = try ally.dupe(Local, params)
-        });
+        return @unionInit(
+            Self,
+            @tagName(tag),
+            Impure{ .params = try ally.dupe(Local, params) },
+        );
     }
 
     pub fn deinit(self: *Self, ally: Allocator) void {
@@ -154,7 +152,7 @@ pub const Op = union(enum) {
             .pure => |pure| ally.free(pure.params),
             .impure => |impure| ally.free(impure.params),
             .phi => |phi| ally.free(phi.from),
-            else => {}
+            else => {},
         }
     }
 
@@ -184,7 +182,7 @@ pub const Op = union(enum) {
             inline else => |data| class: {
                 const fieldname = comptime Class.getFieldByType(@TypeOf(data));
                 break :class @unionInit(Class, fieldname, data);
-            }
+            },
         };
     }
 
@@ -193,7 +191,7 @@ pub const Op = union(enum) {
         self: Self,
         comptime _: []const u8,
         _: std.fmt.FormatOptions,
-        writer: anytype
+        writer: anytype,
     ) @TypeOf(writer).Error!void {
         switch (self.classify()) {
             inline else => |data| {
@@ -225,13 +223,13 @@ pub const Op = union(enum) {
                         else => |F| comptime {
                             const msg = std.fmt.comptimePrint(
                                 "TODO print ssa op field type `{}`",
-                                .{F}
+                                .{F},
                             );
                             @compileError(msg);
-                        }
+                        },
                     }
                 }
-            }
+            },
         }
     }
 };
@@ -261,7 +259,7 @@ pub const Local = packed struct {
         self: Self,
         comptime _: []const u8,
         _: std.fmt.FormatOptions,
-        writer: anytype
+        writer: anytype,
     ) @TypeOf(writer).Error!void {
         try writer.print("%{}", .{self.index});
     }
@@ -341,8 +339,8 @@ pub const Pos = struct {
     }
 
     pub fn order(self: Self, other: Self) std.math.Order {
-        const xs = [_]usize{self.ref.index, self.block.index, self.index};
-        const ys = [_]usize{other.ref.index, other.block.index, other.index};
+        const xs = [_]usize{ self.ref.index, self.block.index, self.index };
+        const ys = [_]usize{ other.ref.index, other.block.index, other.index };
         return std.mem.order(usize, &xs, &ys);
     }
 
@@ -354,11 +352,11 @@ pub const Pos = struct {
         self: Self,
         comptime _: []const u8,
         _: std.fmt.FormatOptions,
-        writer: anytype
+        writer: anytype,
     ) @TypeOf(writer).Error!void {
         try writer.print(
             "{}@{}:{}",
-            .{self.ref.index, self.block.index, self.index}
+            .{ self.ref.index, self.block.index, self.index },
         );
     }
 };
@@ -404,10 +402,10 @@ pub const Prophecy = struct {
                     } else switch (field.field_type) {
                         Local => using.appendAssumeCapacity(el),
                         []Local => using.appendSliceAssumeCapacity(el),
-                        else => {}
+                        else => {},
                     }
                 }
-            }
+            },
         }
 
         // copy using to buf
@@ -452,7 +450,7 @@ pub const Prophecy = struct {
                 if (lt.start.order(lt.stop) == .gt) {
                     std.debug.panic(
                         "bad lifetime for %{}: {} - {}",
-                        .{i, lt.start, lt.stop}
+                        .{ i, lt.start, lt.stop },
                     );
                 }
             }
@@ -499,11 +497,11 @@ pub const Prophecy = struct {
             const len = map.get(lt.stop).? + 1 - index;
 
             // generate bar
-            const stub = try ctx.block(.{1, y}, .{ .fg = .dark_gray }, '.');
+            const stub = try ctx.block(.{ 1, y }, .{ .fg = .dark_gray }, '.');
             const color: kz.Color = if (i % 5 == 0) .blue else .green;
-            const bar = try ctx.block(.{1, len}, .{ .bg = color }, ' ');
+            const bar = try ctx.block(.{ 1, len }, .{ .bg = color }, ' ');
 
-            bars[i] = try ctx.unify(stub, bar, .{0, @intCast(isize, index)});
+            bars[i] = try ctx.unify(stub, bar, .{ 0, @intCast(isize, index) });
         }
 
         return try ctx.stack(bars, .right, .{});
@@ -532,11 +530,7 @@ pub const FuncRef = packed struct {
     }
 
     /// clones expr and stores in func
-    pub fn addConst(
-        self: Self,
-        env: *Env,
-        expr: TExpr
-    ) Allocator.Error!Const {
+    pub fn addConst(self: Self, env: *Env, expr: TExpr) Allocator.Error!Const {
         std.debug.assert(expr.known_const);
 
         const func = env.getFunc(self);
@@ -546,11 +540,7 @@ pub const FuncRef = packed struct {
         return @"const";
     }
 
-    pub fn addLocal(
-        self: Self,
-        env: *Env,
-        ty: TypeId
-    ) Allocator.Error!Local {
+    pub fn addLocal(self: Self, env: *Env, ty: TypeId) Allocator.Error!Local {
         const func = env.getFunc(self);
         const local = Local.of(func.locals.items.len);
         try func.locals.append(env.ally, ty);
@@ -570,7 +560,7 @@ pub const FuncRef = packed struct {
         self: Self,
         env: *Env,
         label: Label,
-        op: Op
+        op: Op,
     ) Allocator.Error!void {
         const func = env.getFunc(self);
         const block = &func.blocks.items[label.index];
@@ -602,7 +592,7 @@ pub const Func = struct {
         self: Self,
         ctx: *kz.Context,
         env: Env,
-        local: Local
+        local: Local,
     ) !kz.Ref {
         const ty = self.locals.items[local.index];
         const ty_text = try ty.writeAlloc(ctx.ally, env.tw);
@@ -619,7 +609,7 @@ pub const Func = struct {
         ctx: *kz.Context,
         env: Env,
         list: *std.ArrayList(kz.Ref),
-        params: []const Local
+        params: []const Local,
     ) !void {
         const comma = try ctx.print(.{}, ", ", .{});
         defer ctx.drop(comma);
@@ -633,7 +623,7 @@ pub const Func = struct {
     fn renderLabels(
         ctx: *kz.Context,
         list: *std.ArrayList(kz.Ref),
-        labels: []const Label
+        labels: []const Label,
     ) !void {
         const comma = try ctx.print(.{}, ", ", .{});
         defer ctx.drop(comma);
@@ -644,12 +634,7 @@ pub const Func = struct {
         }
     }
 
-    fn renderOp(
-        self: Self,
-        ctx: *kz.Context,
-        env: Env,
-        op: Op
-    ) !kz.Ref {
+    fn renderOp(self: Self, ctx: *kz.Context, env: Env, op: Op) !kz.Ref {
         var line = std.ArrayList(kz.Ref).init(ctx.ally);
         defer line.deinit();
 
@@ -705,7 +690,7 @@ pub const Func = struct {
             .alloca => |all| {
                 try line.appendSlice(&.{
                     try self.renderLocal(ctx, env, all.to),
-                    try ctx.print(.{}, " = {s} {d}", .{tag, all.size}),
+                    try ctx.print(.{}, " = {s} {d}", .{ tag, all.size }),
                 });
             },
             .pure => |pure| {
@@ -721,8 +706,8 @@ pub const Func = struct {
                 try self.renderParams(ctx, env, &line, impure.params);
             },
             // else => std.debug.panic(
-                // "TODO render op class {s}",
-                // .{@tagName(class)}
+            // "TODO render op class {s}",
+            // .{@tagName(class)}
             // )
         }
 
@@ -734,7 +719,7 @@ pub const Func = struct {
         self: Self,
         ctx: *kz.Context,
         env: Env,
-        label: Label
+        label: Label,
     ) !kz.Ref {
         const INDENT = 4;
 
@@ -749,7 +734,7 @@ pub const Func = struct {
 
         // format block nicely
         const ops_tex = try ctx.stack(op_texs.items, .bottom, .{});
-        const indent_tex = try ctx.blank(.{INDENT, 0});
+        const indent_tex = try ctx.blank(.{ INDENT, 0 });
         const body_tex = try ctx.slap(indent_tex, ops_tex, .right, .{});
 
         const label_tex = try label.render(ctx);
@@ -815,7 +800,7 @@ pub const Func = struct {
         // slap it together
         const code = try ctx.slap(header, body, .bottom, .{});
         const sz = kz.toOffset(ctx.getSize(code));
-        return try ctx.unify(code, proph_tex, .{sz[0] + 1, 1});
+        return try ctx.unify(code, proph_tex, .{ sz[0] + 1, 1 });
     }
 };
 
@@ -878,7 +863,7 @@ pub const Program = struct {
     pub fn remove(
         self: *Self,
         ally: Allocator,
-        ref: FuncRef
+        ref: FuncRef,
     ) Allocator.Error!void {
         self.get(ref).deinit(ally);
         try self.unused.append(ally, ref);

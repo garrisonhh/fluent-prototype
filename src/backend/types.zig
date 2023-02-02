@@ -18,15 +18,14 @@ pub const TypeId = packed struct {
     }
 
     pub const WriteError =
-        std.ArrayList(u8).Writer.Error
-     || std.fmt.AllocPrintError;
+        std.ArrayList(u8).Writer.Error || std.fmt.AllocPrintError;
 
     // TODO use typewelt exclusively
     pub fn write(
         self: Self,
         ally: Allocator,
         tw: TypeWelt,
-        writer: anytype
+        writer: anytype,
     ) WriteError!void {
         if (tw.getName(self)) |name| {
             try writer.print("{}", .{name});
@@ -83,7 +82,7 @@ pub const TypeWelt = struct {
         *const Type,
         TypeId,
         TypeMapContext,
-        std.hash_map.default_max_load_percentage
+        std.hash_map.default_max_load_percentage,
     );
 
     types: std.ArrayListUnmanaged(*Type) = .{}, // TypeId -> Type
@@ -105,13 +104,13 @@ pub const TypeWelt = struct {
         return self.types.items[id.index];
     }
 
-    pub const RenameError = error { RenamedType };
+    pub const RenameError = error{RenamedType};
 
     pub fn setName(
         self: *Self,
         ally: Allocator,
         id: TypeId,
-        name: Name
+        name: Name,
     ) (Allocator.Error || RenameError)!void {
         // expand names array
         if (self.names.items.len <= id.index) {
@@ -135,7 +134,7 @@ pub const TypeWelt = struct {
     pub fn identify(
         self: *Self,
         ally: Allocator,
-        ty: Type
+        ty: Type,
     ) Allocator.Error!TypeId {
         const res = try self.map.getOrPut(ally, &ty);
         if (!res.found_existing) {
@@ -223,7 +222,7 @@ pub const Type = union(enum) {
 
     pub fn initSet(
         ally: Allocator,
-        subtypes: []const TypeId
+        subtypes: []const TypeId,
     ) Allocator.Error!Self {
         var set = Set{};
         for (subtypes) |subty| {
@@ -239,9 +238,11 @@ pub const Type = union(enum) {
 
     pub fn deinit(self: *Self, ally: Allocator) void {
         switch (self.*) {
+            // zig fmt: off
             .unit, .hole, .namespace, .builtin, .symbol, .any, .ty, .number,
-            .array, .@"bool", .@"ptr", .atom
-                => {},
+            .array, .@"bool", .@"ptr", .atom,
+            // zig fmt: on
+            => {},
             .set => |*set| set.deinit(ally),
             .tuple => |tup| ally.free(tup),
             .func => |func| ally.free(func.takes),
@@ -253,8 +254,10 @@ pub const Type = union(enum) {
         wyhash.update(asBytes(&std.meta.activeTag(self)));
 
         switch (self) {
+            // zig fmt: off
             .unit, .symbol, .hole, .any, .ty, .@"bool", .namespace, .builtin
-                => {},
+            // zig fmt: on
+            => {},
             .set => {
                 // NOTE if there is a serious issue here, figure out if there is
                 // a way to hash this in constant space. for now I'm just
@@ -280,7 +283,7 @@ pub const Type = union(enum) {
             .func => |func| {
                 wyhash.update(asBytes(&func.takes));
                 wyhash.update(asBytes(&func.returns));
-            }
+            },
         }
     }
 
@@ -301,8 +304,10 @@ pub const Type = union(enum) {
         if (@as(Tag, self) != @as(Tag, ty)) return false;
 
         return switch (self) {
-            .unit, .symbol, .hole, .any, .ty, .@"bool", .namespace, .builtin
-                => true,
+            // zig fmt: off
+            .unit, .symbol, .hole, .any, .ty, .@"bool", .namespace, .builtin,
+            // zig fmt: on
+            => true,
             .set => |set| set: {
                 if (set.count() != ty.set.count()) {
                     break :set false;
@@ -316,23 +321,26 @@ pub const Type = union(enum) {
                 break :set true;
             },
             .atom => |sym| sym.eql(ty.atom),
-            .number => |num|
-                num.layout == ty.number.layout and num.bits == ty.number.bits,
-            .array => |arr|
-                arr.size == ty.array.size and arr.of.eql(ty.array.of),
             .ptr => |ptr| ptr.kind == ty.ptr.kind and ptr.to.eql(ty.ptr.to),
             .tuple => |tup| idsEql(tup, ty.tuple),
-            .func => |func|
-                idsEql(func.takes, ty.func.takes)
-                and func.returns.eql(ty.func.returns),
+            // zig fmt: off
+            .number => |num| num.layout == ty.number.layout
+                         and num.bits == ty.number.bits,
+            .array => |arr| arr.size == ty.array.size
+                        and arr.of.eql(ty.array.of),
+            .func => |func| idsEql(func.takes, ty.func.takes)
+                        and func.returns.eql(ty.func.returns),
+            // zig fmt: on
         };
     }
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch (self) {
+            // zig fmt: off
             .unit, .symbol, .hole, .namespace, .builtin, .any, .number, .ty,
-            .array, .@"bool", .ptr
-                => self,
+            .array, .@"bool", .ptr,
+            // zig fmt: on
+            => self,
             .set => |set| Self{ .set = try set.clone(ally) },
             .atom => |name| Self{ .atom = name },
             .tuple => |tup| Self{ .tuple = try ally.dupe(TypeId, tup) },
@@ -346,7 +354,7 @@ pub const Type = union(enum) {
         self: Self,
         ally: Allocator,
         tw: *TypeWelt,
-        target: Self
+        target: Self,
     ) Allocator.Error!bool {
         // special logic
         switch (target) {
@@ -365,7 +373,7 @@ pub const Type = union(enum) {
                     return target.set.contains(try tw.identify(ally, self));
                 }
             },
-            else => if (@as(Tag, self) != @as(Tag, target)) return false
+            else => if (@as(Tag, self) != @as(Tag, target)) return false,
         }
 
         // concrete matching
@@ -408,7 +416,7 @@ pub const Type = union(enum) {
         self: Self,
         ally: Allocator,
         tw: *TypeWelt,
-        other: Self
+        other: Self,
     ) Allocator.Error!TypeId {
         if (self.eql(other)) {
             return try tw.identify(ally, self);
@@ -423,7 +431,7 @@ pub const Type = union(enum) {
         // need a new set to fit both
         var unified = try Self.initSet(ally, &.{
             try tw.identify(ally, self),
-            try tw.identify(ally, other)
+            try tw.identify(ally, other),
         });
         defer unified.deinit(ally);
 
@@ -479,7 +487,7 @@ pub const Type = union(enum) {
             .func => |func| func: {
                 var reqs = [2]RuntimeClass{
                     classifyList(func.takes, typewelt),
-                    typewelt.get(func.returns).classifyRuntime(typewelt)
+                    typewelt.get(func.returns).classifyRuntime(typewelt),
                 };
 
                 break :func RuntimeClass.unifyList(&reqs);
@@ -498,19 +506,18 @@ pub const Type = union(enum) {
             .number => |num| (num.bits orelse 64) / 8,
             .ty, .builtin, .ptr, .func => 8,
             .array => |arr| arr.size * tw.get(arr.of).sizeOf(tw),
-            else => std.debug.panic("TODO sizeOf {s}", .{@tagName(self)})
+            else => std.debug.panic("TODO sizeOf {s}", .{@tagName(self)}),
         };
     }
 
     pub const WriteError =
-        std.ArrayList(u8).Writer.Error
-     || std.fmt.AllocPrintError;
+        std.ArrayList(u8).Writer.Error || std.fmt.AllocPrintError;
 
     fn writeList(
         list: []TypeId,
         ally: Allocator,
         tw: TypeWelt,
-        writer: anytype
+        writer: anytype,
     ) WriteError!void {
         try writer.writeByte('[');
         for (list) |ty, i| {
@@ -525,17 +532,19 @@ pub const Type = union(enum) {
         self: Self,
         ally: Allocator,
         tw: TypeWelt,
-        writer: anytype
+        writer: anytype,
     ) WriteError!void {
         switch (self) {
-            .unit, .@"bool", .namespace, .builtin
-                => try writer.writeAll(@tagName(self)),
+            // zig fmt: off
+            .unit, .@"bool", .namespace, .builtin,
+            // zig fmt: on
+            => try writer.writeAll(@tagName(self)),
             .ty => try writer.writeAll("type"),
             .hole, .symbol, .any => {
                 // write capitalized tag
                 const tag = @tagName(self);
                 const first = std.ascii.toUpper(tag[0]);
-                try writer.print("{c}{s}", .{first, tag[1..]});
+                try writer.print("{c}{s}", .{ first, tag[1..] });
             },
             .atom => |sym| try writer.print("#{}", .{sym}),
             .set => |set| {
@@ -570,7 +579,7 @@ pub const Type = union(enum) {
             .number => |num| {
                 const layout = @tagName(num.layout);
                 if (num.bits) |bits| {
-                    try writer.print("{c}{}", .{layout[0], bits});
+                    try writer.print("{c}{}", .{ layout[0], bits });
                 } else {
                     try writer.print("compiler-{s}", .{layout});
                 }
@@ -612,7 +621,7 @@ pub const Type = union(enum) {
     pub fn writeAlloc(
         self: Self,
         ally: Allocator,
-        tw: TypeWelt
+        tw: TypeWelt,
     ) WriteError![]u8 {
         var list = std.ArrayList(u8).init(ally);
         defer list.deinit();
@@ -626,13 +635,12 @@ pub const Type = union(enum) {
         self: Self,
         comptime fmt: []const u8,
         options: std.fmt.FormatOptions,
-        writer: anytype
+        writer: anytype,
     ) @TypeOf(writer).Error!void {
         _ = self;
         _ = fmt;
         _ = options;
 
-        @compileError("Type.format is deprecated; "
-                   ++ "please use Type.write() or Type.writeAlloc()");
+        @compileError("Type.format is deprecated");
     }
 };

@@ -119,7 +119,7 @@ pub fn ensureCompiled(self: *Self, ref: SsaRef) Allocator.Error!BcRef {
 pub fn tieLLRefs(
     self: *Self,
     ssa_ref: SsaRef,
-    bc_ref: BcRef
+    bc_ref: BcRef,
 ) Allocator.Error!void {
     try self.compiled.put(self.ally, ssa_ref, bc_ref);
     try self.lowered.put(self.ally, bc_ref, ssa_ref);
@@ -131,7 +131,7 @@ pub fn run(
     self: *Self,
     prog: Program,
     loc: ?Loc,
-    ty: TypeId
+    ty: TypeId,
 ) (Vm.RuntimeError || canon.ResError)!TExpr {
     try self.vm.execute(self, prog);
 
@@ -179,7 +179,7 @@ pub fn defType(
     self: *Self,
     scope: Name,
     sym: Symbol,
-    value: TypeId
+    value: TypeId,
 ) DefError!Name {
     const tyty = try self.identify(Type{ .ty = {} });
     const expr = TExpr.init(null, true, tyty, .{ .ty = value });

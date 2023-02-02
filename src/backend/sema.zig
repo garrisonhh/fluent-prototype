@@ -34,7 +34,7 @@ fn expectError(
     env: Env,
     loc: ?Loc,
     expected: TypeId,
-    found: TypeId
+    found: TypeId,
 ) Allocator.Error!Result {
     const exp_text = try expected.writeAlloc(env.ally, env.tw);
     defer env.ally.free(exp_text);
@@ -42,33 +42,37 @@ fn expectError(
     defer env.ally.free(found_text);
 
     const fmt = "expected {s}, found {s}";
-    return try Message.err(env.ally, TExpr, loc, fmt, .{exp_text, found_text});
+    return try Message.err(
+        env.ally,
+        TExpr,
+        loc,
+        fmt,
+        .{ exp_text, found_text },
+    );
 }
 
 fn wrongNArgsError(
     ally: Allocator,
     loc: ?Loc,
     expected: usize,
-    found: usize
+    found: usize,
 ) Allocator.Error!Result {
     const fmt = "expected {} parameters, found {}";
-    return try Message.err(ally, TExpr, loc, fmt, .{expected, found});
+    return try Message.err(ally, TExpr, loc, fmt, .{ expected, found });
 }
 
 fn typeOfNumber(env: *Env, num: Number) SemaError!TypeId {
-    return try env.identify(Type{
-        .number = .{
-            .bits = num.bits,
-            .layout = num.data,
-        }
-    });
+    return try env.identify(Type{ .number = .{
+        .bits = num.bits,
+        .layout = num.data,
+    } });
 }
 
 fn analyzeSymbol(
     env: *Env,
     scope: Name,
     expr: SExpr,
-    outward: TypeId
+    outward: TypeId,
 ) SemaError!Result {
     const symbol = expr.data.symbol;
 
@@ -92,7 +96,7 @@ fn analyzeAs(
     env: *Env,
     scope: Name,
     expr: SExpr,
-    outward: TypeId
+    outward: TypeId,
 ) SemaError!Result {
     const exprs = expr.data.call;
 
@@ -122,7 +126,7 @@ fn analyzeAddrOf(
     env: *Env,
     scope: Name,
     expr: SExpr,
-    outward: TypeId
+    outward: TypeId,
 ) SemaError!Result {
     const ally = env.ally;
     const exprs = expr.data.call;
@@ -136,9 +140,9 @@ fn analyzeAddrOf(
     const outer = env.tw.get(outward);
     const expect =
         if (outer.* == .ptr and outer.ptr.kind == .single)
-            outer.ptr.to
-        else
-            try env.identify(Type{ .any = {} });
+        outer.ptr.to
+    else
+        try env.identify(Type{ .any = {} });
 
     const sub_res = try analyzeExpr(env, scope, exprs[1], expect);
     const subexpr = sub_res.get() orelse return sub_res;
@@ -147,7 +151,7 @@ fn analyzeAddrOf(
     const ptr_ty = try env.identify(Type.initPtr(.single, subexpr.ty));
 
     const texpr = TExpr.init(expr.loc, false, ptr_ty, TExpr.Data{
-        .ptr = try com.placeOn(ally, subexpr)
+        .ptr = try com.placeOn(ally, subexpr),
     });
     return try unifyTExpr(env, texpr, outward);
 }
@@ -156,7 +160,7 @@ fn analyzeDo(
     env: *Env,
     scope: Name,
     expr: SExpr,
-    outward: TypeId
+    outward: TypeId,
 ) SemaError!Result {
     const ally = env.ally;
     const exprs = expr.data.call;
@@ -177,9 +181,9 @@ fn analyzeDo(
     // analyze statements
     const unit = try env.identify(Type{ .unit = {} });
 
-    const stmts = exprs[1..exprs.len - 1];
+    const stmts = exprs[1 .. exprs.len - 1];
     for (stmts) |stmt, i| {
-        errdefer for (texprs[1..i + 1]) |texpr| texpr.deinit(ally);
+        errdefer for (texprs[1 .. i + 1]) |texpr| texpr.deinit(ally);
         const res = try analyzeExpr(env, scope, stmt, unit);
         texprs[i + 1] = res.get() orelse return res;
     }
@@ -203,7 +207,7 @@ fn analyzeIf(
     env: *Env,
     scope: Name,
     expr: SExpr,
-    outward: TypeId
+    outward: TypeId,
 ) SemaError!Result {
     const ally = env.ally;
     const exprs = expr.data.call;
@@ -221,7 +225,7 @@ fn analyzeIf(
     var texprs: [4]TExpr = undefined;
     texprs[0] = TExpr.initBuiltin(exprs[0].loc, builtin_ty, .@"if");
 
-    const expects = [_]TypeId{@"bool", outward, outward};
+    const expects = [_]TypeId{ @"bool", outward, outward };
     var i: usize = 0;
     while (i < 3) : (i += 1) {
         const res = try analyzeExpr(env, scope, exprs[i + 1], expects[i]);
@@ -237,7 +241,7 @@ fn analyzeArray(
     env: *Env,
     scope: Name,
     expr: SExpr,
-    outward: TypeId
+    outward: TypeId,
 ) SemaError!Result {
     const ally = env.ally;
 
@@ -264,12 +268,10 @@ fn analyzeArray(
 
     // create TExpr
     const final_subty = if (texprs.len > 0) texprs[0].ty else elem_outward;
-    const ty = try env.identify(Type{
-        .array = Type.Array{
-            .size = texprs.len,
-            .of = final_subty,
-        }
-    });
+    const ty = try env.identify(Type{ .array = Type.Array{
+        .size = texprs.len,
+        .of = final_subty,
+    } });
     const texpr = TExpr.init(expr.loc, false, ty, .{ .array = texprs });
     return try unifyTExpr(env, texpr, outward);
 }
@@ -277,7 +279,7 @@ fn analyzeArray(
 fn filterDefError(
     ally: Allocator,
     loc: Loc,
-    err: (SemaError || Env.DefError)
+    err: (SemaError || Env.DefError),
 ) SemaError!Result {
     return switch (err) {
         error.NameNoRedef => unreachable,
@@ -350,7 +352,7 @@ fn analyzeNamespace(
     env: *Env,
     scope: Name,
     expr: SExpr,
-    outward: TypeId
+    outward: TypeId,
 ) SemaError!Result {
     const ally = env.ally;
     const args = expr.data.call[1..];
@@ -422,7 +424,7 @@ fn analyzeRecur(
     env: *Env,
     scope: Name,
     expr: SExpr,
-    outward: TypeId
+    outward: TypeId,
 ) SemaError!Result {
     const ally = env.ally;
 
@@ -458,9 +460,12 @@ fn analyzeRecur(
         texprs[i + 1] = res.get() orelse return res;
     }
 
-    const final = TExpr.init(expr.loc, false, func.returns, .{
-        .call = texprs
-    });
+    const final = TExpr.init(
+        expr.loc,
+        false,
+        func.returns,
+        .{ .call = texprs },
+    );
     return try unifyTExpr(env, final, outward);
 }
 
@@ -532,7 +537,7 @@ fn analyzeLambda(
             TExpr,
             params_expr.loc,
             "found {d} parameters, expected {d}",
-            .{params.len, func.takes.len}
+            .{ params.len, func.takes.len },
         );
     }
 
@@ -553,7 +558,7 @@ fn analyzeLambda(
         const sym = param.data.symbol;
         const ty = func.takes[i];
         const pexpr = TExpr.init(param.loc, false, ty, .{
-            .param = TExpr.Param{ .func = local, .index = i }
+            .param = TExpr.Param{ .func = local, .index = i },
         });
         _ = env.def(local, sym, pexpr) catch |e| {
             return try filterDefError(env.ally, param.loc, e);
@@ -563,12 +568,10 @@ fn analyzeLambda(
     // analyze body
     const body_res = try analyzeExpr(env, local, exprs[2], func.returns);
     const body = body_res.get() orelse return body_res;
-    const final = TExpr.init(expr.loc, false, outward, .{
-        .func = TExpr.Func{
-            .name = local,
-            .body = try com.placeOn(env.ally, body),
-        }
-    });
+    const final = TExpr.init(expr.loc, false, outward, .{ .func = TExpr.Func{
+        .name = local,
+        .body = try com.placeOn(env.ally, body),
+    } });
 
     return Result.ok(final);
 }
@@ -577,7 +580,7 @@ fn analyzeCall(
     env: *Env,
     scope: Name,
     expr: SExpr,
-    outward: TypeId
+    outward: TypeId,
 ) SemaError!Result {
     const ally = env.ally;
     const exprs = expr.data.call;
@@ -633,7 +636,7 @@ fn analyzeCall(
 
     // infer params
     for (takes) |tid, i| {
-        errdefer for (texprs[1..i + 1]) |texpr| {
+        errdefer for (texprs[1 .. i + 1]) |texpr| {
             texpr.deinit(ally);
         };
 
@@ -655,11 +658,7 @@ fn analyzeCall(
 /// b) make an implicit cast explicitly expressed in the AST
 /// c) identify that an expectation was violated and produce an appropriate
 ///    error
-fn unifyTExpr(
-    env: *Env,
-    texpr: TExpr,
-    outward: TypeId
-) SemaError!Result {
+fn unifyTExpr(env: *Env, texpr: TExpr, outward: TypeId) SemaError!Result {
     const inner = env.tw.get(texpr.ty);
     const outer = env.tw.get(outward);
 
@@ -667,7 +666,7 @@ fn unifyTExpr(
     const is_unified = switch (outer.*) {
         .any => true,
         .set => try inner.coercesTo(env.ally, &env.tw, outer.*),
-        else => texpr.ty.eql(outward)
+        else => texpr.ty.eql(outward),
     };
 
     if (is_unified) return Result.ok(texpr);
@@ -689,7 +688,7 @@ fn unifyTExpr(
             env.ally,
             texpr.loc,
             outward,
-            &[2]TExpr{cast, texpr}
+            &[2]TExpr{ cast, texpr },
         );
 
         return Result.ok(final);
@@ -703,7 +702,7 @@ fn analyzeExpr(
     env: *Env,
     scope: Name,
     expr: SExpr,
-    outward: TypeId
+    outward: TypeId,
 ) SemaError!Result {
     return switch (expr.data) {
         .call => try analyzeCall(env, scope, expr, outward),
@@ -713,27 +712,25 @@ fn analyzeExpr(
             const ty = switch (expr.data) {
                 .number => |num| try typeOfNumber(env, num),
                 // string literals are (Array N u8)
-                .string => |str| try env.identify(Type{
-                    .array = Type.Array{
-                        .size = str.str.len,
-                        .of = try env.identify(Type{
-                            .number = .{ .layout = .uint, .bits = 8 }
-                        }),
-                    }
-                }),
+                .string => |str| try env.identify(Type{ .array = Type.Array{
+                    .size = str.str.len,
+                    .of = try env.identify(Type{
+                        .number = .{ .layout = .uint, .bits = 8 },
+                    }),
+                } }),
                 .call, .symbol => unreachable,
             };
             const data = switch (expr.data) {
                 .number => |num| TExpr.Data{ .number = num },
                 .string => |sym| TExpr.Data{
-                    .string = try sym.clone(env.ally)
+                    .string = try sym.clone(env.ally),
                 },
-                else => unreachable
+                else => unreachable,
             };
 
             const texpr = TExpr.init(expr.loc, true, ty, data);
             break :lit unifyTExpr(env, texpr, outward);
-        }
+        },
     };
 }
 
@@ -778,7 +775,7 @@ pub fn analyze(
     env: *Env,
     scope: Name,
     expr: SExpr,
-    expects: TypeId
+    expects: TypeId,
 ) SemaError!Result {
     const res = try analyzeExpr(env, scope, expr, expects);
     var texpr = res.get() orelse return res;

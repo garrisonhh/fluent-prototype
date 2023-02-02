@@ -30,7 +30,7 @@ pub const Value = union(Type.Tag) {
     fn deinit(self: Self, ally: Allocator) void {
         switch (self) {
             .string => |str| ally.free(str),
-            else => {}
+            else => {},
         }
     }
 
@@ -38,7 +38,7 @@ pub const Value = union(Type.Tag) {
         self: Self,
         comptime _: []const u8,
         _: std.fmt.FormatOptions,
-        writer: anytype
+        writer: anytype,
     ) @TypeOf(writer).Error!void {
         switch (self) {
             .flag => try writer.writeAll("flag"),
@@ -89,7 +89,7 @@ pub const Output = union(enum) {
                 var iter = opts.valueIterator();
                 while (iter.next()) |val| val.deinit(ally);
                 opts.deinit(ally);
-            }
+            },
         }
     }
 
@@ -120,7 +120,7 @@ pub const Output = union(enum) {
     /// show usage and exit.
     pub fn filterHelp(
         self: *const Self,
-        parser: *const Parser
+        parser: *const Parser,
     ) Parser.ExitError!void {
         // test if this output is help
         var state = self;
@@ -137,7 +137,7 @@ pub const Output = union(enum) {
     pub fn render(
         self: Self,
         ctx: *kz.Context,
-        _: void
+        _: void,
     ) Allocator.Error!kz.Ref {
         return switch (self) {
             .path => |path| path: {
@@ -145,7 +145,7 @@ pub const Output = union(enum) {
                 const size = kz.toOffset(ctx.getSize(name));
 
                 const data = try path.out.render(ctx, {});
-                break :path try ctx.unify(name, data, .{INDENT, size[1]});
+                break :path try ctx.unify(name, data, .{ INDENT, size[1] });
             },
             .options => |opts| opts: {
                 var keys = std.ArrayList(kz.Ref).init(ctx.ally);
@@ -169,7 +169,7 @@ pub const Output = union(enum) {
                     try ctx.stack(keys.items, .bottom, .{}),
                     try ctx.stack(values.items, .bottom, .{}),
                     .right,
-                    .{ .space = 1 }
+                    .{ .space = 1 },
                 );
             },
         };
@@ -198,9 +198,9 @@ pub const Parser = struct {
     pub fn init(
         ally: Allocator,
         name: []const u8,
-        desc: []const u8
+        desc: []const u8,
     ) Allocator.Error!Self {
-         return Self{
+        return Self{
             .ally = ally,
             .name = try ally.dupe(u8, name),
             .desc = try ally.dupe(u8, desc),
@@ -346,7 +346,7 @@ pub const Parser = struct {
         self: Self,
         ot: OptType,
         ty: Type,
-        iter: *ParseIterator
+        iter: *ParseIterator,
     ) ExitError!Value {
         if (ty == .flag) {
             return Value{ .flag = {} };
@@ -358,32 +358,23 @@ pub const Parser = struct {
 
         return switch (ty) {
             .flag => unreachable,
-            .nat => Value{
-                .nat = std.fmt.parseInt(usize, str, 0) catch {
-                    try self.errorExit("{} expected nat", .{ot});
-                }
-            },
-            .string => Value{
-                .string = try self.ally.dupe(u8, str)
-            },
+            .nat => Value{ .nat = std.fmt.parseInt(usize, str, 0) catch {
+                try self.errorExit("{} expected nat", .{ot});
+            } },
+            .string => Value{ .string = try self.ally.dupe(u8, str) },
         };
     }
 
-    fn parseSlice(
-        self: *Self,
-        args: []const []const u8
-    ) ExitError!Output {
+    fn parseSlice(self: *Self, args: []const []const u8) ExitError!Output {
         // check for subcommand
         if (args.len > 0) if (self.subcommands.get(args[0])) |sp| {
             var subout = try self.ally.create(Output);
             subout.* = try sp.parseSlice(args[1..]);
 
-            return Output{
-                .path = .{
-                    .subcommand = sp.name,
-                    .out = subout,
-                }
-            };
+            return Output{ .path = .{
+                .subcommand = sp.name,
+                .out = subout,
+            } };
         };
 
         var map = Output.Options{};
@@ -412,7 +403,7 @@ pub const Parser = struct {
                 // short opt(s)
                 const short = arg[1..];
 
-                for (short[0..short.len - 1]) |c| {
+                for (short[0 .. short.len - 1]) |c| {
                     const id = self.short.get(c) orelse {
                         try self.errorUnknownOpt(.{ .short = c });
                     };
@@ -474,7 +465,7 @@ pub const Parser = struct {
     fn renderName(
         ctx: *kz.Context,
         sty: kz.Style,
-        parser: Parser
+        parser: Parser,
     ) Allocator.Error!kz.Ref {
         var names = std.ArrayList(kz.Ref).init(ctx.ally);
         defer names.deinit();
@@ -491,20 +482,18 @@ pub const Parser = struct {
     fn renderSection(
         ctx: *kz.Context,
         name: []const u8,
-        section: kz.Ref
+        section: kz.Ref,
     ) Allocator.Error!kz.Ref {
-        const header = try ctx.stack(
-            &.{
-                try ctx.print(.{}, "[", .{}),
-                try ctx.print(.{ .fg = .cyan, }, "{s}", .{name}),
-                try ctx.print(.{}, "]", .{}),
-            },
-            .right,
-            .{}
-        );
+        const header = try ctx.stack(&.{
+            try ctx.print(.{}, "[", .{}),
+            try ctx.print(.{
+                .fg = .cyan,
+            }, "{s}", .{name}),
+            try ctx.print(.{}, "]", .{}),
+        }, .right, .{});
         const size = kz.toOffset(ctx.getSize(header));
 
-        return try ctx.unify(header, section, .{INDENT, size[1]});
+        return try ctx.unify(header, section, .{ INDENT, size[1] });
     }
 
     fn renderType(ctx: *kz.Context, ty: Type) Allocator.Error!?kz.Ref {
@@ -560,14 +549,14 @@ pub const Parser = struct {
         return try ctx.unify(
             usage,
             try ctx.print(.{}, "{s}", .{opt.desc}),
-            .{INDENT, size[1]}
+            .{ INDENT, size[1] },
         );
     }
 
     pub fn render(
         self: Self,
         ctx: *kz.Context,
-        _: void
+        _: void,
     ) Allocator.Error!kz.Ref {
         const ally = ctx.ally;
 
@@ -607,10 +596,10 @@ pub const Parser = struct {
                     try ctx.clone(name),
                     try ctx.print(.{}, "<subcommand>", .{}),
                     .right,
-                    .{ .space = 1 }
+                    .{ .space = 1 },
                 ),
                 .bottom,
-                .{}
+                .{},
             );
         }
 
@@ -654,7 +643,7 @@ pub const Parser = struct {
             try subs.append(try ctx.unify(
                 sub_ex,
                 try ctx.print(.{}, "{s}", .{sub.desc}),
-                .{INDENT, size[1]}
+                .{ INDENT, size[1] },
             ));
         }
 
@@ -695,24 +684,19 @@ pub const Parser = struct {
     pub fn errorExit(
         self: Self,
         comptime fmt: []const u8,
-        args: anytype
+        args: anytype,
     ) ExitError!noreturn {
         var ctx = kz.Context.init(self.ally);
         defer ctx.deinit();
 
-        const rendered = try ctx.stack(
-            &.{
-                try ctx.print(.{}, "[", .{}),
-                try ctx.print(.{ .fg = .red }, "cli error", .{}),
-                try ctx.print(.{}, "] ", .{}),
-                try ctx.print(.{}, fmt, args),
-            },
-            .right,
-            .{}
-        );
+        const rendered = try ctx.stack(&.{
+            try ctx.print(.{}, "[", .{}),
+            try ctx.print(.{ .fg = .red }, "cli error", .{}),
+            try ctx.print(.{}, "] ", .{}),
+            try ctx.print(.{}, fmt, args),
+        }, .right, .{});
 
         try ctx.write(rendered, stderr);
         std.process.exit(1);
     }
 };
-

@@ -17,8 +17,8 @@ const Allocator = std.mem.Allocator;
 /// parses escape sequences and returns an owned string
 pub fn stringUnescape(
     ally: Allocator,
-    raw: []const u8
-) (Allocator.Error || error { BadEscapeSeq })![]u8 {
+    raw: []const u8,
+) (Allocator.Error || error{BadEscapeSeq})![]u8 {
     var buf = try std.ArrayList(u8).initCapacity(ally, raw.len);
 
     var i: usize = 0;
@@ -43,19 +43,19 @@ pub fn stringUnescape(
                     var val: u8 = 0;
                     if (i + 3 > raw.len) return error.BadEscapeSeq;
 
-                    for (raw[i + 1..i + 3]) |hexch| {
+                    for (raw[i + 1 .. i + 3]) |hexch| {
                         val = val * 0x10 + switch (hexch) {
                             'a'...'f' => 0xa + hexch - 'a',
                             'A'...'F' => 0xa + hexch - 'A',
                             '0'...'9' => hexch - '0',
-                            else => return error.BadEscapeSeq
+                            else => return error.BadEscapeSeq,
                         };
                     }
 
                     i += 2;
                     break :hex val;
                 },
-                else => |escaped| escaped
+                else => |escaped| escaped,
             };
         };
 
@@ -90,11 +90,11 @@ pub fn stringEscape(ally: Allocator, str: []const u8) Allocator.Error![]u8 {
                             try buf.append('x');
                             try buf.append(ch / 0x10);
                             break :hex ch % 0x10;
-                        }
+                        },
                     };
                     try buf.append(next);
                 }
-            }
+            },
         }
     }
 
@@ -106,7 +106,7 @@ test "unescape string" {
 
     const esc =
         \\\e\n\r\t\v\\\'\"\x30\x31
-        ;
+    ;
     const unesc = "\x1b\n\r\t\x0b\\\'\"\x30\x31";
 
     const unescaped = try stringUnescape(ally, esc);
@@ -120,7 +120,7 @@ test "escape string" {
 
     const esc =
         \\\e\n\r\t\v\\\'\"01
-        ;
+    ;
     const unesc = "\x1b\n\r\t\x0b\\\'\"\x30\x31";
 
     const escaped = try stringEscape(ally, unesc);

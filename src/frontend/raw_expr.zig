@@ -18,7 +18,7 @@ pub fn init(
     ally: Allocator,
     loc: Loc,
     form: Form,
-    exprs: []const Self
+    exprs: []const Self,
 ) Allocator.Error!Self {
     return Self{
         .loc = loc,
@@ -35,7 +35,7 @@ pub fn deinit(self: Self, ally: Allocator) void {
 pub fn render(
     self: Self,
     ctx: *kz.Context,
-    proj: Project
+    proj: Project,
 ) Allocator.Error!kz.Ref {
     const INDENT = 2;
     const head_sty = kz.Style{};
@@ -64,14 +64,14 @@ pub fn render(
     for (self.exprs) |expr, i| {
         const child = try expr.render(ctx, proj);
 
-        var arm = try ctx.block(.{INDENT - 1, 1}, arm_sty, ' ');
+        var arm = try ctx.block(.{ INDENT - 1, 1 }, arm_sty, ' ');
 
-        const star = try ctx.block(.{1, 1}, arm_sty, '-');
+        const star = try ctx.block(.{ 1, 1 }, arm_sty, '-');
         arm = try ctx.slap(arm, star, .left, .{});
 
         if (i < self.exprs.len - 1) {
             const height = ctx.getSize(child)[1];
-            const bar = try ctx.block(.{1, height - 1}, arm_sty, '|');
+            const bar = try ctx.block(.{ 1, height - 1 }, arm_sty, '|');
             arm = try ctx.slap(bar, arm, .top, .{});
         }
 

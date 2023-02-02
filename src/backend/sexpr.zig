@@ -26,8 +26,11 @@ pub const Data = union(enum) {
     pub fn clone(data: Data, ally: Allocator) Allocator.Error!Data {
         return switch (data) {
             .number => data,
-            inline .string, .symbol => |sym, tag|
-                @unionInit(Data, @tagName(tag), try sym.clone(ally)),
+            inline .string, .symbol => |sym, tag| @unionInit(
+                Data,
+                @tagName(tag),
+                try sym.clone(ally),
+            ),
             inline .call, .array => |exprs, tag| many: {
                 const cloned = try ally.alloc(Self, exprs.len);
                 for (exprs) |expr, i| cloned[i] = try expr.clone(ally);
@@ -55,7 +58,7 @@ pub fn deinit(self: Self, ally: Allocator) void {
             ally.free(children);
         },
         .string, .symbol => |sym| ally.free(sym.str),
-        else => {}
+        else => {},
     }
 }
 
@@ -100,7 +103,7 @@ pub fn render(
     const INDENT = 2;
 
     const magenta = kz.Style{ .fg = .magenta };
-    const green =   kz.Style{ .fg = .green };
+    const green = kz.Style{ .fg = .green };
 
     return switch (self.data) {
         .number => |num| try ctx.print(magenta, "{}", .{num}),
@@ -113,12 +116,12 @@ pub fn render(
             }
 
             const indented =
-                env.indented and exprs.len > 1
-                and for (exprs) |child| {
-                    if (child.data == .call) {
-                        break true;
-                    }
-                } else false;
+                env.indented and exprs.len > 1 and for (exprs) |child|
+            {
+                if (child.data == .call) {
+                    break true;
+                }
+            } else false;
 
             // render children
             var ref = try exprs[0].render(ctx, RenderOptions{
@@ -131,7 +134,7 @@ pub fn render(
                     const height = @intCast(isize, ctx.getSize(ref)[1]);
                     const child_ref = try child.render(ctx, env);
 
-                    ref = try ctx.unify(ref, child_ref, .{INDENT, height});
+                    ref = try ctx.unify(ref, child_ref, .{ INDENT, height });
                 }
             } else {
                 for (exprs[1..]) |child| {

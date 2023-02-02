@@ -58,15 +58,17 @@ pub const Style = struct {
     bg: Color = .default,
 
     pub fn eql(self: Self, other: Self) bool {
-        return self.special == other.special and self.fg == other.fg
-           and self.bg == other.bg;
+        // zig fmt: off
+        return self.special == other.special
+           and self.fg == other.fg and self.bg == other.bg;
+        // zig fmt: on
     }
 
     pub fn format(
         self: Self,
         comptime fmt: []const u8,
         options: std.fmt.FormatOptions,
-        writer: anytype
+        writer: anytype,
     ) @TypeOf(writer).Error!void {
         _ = fmt;
         _ = options;

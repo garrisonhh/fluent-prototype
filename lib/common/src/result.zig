@@ -34,17 +34,17 @@ pub fn Result(comptime T: type, comptime E: type) type {
             return Result(T, Ep).ok(self.ok);
         }
 
-        pub fn map(self: Self, f: fn(T) T) Self {
+        pub fn map(self: Self, f: fn (T) T) Self {
             return switch (self) {
                 .ok => |val| Self.ok(f(val)),
-                .err => self
+                .err => self,
             };
         }
 
-        pub fn bind(self: Self, f: fn(T) Self) Self {
+        pub fn bind(self: Self, f: fn (T) Self) Self {
             return switch (self) {
                 .ok => |val| f(val),
-                .err => self
+                .err => self,
             };
         }
     };

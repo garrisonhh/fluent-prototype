@@ -51,7 +51,7 @@ pub const Loc = struct {
     pub fn render(
         self: Self,
         ctx: *kz.Context,
-        proj: Project
+        proj: Project,
     ) Allocator.Error!kz.Ref {
         const file = proj.get(self.file);
         const name = file.name;
@@ -92,15 +92,15 @@ pub const Loc = struct {
         var header = try ctx.print(
             faint,
             "{s}:{}:{}",
-            .{name, line_start, self.start - blk_start}
+            .{ name, line_start, self.start - blk_start },
         );
 
         if (self.stop != self.start) {
             const ext =
                 if (line_start != line_stop)
-                    try ctx.print(faint, "-{}:{}", .{line_stop, char_stop})
-                else
-                    try ctx.print(faint, "-{}", .{char_stop});
+                try ctx.print(faint, "-{}:{}", .{ line_stop, char_stop })
+            else
+                try ctx.print(faint, "-{}", .{char_stop});
 
             header = try ctx.slap(header, ext, .right, .{});
         }
@@ -114,7 +114,7 @@ pub const Loc = struct {
         source = try ctx.unify(
             source,
             down_arrow,
-            .{@intCast(isize, char_start), -1}
+            .{ @intCast(isize, char_start), -1 },
         );
 
         if (self.stop != self.start) {
@@ -125,8 +125,8 @@ pub const Loc = struct {
                 up_arrow,
                 .{
                     @intCast(isize, char_stop_display),
-                    @intCast(isize, ctx.getSize(source)[1])
-                }
+                    @intCast(isize, ctx.getSize(source)[1]),
+                },
             );
         }
 
@@ -191,7 +191,7 @@ pub const Project = struct {
         self: *Self,
         ally: Allocator,
         name: []const u8,
-        text: []const u8
+        text: []const u8,
     ) Allocator.Error!FileRef {
         const ref = FileRef.of(self.files.items.len);
         try self.files.append(ally, File{
@@ -202,17 +202,19 @@ pub const Project = struct {
         return ref;
     }
 
+    // zig fmt: off
     pub const LoadError =
         Allocator.Error
      || fs.File.OpenError
      || std.os.ReadError
      || std.os.GetCwdError;
+    // zig fmt: on
 
     /// load file from disk
     pub fn load(
         self: *Self,
         ally: Allocator,
-        path: []const u8
+        path: []const u8,
     ) LoadError!FileRef {
         // load file text
         const file = try self.cwd.openFile(path, .{ .mode = .read_only });
@@ -250,15 +252,11 @@ pub const Message = struct {
                 .internal => .{ .fg = .green },
             };
 
-            return try ctx.stack(
-                &.{
-                    try ctx.print(.{}, "[", .{}),
-                    try ctx.print(sty, "{s}", .{@tagName(tag)}),
-                    try ctx.print(.{}, "]", .{}),
-                },
-                .right,
-                .{}
-            );
+            return try ctx.stack(&.{
+                try ctx.print(.{}, "[", .{}),
+                try ctx.print(sty, "{s}", .{@tagName(tag)}),
+                try ctx.print(.{}, "]", .{}),
+            }, .right, .{});
         }
     };
 
@@ -271,7 +269,7 @@ pub const Message = struct {
         tag: Tag,
         loc: ?Loc,
         comptime fmt: []const u8,
-        args: anytype
+        args: anytype,
     ) Allocator.Error!Self {
         return Self{
             .tag = tag,
@@ -286,7 +284,7 @@ pub const Message = struct {
         comptime T: type,
         loc: ?Loc,
         comptime fmt: []const u8,
-        args: anytype
+        args: anytype,
     ) Allocator.Error!Message.Result(T) {
         const msg = try print(ally, .@"error", loc, fmt, args);
         return Message.Result(T).err(msg);
@@ -305,7 +303,7 @@ pub const Message = struct {
             try self.tag.render(ctx),
             try ctx.print(.{}, "{s}", .{self.text}),
             .right,
-            .{ .space = 1 }
+            .{ .space = 1 },
         );
 
         if (self.loc) |loc| {

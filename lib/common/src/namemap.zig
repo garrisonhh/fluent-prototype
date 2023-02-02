@@ -6,8 +6,7 @@ const builtin = @import("builtin");
 const Symbol = @import("symbol.zig");
 
 pub const NameError =
-    Allocator.Error
- || error { NameTooLong, NameRedef, NameNoRedef };
+    Allocator.Error || error{ NameTooLong, NameRedef, NameNoRedef };
 
 /// names represent keys into a namemap. operations with names are generally
 /// done through their namemap.
@@ -65,7 +64,8 @@ pub const Name = struct {
     /// returns the parent of this name
     pub fn drop(ns: Name) ?Name {
         if (ns.syms.len > 0) {
-            return Self.initBuf(ns.syms[0..ns.syms.len - 1]) catch unreachable;
+            const dropped = ns.syms[0 .. ns.syms.len - 1];
+            return Self.initBuf(dropped) catch unreachable;
         }
 
         return null;
@@ -97,7 +97,7 @@ pub const Name = struct {
         self: Self,
         comptime _: []const u8,
         _: std.fmt.FormatOptions,
-        writer: anytype
+        writer: anytype,
     ) @TypeOf(writer).Error!void {
         for (self.syms) |sym, i| {
             if (i > 0) try writer.writeAll("::");
@@ -117,7 +117,7 @@ pub const Name = struct {
             switch (std.ascii.orderIgnoreCase(sa, sb)) {
                 .lt => return true,
                 .gt => return false,
-                .eq => {}
+                .eq => {},
             }
         }
 
@@ -137,7 +137,7 @@ pub const Name = struct {
     const max_load = std.hash_map.default_max_load_percentage;
 
     // fn HashMap(comptime V: type) type {
-        // return std.HashMap(Self, V, HashMapContext, max_load);
+    // return std.HashMap(Self, V, HashMapContext, max_load);
     // }
 
     fn HashMapUnmanaged(comptime V: type) type {
@@ -182,7 +182,7 @@ pub fn NameMap(comptime V: type) type {
         fn acquireSym(
             self: *Self,
             ally: Allocator,
-            sym: Symbol
+            sym: Symbol,
         ) Allocator.Error!Symbol {
             const res = try self.syms.getOrPut(ally, sym);
             if (!res.found_existing) {
@@ -194,7 +194,7 @@ pub fn NameMap(comptime V: type) type {
         fn acquireName(
             self: *Self,
             ally: Allocator,
-            name: Name
+            name: Name,
         ) Allocator.Error!Name {
             const res = try self.names.getOrPut(ally, name);
             if (!res.found_existing) {
@@ -213,7 +213,7 @@ pub fn NameMap(comptime V: type) type {
             ally: Allocator,
             ns: Name,
             sym: Symbol,
-            value: V
+            value: V,
         ) NameError!Name {
             // get name, check if it exists already
             const owned = try self.acquireSym(ally, sym);
@@ -222,7 +222,7 @@ pub fn NameMap(comptime V: type) type {
             std.mem.copy(Symbol, &buf, ns.syms);
             buf[ns.syms.len] = owned;
 
-            const buf_name = try Name.initBuf(buf[0..ns.syms.len + 1]);
+            const buf_name = try Name.initBuf(buf[0 .. ns.syms.len + 1]);
 
             if (self.map.contains(buf_name)) {
                 return error.NameRedef;
@@ -242,7 +242,7 @@ pub fn NameMap(comptime V: type) type {
             self: *Self,
             ally: Allocator,
             name: Name,
-            value: V
+            value: V,
         ) NameError!V {
             const res = try self.map.getOrPut(ally, name);
             if (!res.found_existing) {
@@ -336,7 +336,7 @@ pub fn NameMap(comptime V: type) type {
         /// useful for displaying stuff
         pub fn getSortedEntries(
             self: *Self,
-            ally: Allocator
+            ally: Allocator,
         ) Allocator.Error![]Entry {
             // get entries
             var entries = std.ArrayList(Entry).init(ally);

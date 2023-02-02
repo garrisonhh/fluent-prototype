@@ -5,8 +5,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 pub const ParseNumberError =
-    Allocator.Error
- || error {
+    Allocator.Error || error{
     BadNumber,
     WrongLayout,
     TooManyBits,
@@ -40,9 +39,11 @@ pub const Number = struct {
                 }
 
                 if (self.layout) |layout| {
+                    // zig fmt: off
                     const wrong_layout =
                         layout == .int and int.signedness != .signed
-                        or layout == .uint and int.signedness != .unsigned;
+                     or layout == .uint and int.signedness != .unsigned;
+                    // zig fmt: on
 
                     if (wrong_layout) return error.WrongLayout;
                 }
@@ -81,7 +82,7 @@ pub const Number = struct {
                 const max_pow = @intToFloat(T, self.pre.len);
                 var place = std.math.pow(T, t_radix, max_pow - 1);
                 var num: T = 0;
-                for (&[_][]const u8{self.pre, self.post}) |digits| {
+                for (&[_][]const u8{ self.pre, self.post }) |digits| {
                     for (digits) |digit| {
                         num += place * @intToFloat(T, digit);
                         place /= t_radix;
@@ -92,7 +93,7 @@ pub const Number = struct {
 
                 return num;
             },
-            else => return error.BadCastType
+            else => return error.BadCastType,
         }
     }
 
@@ -104,7 +105,7 @@ pub const Number = struct {
         self: Self,
         comptime fmt: []const u8,
         options: std.fmt.FormatOptions,
-        writer: anytype
+        writer: anytype,
     ) @TypeOf(writer).Error!void {
         _ = fmt;
         _ = options;
@@ -164,7 +165,7 @@ const Slicerator = struct {
 fn eatDigits(
     ally: Allocator,
     sl: *Slicerator,
-    radix: u8
+    radix: u8,
 ) ParseNumberError![]u8 {
     var buf = std.ArrayList(u8).init(ally);
     while (sl.peek()) |ch| {
@@ -177,7 +178,7 @@ fn eatDigits(
                 sl.eat(1);
                 continue;
             },
-            else => break
+            else => break,
         };
 
         if (digit > radix) break;
@@ -208,7 +209,7 @@ pub fn parseNumber(ally: Allocator, str: []const u8) ParseNumberError!Number {
                 'b' => 2,
                 'o' => 8,
                 'x' => 16,
-                else => null
+                else => null,
             };
 
             if (found) |r| {
@@ -235,7 +236,7 @@ pub fn parseNumber(ally: Allocator, str: []const u8) ParseNumberError!Number {
             'i' => .int,
             'u' => .uint,
             'f' => .float,
-            else => break :layout
+            else => break :layout,
         };
         sl.eat(1);
     }

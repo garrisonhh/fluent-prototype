@@ -13,13 +13,15 @@ const Builtin = @import("../canon.zig").Builtin;
 
 fn filterDefError(e: Env.DefError, comptime str: []const u8) Allocator.Error {
     return switch (e) {
-        error.NameRedef, error.NameNoRedef, error.RenamedType, error.NameTooLong
-            => {
-            const fmt = "uh oh, got {} in prelude definition while trying "
-                     ++ "to define {s}.";
-            std.debug.panic(fmt, .{e, str});
+        error.NameRedef,
+        error.NameNoRedef,
+        error.RenamedType,
+        error.NameTooLong,
+        => {
+            const fmt = "uh oh, got {} in prelude while trying to define {s}.";
+            std.debug.panic(fmt, .{ e, str });
         },
-        error.OutOfMemory => return @errSetCast(Allocator.Error, e)
+        error.OutOfMemory => return @errSetCast(Allocator.Error, e),
     };
 }
 
@@ -37,7 +39,7 @@ fn def(
 fn defType(
     env: *Env,
     comptime str: []const u8,
-    ty: Type
+    ty: Type,
 ) Allocator.Error!TypeId {
     const id = try env.identify(ty);
     _ = env.defType(Env.ROOT, comptime Symbol.init(str), id) catch |e| {
@@ -51,10 +53,10 @@ fn defNumeric(
     env: *Env,
     comptime str: []const u8,
     layout: com.Number.Layout,
-    bits: ?u8
+    bits: ?u8,
 ) Allocator.Error!TypeId {
     return try defType(env, str, Type{
-        .number = .{ .layout = layout, .bits = bits }
+        .number = .{ .layout = layout, .bits = bits },
     });
 }
 
@@ -62,7 +64,7 @@ fn defBuiltin(
     env: *Env,
     comptime str: []const u8,
     ty: TypeId,
-    b: Builtin
+    b: Builtin,
 ) Allocator.Error!void {
     try def(env, str, TExpr.initBuiltin(null, ty, b));
 }
@@ -70,7 +72,7 @@ fn defBuiltin(
 fn fnType(
     env: *Env,
     takes: []const TypeId,
-    returns: TypeId
+    returns: TypeId,
 ) Allocator.Error!TypeId {
     var buf: [256]TypeId = undefined;
     std.mem.copy(TypeId, &buf, takes);
@@ -78,8 +80,8 @@ fn fnType(
     return try env.identify(Type{
         .func = Type.Func{
             .takes = buf[0..takes.len],
-            .returns = returns
-        }
+            .returns = returns,
+        },
     });
 }
 
@@ -117,9 +119,9 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     const @"f32" = try defNumeric(&env, "f32", .float, 32);
     const @"f64" = try defNumeric(&env, "f64", .float, 64);
 
-    const int_ids = &[_]TypeId{@"i8", @"i16", @"i32", @"i64", compiler_int};
-    const uint_ids = &[_]TypeId{@"u8", @"u16", @"u32", @"u64"};
-    const float_ids = &[_]TypeId{@"f32", @"f64", compiler_float};
+    const int_ids = &[_]TypeId{ @"i8", @"i16", @"i32", @"i64", compiler_int };
+    const uint_ids = &[_]TypeId{ @"u8", @"u16", @"u32", @"u64" };
+    const float_ids = &[_]TypeId{ @"f32", @"f64", compiler_float };
     const int_ty = try Type.initSet(tmp, int_ids);
     const uint_ty = try Type.initSet(tmp, uint_ids);
     const float_ty = try Type.initSet(tmp, float_ids);
@@ -129,7 +131,7 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     const float = try defType(&env, "Float", float_ty);
 
     var number_ids = std.ArrayList(TypeId).init(tmp);
-    for ([_][]TypeId{int_ids, uint_ids, float_ids}) |id_list| {
+    for ([_][]TypeId{ int_ids, uint_ids, float_ids }) |id_list| {
         try number_ids.appendSlice(id_list);
     }
 
@@ -148,24 +150,24 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     try def(&env, "false", false_expr);
 
     // define builtins
-    const bin_cond = try fnType(&env, &.{@"bool", @"bool"}, @"bool");
+    const bin_cond = try fnType(&env, &.{ @"bool", @"bool" }, @"bool");
     const un_cond = try fnType(&env, &.{@"bool"}, @"bool");
-    const bin_i64 = try fnType(&env, &.{@"i64", @"i64"}, @"i64");
+    const bin_i64 = try fnType(&env, &.{ @"i64", @"i64" }, @"i64");
     const un_ty = try fnType(&env, &.{@"type"}, @"type");
-    const bin_i64_cond = try fnType(&env, &.{@"i64", @"i64"}, @"bool");
+    const bin_i64_cond = try fnType(&env, &.{ @"i64", @"i64" }, @"bool");
 
     const type_slice_ty = try env.identify(Type.initPtr(.slice, @"type"));
-    const fn_ty = try fnType(&env, &.{type_slice_ty, @"type"}, @"type");
+    const fn_ty = try fnType(&env, &.{ type_slice_ty, @"type" }, @"type");
 
-    try defBuiltin(&env, "ns",     flbuiltin, .ns);
-    try defBuiltin(&env, "def",    flbuiltin, .def);
-    try defBuiltin(&env, "as",     flbuiltin, .cast);
-    try defBuiltin(&env, "&",      flbuiltin, .addr_of);
-    try defBuiltin(&env, ".",      flbuiltin, .access);
-    try defBuiltin(&env, "array",  flbuiltin, .array);
+    try defBuiltin(&env, "ns", flbuiltin, .ns);
+    try defBuiltin(&env, "def", flbuiltin, .def);
+    try defBuiltin(&env, "as", flbuiltin, .cast);
+    try defBuiltin(&env, "&", flbuiltin, .addr_of);
+    try defBuiltin(&env, ".", flbuiltin, .access);
+    try defBuiltin(&env, "array", flbuiltin, .array);
     try defBuiltin(&env, "lambda", flbuiltin, .lambda);
-    try defBuiltin(&env, "recur",  flbuiltin, .recur);
-    try defBuiltin(&env, "if",     flbuiltin, .@"if");
+    try defBuiltin(&env, "recur", flbuiltin, .recur);
+    try defBuiltin(&env, "if", flbuiltin, .@"if");
 
     try defBuiltin(&env, "=", bin_i64_cond, .eq);
     try defBuiltin(&env, "+", bin_i64, .add);

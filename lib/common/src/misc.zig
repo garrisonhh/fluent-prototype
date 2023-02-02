@@ -10,7 +10,7 @@ pub fn now() f64 {
 /// takes a value and shallow copies it onto an allocator
 pub fn placeOn(
     ally: Allocator,
-    value: anytype
+    value: anytype,
 ) Allocator.Error!*@TypeOf(value) {
     const ptr = try ally.create(@TypeOf(value));
     ptr.* = value;

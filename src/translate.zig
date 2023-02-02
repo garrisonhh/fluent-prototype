@@ -24,7 +24,7 @@ fn translateNumber(
 ) Allocator.Error!Result {
     const num = com.parseNumber(ally, slice) catch |e| switch (e) {
         Allocator.Error.OutOfMemory => return Allocator.Error.OutOfMemory,
-        else => return try numberError(ally, loc)
+        else => return try numberError(ally, loc),
     };
     defer num.deinit(ally);
 
@@ -32,7 +32,7 @@ fn translateNumber(
     if (num.bits) |bits| {
         const integral = num.layout.? != .float;
         const valid_bits: []const u8 =
-            if (integral) &[_]u8{8, 16, 32, 64} else &[_]u8{32, 64};
+            if (integral) &[_]u8{ 8, 16, 32, 64 } else &[_]u8{ 32, 64 };
 
         for (valid_bits) |valid| {
             if (bits == valid) break;
@@ -80,7 +80,7 @@ fn translateCall(
                 sexprs.deinit();
 
                 return Result.err(msg);
-            }
+            },
         }
     }
 
@@ -123,11 +123,11 @@ pub fn translate(
                     .internal,
                     loc,
                     "attempted to get builtin for form `{s}`, but failed",
-                    .{@tagName(tag)}
+                    .{@tagName(tag)},
                 ));
             };
             const head = SExpr.init(loc, .{
-                .symbol = try head_sym.clone(ally)
+                .symbol = try head_sym.clone(ally),
             });
 
             break :tagged try translateCall(ally, proj, loc, head, exprs);

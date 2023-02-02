@@ -41,7 +41,7 @@ const CharClass = enum {
 
 const Lexer = Stream(u8);
 
-const Error = Allocator.Error || error { InvalidCharacter };
+const Error = Allocator.Error || error{InvalidCharacter};
 
 fn classify(ch: u8) Error!CharClass {
     return switch (ch) {
@@ -50,7 +50,7 @@ fn classify(ch: u8) Error!CharClass {
         '\n' => .newline,
         '#' => .comment,
         '\t', '\r' => Error.InvalidCharacter,
-        else => if (std.ascii.isPrint(ch)) .lexical else Error.InvalidCharacter
+        else => if (std.ascii.isPrint(ch)) .lexical else Error.InvalidCharacter,
     };
 }
 
@@ -96,8 +96,7 @@ fn lexNumber(lexer: *Lexer, loc: Loc) Token {
 fn tokenOfLexical(lexer: *const Lexer, loc: Loc) Token {
     const str = lexer.tokens[loc.start..loc.stop];
     const tag: Token.Tag =
-        if (auto.SYMBOLS.has(str) or auto.KEYWORDS.has(str)) .word
-        else .ident;
+        if (auto.SYMBOLS.has(str) or auto.KEYWORDS.has(str)) .word else .ident;
 
     return Token.of(tag, loc);
 }
@@ -105,7 +104,7 @@ fn tokenOfLexical(lexer: *const Lexer, loc: Loc) Token {
 fn lexLexical(
     lexer: *Lexer,
     tokens: *std.ArrayList(Token),
-    loc: Loc
+    loc: Loc,
 ) Error!void {
     const start = lexer.index;
 
@@ -126,7 +125,7 @@ fn lexLexical(
         const found: ?usize = sym: {
             var j: usize = @min(auto.MAX_SYMBOL_LEN, slice.len - i);
             while (j > 0) : (j -= 1) {
-                if (auto.SYMBOLS.has(slice[i..i + j])) {
+                if (auto.SYMBOLS.has(slice[i .. i + j])) {
                     break :sym j;
                 }
             }
@@ -221,7 +220,7 @@ pub fn tokenize(
             const loc = here(lexer, file, 0);
             const fmt = "invalid character";
             return try Message.err(ally, []Token, loc, fmt, .{});
-        }
+        },
     };
 
     return Result.ok(tokens.toOwnedSlice());

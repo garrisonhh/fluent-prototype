@@ -71,7 +71,7 @@ fn mov_imm(self: *Self, src: []const u8, dst: Register) void {
 
 fn push(self: *Self, nbytes: usize, src: Register) void {
     const addr = self.get(SP);
-    const dst = self.stack[addr..addr + nbytes];
+    const dst = self.stack[addr .. addr + nbytes];
     const from = @ptrCast(*const [8]u8, &self.get(src));
     std.mem.copy(u8, dst, from);
     self.scratch[SP.n] += nbytes;
@@ -80,7 +80,7 @@ fn push(self: *Self, nbytes: usize, src: Register) void {
 fn pop(self: *Self, nbytes: usize, dst: Register) void {
     self.scratch[SP.n] -= nbytes;
     const addr = self.get(SP);
-    const data = self.stack[addr..addr + nbytes];
+    const data = self.stack[addr .. addr + nbytes];
     self.set(dst, canon.to(data));
 }
 
@@ -88,7 +88,7 @@ fn makeFnType(
     self: *Self,
     env: *Env,
     param_slice: u64,
-    return_id: u64
+    return_id: u64,
 ) RuntimeError!TypeId {
     // resurrect parameters (*[2]TypeId)
     var slice_ptr = param_slice;
@@ -96,14 +96,14 @@ fn makeFnType(
 
     const tyty = try env.identify(Type{ .ty = {} });
     const ty_slice_ty = try env.identify(Type{
-        .ptr = .{ .kind = .slice, .to = tyty }
+        .ptr = .{ .kind = .slice, .to = tyty },
     });
     const expr = try canon.resurrect(
         env.*,
         params_val,
         self.stack,
         null,
-        ty_slice_ty
+        ty_slice_ty,
     );
     defer expr.deinit(env.ally);
 
@@ -118,12 +118,10 @@ fn makeFnType(
     }
 
     // id type
-    return try env.identify(Type{
-        .func = Type.Func{
-            .takes = params,
-            .returns = TypeId{ .index = return_id },
-        }
-    });
+    return try env.identify(Type{ .func = Type.Func{
+        .takes = params,
+        .returns = TypeId{ .index = return_id },
+    } });
 }
 
 /// debug prints state of vm
@@ -135,17 +133,17 @@ fn debug(self: Self, program: Program) void {
 
     std.debug.print(
         "[sp: {} fp: {} ip: {}]\n",
-        .{self.get(SP), self.get(FP), ip}
+        .{ self.get(SP), self.get(FP), ip },
     );
 
-    const sl = @ptrCast([*]const u64, self.stack.ptr)[0..self.get(SP) / 8];
+    const sl = @ptrCast([*]const u64, self.stack.ptr)[0 .. self.get(SP) / 8];
     std.debug.print("stack: {d}\n", .{sl});
 
     std.debug.print("[", .{});
-    for (self.scratch[RESERVED..RESERVED + 10]) |n, i| {
+    for (self.scratch[RESERVED .. RESERVED + 10]) |n, i| {
         if (i > 0) std.debug.print(" ", .{});
         const index = i + RESERVED;
-        std.debug.print("%{}={}", .{index, n});
+        std.debug.print("%{}={}", .{ index, n });
     }
     std.debug.print("]\n", .{});
 
@@ -157,16 +155,9 @@ fn debug(self: Self, program: Program) void {
         inst.b,
         inst.c,
     });
-
-    // const stdin = std.io.getStdIn().reader();
-    // _ = stdin.readByte() catch {};
 }
 
-pub fn execute(
-    self: *Self,
-    env: *Env,
-    program: Program
-) RuntimeError!void {
+pub fn execute(self: *Self, env: *Env, program: Program) RuntimeError!void {
     const start = now();
 
     const insts = program.program;
@@ -200,7 +191,7 @@ pub fn execute(
             },
             .imm8 => {
                 const dst = Register.of(args[0]);
-                const slice = insts[ip.*..ip.* + 2];
+                const slice = insts[ip.* .. ip.* + 2];
                 ip.* += 2;
                 self.mov_imm(@ptrCast(*const [8]u8, slice), dst);
             },
@@ -256,7 +247,7 @@ pub fn execute(
 
                 // read canonical data
                 const addr = self.get(src);
-                const data = self.stack[addr..addr + nbytes];
+                const data = self.stack[addr .. addr + nbytes];
                 self.set(dst, canon.to(data));
             },
             .store => {
@@ -269,7 +260,7 @@ pub fn execute(
                 const data = canon.from(&value);
                 // write
                 const addr = self.get(dst);
-                const slice = self.stack[addr..addr + nbytes];
+                const slice = self.stack[addr .. addr + nbytes];
                 std.mem.set(u8, slice, 0);
                 std.mem.copy(u8, slice, data);
             },
@@ -287,13 +278,16 @@ pub fn execute(
 
                         break :slice tid.index;
                     },
-                    else => unreachable
+                    else => unreachable,
                 };
 
                 self.set(to, value);
             },
-            inline .iadd, .isub, .imul, .idiv, .imod, .lor, .land, .bor,
-            .band, .xor, .shl, .shr, .fn_ty => |v| {
+            // zig fmt: off
+            inline .iadd, .isub, .imul, .idiv, .imod, .lor, .land, .bor, .band,
+            .xor, .shl, .shr, .fn_ty,
+            // zig fmt : on
+            => |v| {
                 const lhs = self.get(Register.of(args[0]));
                 const rhs = self.get(Register.of(args[1]));
                 const to = Register.of(args[2]);
@@ -312,7 +306,7 @@ pub fn execute(
                     .shl => lhs << @intCast(u6, rhs),
                     .shr => lhs >> @intCast(u6, rhs),
                     .fn_ty => (try self.makeFnType(env, lhs, rhs)).index,
-                    else => unreachable
+                    else => unreachable,
                 };
 
                 self.set(to, value);

@@ -103,7 +103,7 @@ pub const Program = struct {
     const Self = @This();
 
     entry: u64,
-    program: []const align(16) Inst,
+    program: []align(16) const Inst,
 
     fn renderOpcode(ctx: *kz.Context, opcode: Opcode) !kz.Ref {
         // for adding buffered spaces
@@ -152,7 +152,7 @@ pub const Program = struct {
     pub fn render(
         self: Self,
         ctx: *kz.Context,
-        comments: Builder.Comments
+        comments: Builder.Comments,
     ) !kz.Ref {
         var lines = std.ArrayList(kz.Ref).init(ctx.ally);
         defer lines.deinit();
@@ -201,7 +201,7 @@ pub const Program = struct {
                     try line.append(try renderImm(ctx, n));
                 },
                 .imm8 => {
-                    const bytes = @ptrCast(*const [8]u8, insts[i + 1..i + 3]);
+                    const bytes = @ptrCast(*const [8]u8, insts[i + 1 .. i + 3]);
                     const n = canon.to(bytes);
                     i += 2;
 
@@ -230,8 +230,11 @@ pub const Program = struct {
                     try line.append(try renderReg(ctx, args[1]));
                     try line.append(try renderReg(ctx, args[2]));
                 },
+                // zig fmt: off
                 .iadd, .isub, .imul, .idiv, .imod, .lor, .land, .bor, .band,
-                .xor, .fn_ty => {
+                .xor, .fn_ty,
+                // zig fmt: on
+                => {
                     for (args) |arg| {
                         try line.append(try renderReg(ctx, arg));
                     }
@@ -244,8 +247,8 @@ pub const Program = struct {
                 .call => try line.append(try renderReg(ctx, args[0])),
                 else => std.debug.panic(
                     "cannot render op `{s}` yet\n",
-                    .{@tagName(inst.op)}
-                )
+                    .{@tagName(inst.op)},
+                ),
             }
 
             // stack the line
@@ -271,7 +274,7 @@ pub const Construct = struct {
         };
     }
 
-    fn conR(comptime op: Opcode) fn(Reg) Inst {
+    fn conR(comptime op: Opcode) fn (Reg) Inst {
         return struct {
             fn f(a: Reg) Inst {
                 return make(op, a.n, 0, 0);
@@ -279,7 +282,7 @@ pub const Construct = struct {
         }.f;
     }
 
-    fn conRR(comptime op: Opcode) fn(Reg, Reg) Inst {
+    fn conRR(comptime op: Opcode) fn (Reg, Reg) Inst {
         return struct {
             fn f(a: Reg, b: Reg) Inst {
                 return make(op, a.n, b.n, 0);
@@ -287,7 +290,7 @@ pub const Construct = struct {
         }.f;
     }
 
-    fn conBR(comptime op: Opcode) fn(u8, Reg) Inst {
+    fn conBR(comptime op: Opcode) fn (u8, Reg) Inst {
         return struct {
             fn f(a: u8, b: Reg) Inst {
                 return make(op, a, b.n, 0);
@@ -295,7 +298,7 @@ pub const Construct = struct {
         }.f;
     }
 
-    fn conRRR(comptime op: Opcode) fn(Reg, Reg, Reg) Inst {
+    fn conRRR(comptime op: Opcode) fn (Reg, Reg, Reg) Inst {
         return struct {
             fn f(a: Reg, b: Reg, c: Reg) Inst {
                 return make(op, a.n, b.n, c.n);
@@ -303,7 +306,7 @@ pub const Construct = struct {
         }.f;
     }
 
-    fn conBRR(comptime op: Opcode) fn(u8, Reg, Reg) Inst {
+    fn conBRR(comptime op: Opcode) fn (u8, Reg, Reg) Inst {
         return struct {
             fn f(a: u8, b: Reg, c: Reg) Inst {
                 return make(op, a, b.n, c.n);
@@ -316,7 +319,7 @@ pub const Construct = struct {
         b: *Builder,
         ally: Allocator,
         dst: Reg,
-        bytes: []const u8
+        bytes: []const u8,
     ) Allocator.Error!void {
         std.debug.assert(bytes.len <= 8);
 
@@ -349,7 +352,7 @@ pub const Construct = struct {
         b: *Builder,
         ally: Allocator,
         dst: Reg,
-        pos: Pos
+        pos: Pos,
     ) Allocator.Error!void {
         try b.addInst(ally, make(.imm4, dst.n, 0, 0));
         try b.addBranch(ally, pos);
@@ -364,7 +367,7 @@ pub const Construct = struct {
         b: *Builder,
         ally: Allocator,
         cond: Reg,
-        dst: Pos
+        dst: Pos,
     ) Allocator.Error!void {
         try b.addInst(ally, make(.jump_if, cond.n, 0, 0));
         try b.addBranch(ally, dst);
