@@ -12,7 +12,7 @@ think of operators `<lhs> op <rhs>` as sugar for `(op <lhs> <rhs>)`. since
 fluent's syntax is almost exclusively expression-based, you can think of every
 piece of syntax as being rewritten in this way.
 
-```fluent
+```
 # fluent files are a series of declarations
 name :: 0
 

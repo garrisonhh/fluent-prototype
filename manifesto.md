@@ -1,4 +1,4 @@
-# $\color{almond}\textit{fluent}\color{white}\textup{lang}$
+# $\color{almond}\textit{fluent}$
 
 ## compilation steps
 
