@@ -7,9 +7,14 @@ a language that is:
 
 ## installation
 
-just clone this repo and `zig build`*.
+fluent is built with latest stable release of zig. once you have zig installed,
+just clone this repo and `zig build`.
 
-*_fluent uses the latest stable release of zig._
+## get started
+
+- the [working spec](spec.md) and [examples](examples/) are helpful for getting
+  a rough idea of what fluent looks and feels like.
+- try out `fluent repl`.
 
 ## what makes fluent unique?
 
@@ -29,7 +34,8 @@ architecture. instead of a linear compilation model, fluent code is lazily
 executed as needed to semantically analyze source code.
 
 this means that no expression in fluent is special. every piece of code
-(including types) is available to be evaluated in the same language as the statically compiled runtime.
+(including types) is available to be evaluated in the same language as the
+statically compiled runtime.
 
 this is what fluent's compiler looks like:
 
