@@ -4,6 +4,7 @@ const std = @import("std");
 const stdout = std.io.getStdOut().writer();
 const kz = @import("kritzler");
 const com = @import("common");
+const now = com.now;
 const Name = com.Name;
 const Message = com.Message;
 const TExpr = @import("texpr.zig");
@@ -26,7 +27,7 @@ pub const Result = Message.Result(TExpr);
 
 /// evaluate any dynamic value in the provided scope
 pub fn eval(env: *Env, scope: Name, sexpr: SExpr) Error!Result {
-    const any = try env.identify(Type{ .any = {} });
+    const any = try env.identify(.any);
     return try evalTyped(env, scope, sexpr, any);
 }
 
@@ -37,9 +38,8 @@ pub fn evalTyped(
     sexpr: SExpr,
     expected: TypeId,
 ) Error!Result {
-    const now = std.time.nanoTimestamp;
     const start = now();
-    var render_time: i128 = 0;
+    var render_time: f64 = 0;
 
     // analyze
     const sema_res = try analyze(env, scope, sexpr, expected);
@@ -62,8 +62,9 @@ pub fn evalTyped(
         if (texpr.known_const) {
             if (com.options.log.sema) {
                 const msg_start = now();
+                defer render_time += now() - msg_start;
+
                 try stdout.writeAll("analyzed a constant.\n");
-                render_time += now() - msg_start;
             }
 
             break :final try texpr.clone(env.ally);
@@ -103,17 +104,17 @@ pub fn evalTyped(
 
         // when returning structured data, the vm may return a pointer to the
         // data I actually wanted
-        const derefed = if (!final.ty.eql(texpr.ty)) deref: {
+        if (!final.ty.eql(texpr.ty)) {
             const out_ty = env.tw.get(final.ty);
             std.debug.assert(out_ty.ptr.to.eql(texpr.ty));
 
             const child = final.data.ptr.*;
             env.ally.destroy(final.data.ptr);
 
-            break :deref child;
-        } else final;
+            break :final child;
+        }
 
-        return Result.ok(derefed);
+        break :final final;
     };
 
     // render final value
@@ -127,13 +128,10 @@ pub fn evalTyped(
     }
 
     // time logging
-    const stop = std.time.nanoTimestamp();
-    const seconds = @intToFloat(f64, stop - start - render_time) * 1e-9;
-
-    try stdout.print("eval finished in {d:.6}s.\n", .{seconds});
+    const duration = now() - start;
+    try stdout.print("eval finished in {d:.6}ms.\n", .{duration});
     if (render_time > 0) {
-        const render_secs = @intToFloat(f64, render_time) * 1e-9;
-        try stdout.print("render time {d:.6}s.\n", .{render_secs});
+        try stdout.print("render time {d:.6}ms.\n", .{render_time});
     }
 
     return Result.ok(final);

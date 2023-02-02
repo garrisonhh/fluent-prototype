@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const builtin = @import("builtin");
 const now = @import("common").now;
 const Program = @import("bytecode.zig").Program;
 const types = @import("../types.zig");
@@ -118,42 +119,11 @@ fn makeFnType(
     }
 
     // id type
-    return try env.identify(Type{ .func = Type.Func{
-        .takes = params,
-        .returns = TypeId{ .index = return_id },
-    } });
-}
-
-/// debug prints state of vm
-fn debug(self: Self, program: Program) void {
-    const kz = @import("kritzler");
-
-    const ip = self.get(IP);
-    const inst = program.program[ip];
-
-    std.debug.print(
-        "[sp: {} fp: {} ip: {}]\n",
-        .{ self.get(SP), self.get(FP), ip },
-    );
-
-    const sl = @ptrCast([*]const u64, self.stack.ptr)[0 .. self.get(SP) / 8];
-    std.debug.print("stack: {d}\n", .{sl});
-
-    std.debug.print("[", .{});
-    for (self.scratch[RESERVED .. RESERVED + 10]) |n, i| {
-        if (i > 0) std.debug.print(" ", .{});
-        const index = i + RESERVED;
-        std.debug.print("%{}={}", .{ index, n });
-    }
-    std.debug.print("]\n", .{});
-
-    std.debug.print("{}{s}{} {} {} {}\n\n", .{
-        kz.Style{ .fg = .red },
-        @tagName(inst.op),
-        kz.Style{},
-        inst.a,
-        inst.b,
-        inst.c,
+    return try env.identify(Type{
+        .func = Type.Func{
+            .takes = params,
+            .returns = TypeId{ .index = return_id },
+        },
     });
 }
 
@@ -320,7 +290,9 @@ pub fn execute(self: *Self, env: *Env, program: Program) RuntimeError!void {
     }
 
     // end of execution
-    const stdout = std.io.getStdOut().writer();
-    const t = now() - start;
-    stdout.print("vm.run took {d:.6}ms\n", .{t}) catch {};
+    if (builtin.mode == .Debug) {
+        const stdout = std.io.getStdOut().writer();
+        const t = now() - start;
+        stdout.print("vm.run finished in {d:.6}ms.\n", .{t}) catch {};
+    }
 }

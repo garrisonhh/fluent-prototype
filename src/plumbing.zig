@@ -41,14 +41,14 @@ pub fn exec(
         const t = now();
         defer render_time += now() - t;
 
-        try stdout.print("[Translated AST]\n", .{});
+        try stdout.writeAll("[Translated AST]\n");
         try kz.display(ally, .{ .force_parens = true }, sexpr, stdout);
+        try stdout.writeByte('\n');
     }
 
     // time logging
     const time = now() - start;
     try stdout.print("frontend finished in {d:.6}ms.\n", .{time});
-
     if (render_time > 0) {
         try stdout.print("render time {d:.6}ms.\n", .{render_time});
     }
