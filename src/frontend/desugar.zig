@@ -20,7 +20,7 @@ const CheckResult = Message.Result(void);
 /// currently I am using this for compiler debugging only
 fn verify(ally: Allocator, expr: RawExpr) Allocator.Error!CheckResult {
     switch (expr.form) {
-        .parens, .comma, .kv, .stmt => |tag| {
+        .parens, .comma, .kv, .stmt, .@"fn" => |tag| {
             return CheckResult.err(try Message.print(
                 ally,
                 .internal,
@@ -113,10 +113,6 @@ fn desugarExpr(
             });
         },
         inline .parens, .coll => |tag| {
-            stderr.writeAll("[desugaring collected]\n") catch {};
-            @import("kritzler").display(ally, proj, expr, stderr) catch {};
-            stderr.writeAll("\n") catch {};
-
             if (expr.exprs.len == 0) {
                 const empty_form = switch (tag) {
                     .parens => .unit,

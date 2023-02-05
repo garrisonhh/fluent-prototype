@@ -113,7 +113,7 @@ pub fn translate(
         .call => try translateCall(ally, proj, loc, null, exprs),
 
         // sugar should have been desugared
-        .parens, .comma, .kv, .stmt => unreachable,
+        .parens, .comma, .kv, .stmt, .@"fn" => unreachable,
 
         // translate to call with head
         else => |tag| tagged: {

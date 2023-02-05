@@ -67,71 +67,21 @@ const Option = struct {
     }
 };
 
-pub const Output = union(enum) {
+pub const Options = struct {
     const Self = @This();
 
-    pub const Options = std.StringHashMapUnmanaged(Value);
-
+    parser: *const Parser,
     /// maps option name -> value
-    options: Options,
-    path: struct {
-        subcommand: []const u8,
-        out: *Output,
-    },
+    map: std.StringHashMapUnmanaged(Value) = .{},
 
     pub fn deinit(self: *Self, ally: Allocator) void {
-        switch (self.*) {
-            .path => |path| {
-                path.out.deinit(ally);
-                ally.destroy(path.out);
-            },
-            .options => |*opts| {
-                var iter = opts.valueIterator();
-                while (iter.next()) |val| val.deinit(ally);
-                opts.deinit(ally);
-            },
-        }
+        var iter = self.map.valueIterator();
+        while (iter.next()) |val| val.deinit(ally);
+        self.map.deinit(ally);
     }
 
-    /// use to test for and access a specific path
-    pub fn match(
-        self: *const Self,
-        path: []const []const u8,
-    ) ?*const Options {
-        if (path.len == 0) {
-            return if (self.* == .options) &self.options else null;
-        } else if (self.* != .path) {
-            return null;
-        }
-
-        if (!std.mem.eql(u8, self.path.subcommand, path[0])) {
-            return null;
-        }
-
-        return self.path.out.match(path[1..]);
-    }
-
-    /// same as match but in bool form
-    pub fn matches(self: *const Self, path: []const []const u8) bool {
-        return self.match(path) != null;
-    }
-
-    /// test if your output looks like a subcommand followed by `help`. if so,
-    /// show usage and exit.
-    pub fn filterHelp(
-        self: *const Self,
-        parser: *const Parser,
-    ) Parser.ExitError!void {
-        // test if this output is help
-        var state = self;
-        var p: *const Parser = parser;
-        while (state.* == .path) : (state = state.path.out) {
-            if (std.mem.eql(u8, state.path.subcommand, "help")) {
-                try p.usageExit();
-            }
-
-            p = p.subcommands.get(state.path.subcommand).?;
-        }
+    pub fn get(self: Self, key: []const u8) ?Value {
+        return self.map.get(key);
     }
 
     pub fn render(
@@ -139,51 +89,46 @@ pub const Output = union(enum) {
         ctx: *kz.Context,
         _: void,
     ) Allocator.Error!kz.Ref {
-        return switch (self) {
-            .path => |path| path: {
-                const name = try ctx.print(.{}, "{s}", .{path.subcommand});
-                const size = kz.toOffset(ctx.getSize(name));
+        var keys = std.ArrayList(kz.Ref).init(ctx.ally);
+        var values = std.ArrayList(kz.Ref).init(ctx.ally);
+        defer keys.deinit();
+        defer values.deinit();
 
-                const data = try path.out.render(ctx, {});
-                break :path try ctx.unify(name, data, .{ INDENT, size[1] });
-            },
-            .options => |opts| opts: {
-                var keys = std.ArrayList(kz.Ref).init(ctx.ally);
-                var values = std.ArrayList(kz.Ref).init(ctx.ally);
-                defer keys.deinit();
-                defer values.deinit();
+        const cyan = kz.Style{ .fg = .cyan };
+        try keys.append(try ctx.print(cyan, "name", .{}));
+        try values.append(try ctx.print(cyan, "value", .{}));
 
-                const cyan = kz.Style{ .fg = .cyan };
-                try keys.append(try ctx.print(cyan, "name", .{}));
-                try values.append(try ctx.print(cyan, "value", .{}));
+        var entries = self.map.iterator();
+        while (entries.next()) |entry| {
+            const key = try ctx.print(.{}, "{s}", .{entry.key_ptr.*});
+            const val = try ctx.print(.{}, "{}", .{entry.value_ptr.*});
+            try keys.append(key);
+            try values.append(val);
+        }
 
-                var entries = opts.iterator();
-                while (entries.next()) |entry| {
-                    const key = try ctx.print(.{}, "{s}", .{entry.key_ptr.*});
-                    const val = try ctx.print(.{}, "{}", .{entry.value_ptr.*});
-                    try keys.append(key);
-                    try values.append(val);
-                }
-
-                break :opts try ctx.slap(
-                    try ctx.stack(keys.items, .bottom, .{}),
-                    try ctx.stack(values.items, .bottom, .{}),
-                    .right,
-                    .{ .space = 1 },
-                );
-            },
-        };
+        return try ctx.slap(
+            try ctx.stack(keys.items, .bottom, .{}),
+            try ctx.stack(values.items, .bottom, .{}),
+            .right,
+            .{ .space = 1 },
+        );
     }
 };
+
+pub const Hook = *const fn (*const Options) anyerror!void;
 
 pub const Parser = struct {
     const Self = @This();
 
     /// a handle for app options
     pub const OptionId = struct { index: usize };
+    pub const ExitBehavior = enum { exit_process, noexit };
 
     ally: Allocator,
     parent: ?*const Parser = null,
+    on_exit: ExitBehavior,
+    // sync this with Hook (zig thinks this is a dependency loop)
+    hook: ?*const fn (*const Options) anyerror!void,
     name: []u8,
     desc: []u8,
 
@@ -199,9 +144,13 @@ pub const Parser = struct {
         ally: Allocator,
         name: []const u8,
         desc: []const u8,
+        hook: ?Hook,
+        on_exit: ExitBehavior,
     ) Allocator.Error!Self {
         return Self{
             .ally = ally,
+            .hook = hook,
+            .on_exit = on_exit,
             .name = try ally.dupe(u8, name),
             .desc = try ally.dupe(u8, desc),
         };
@@ -278,22 +227,33 @@ pub const Parser = struct {
         self: *Self,
         name: []const u8,
         desc: []const u8,
+        hook: ?Hook,
     ) Allocator.Error!*Parser {
         // make parser
         const parser = try self.ally.create(Self);
-        parser.* = try Self.init(self.ally, name, desc);
+        parser.* = try Self.init(self.ally, name, desc, hook, self.on_exit);
         parser.parent = self;
 
         // store parser
         std.debug.assert(!self.subcommands.contains(name));
         try self.subcommands.putNoClobber(self.ally, parser.name, parser);
 
-        return parser;
-    }
+        // add help to subcommand
+        if (!std.mem.eql(u8, name, "help")) {
+            const helpHook = struct {
+                fn helpHook(opts: *const Options) anyerror!void {
+                    try opts.parser.parent.?.usageExit();
+                }
+            }.helpHook;
 
-    /// adds the `help` subcommand
-    pub fn addHelp(self: *Self) Allocator.Error!void {
-        _ = try self.addSubcommand("help", "show this message");
+            _ = try parser.addSubcommand(
+                "help",
+                "display this message",
+                helpHook,
+            );
+        }
+
+        return parser;
     }
 
     /// used for errors
@@ -316,11 +276,11 @@ pub const Parser = struct {
         }
     };
 
-    fn errorUnknownOpt(self: Self, ot: OptType) ExitError!noreturn {
+    fn errorUnknownOpt(self: Self, ot: OptType) ExitError!void {
         try self.errorExit("unknown opt {}", .{ot});
     }
 
-    fn errorExpectsData(self: Self, ot: OptType) ExitError!noreturn {
+    fn errorExpectsData(self: Self, ot: OptType) ExitError!void {
         try self.errorExit("{c} expects data", .{ot});
     }
 
@@ -347,37 +307,44 @@ pub const Parser = struct {
         ot: OptType,
         ty: Type,
         iter: *ParseIterator,
-    ) ExitError!Value {
+    ) ExitError!?Value {
         if (ty == .flag) {
             return Value{ .flag = {} };
         }
 
         const str = iter.next() orelse {
             try self.errorExpectsData(ot);
+            return null;
         };
 
         return switch (ty) {
             .flag => unreachable,
             .nat => Value{ .nat = std.fmt.parseInt(usize, str, 0) catch {
                 try self.errorExit("{} expected nat", .{ot});
+                return null;
             } },
             .string => Value{ .string = try self.ally.dupe(u8, str) },
         };
     }
 
-    fn parseSlice(self: *Self, args: []const []const u8) ExitError!Output {
-        // check for subcommand
-        if (args.len > 0) if (self.subcommands.get(args[0])) |sp| {
-            var subout = try self.ally.create(Output);
-            subout.* = try sp.parseSlice(args[1..]);
+    fn runSlice(self: *Self, args: []const []const u8) anyerror!void {
+        const ally = self.ally;
 
-            return Output{ .path = .{
-                .subcommand = sp.name,
-                .out = subout,
-            } };
+        // check for subcommand
+        if (args.len > 0) {
+            if (self.subcommands.get(args[0])) |sp| {
+                return sp.runSlice(args[1..]);
+            }
+        }
+
+        // grab hook, but if this parser isn't meant to be called, print usage
+        const hook = self.hook orelse {
+            try self.usageExit();
+            return;
         };
 
-        var map = Output.Options{};
+        var opts = Options{ .parser = self };
+        defer opts.deinit(ally);
 
         // non-positional options
         var iter = ParseIterator{ .slices = args };
@@ -393,12 +360,15 @@ pub const Parser = struct {
                 const long = arg[2..];
                 const id = self.long.get(long) orelse {
                     try self.errorUnknownOpt(.{ .long = long });
+                    return;
                 };
                 const opt = self.get(id);
                 const ot = OptType{ .long = long };
 
-                const val = try self.parseValue(ot, opt.ty, &iter);
-                try map.put(self.ally, opt.name, val);
+                const val = (try self.parseValue(ot, opt.ty, &iter)) orelse {
+                    return;
+                };
+                try opts.map.put(self.ally, opt.name, val);
             } else {
                 // short opt(s)
                 const short = arg[1..];
@@ -406,25 +376,30 @@ pub const Parser = struct {
                 for (short[0 .. short.len - 1]) |c| {
                     const id = self.short.get(c) orelse {
                         try self.errorUnknownOpt(.{ .short = c });
+                        return;
                     };
                     const opt = self.get(id);
 
                     if (opt.ty != .flag) {
                         try self.errorExpectsData(.{ .short = c });
+                        return;
                     }
 
-                    try map.put(self.ally, opt.name, .flag);
+                    try opts.map.put(self.ally, opt.name, .flag);
                 }
 
                 const c = short[short.len - 1];
                 const ot = OptType{ .short = c };
                 const id = self.short.get(c) orelse {
                     try self.errorUnknownOpt(ot);
+                    return;
                 };
                 const opt = self.get(id);
 
-                const val = try self.parseValue(ot, opt.ty, &iter);
-                try map.put(self.ally, opt.name, val);
+                const val = (try self.parseValue(ot, opt.ty, &iter)) orelse {
+                    return;
+                };
+                try opts.map.put(self.ally, opt.name, val);
             }
         }
 
@@ -433,8 +408,10 @@ pub const Parser = struct {
             const opt = self.get(id);
             const ot = OptType{ .positional = opt.name };
 
-            const val = try self.parseValue(ot, opt.ty, &iter);
-            try map.put(self.ally, opt.name, val);
+            const val = (try self.parseValue(ot, opt.ty, &iter)) orelse {
+                return;
+            };
+            try opts.map.put(self.ally, opt.name, val);
         }
 
         // ensure parsing is done
@@ -442,11 +419,12 @@ pub const Parser = struct {
             try self.errorExit("not sure what to do with `{s}`", .{str});
         }
 
-        return Output{ .options = map };
+        // run hook
+        try hook(&opts);
     }
 
     /// parse from the process args
-    pub fn parse(self: *Self) ExitError!Output {
+    pub fn run(self: *Self) anyerror!void {
         // collect args
         var args = std.ArrayList([]const u8).init(self.ally);
         defer args.deinit();
@@ -459,7 +437,7 @@ pub const Parser = struct {
         }
 
         // parse args, skip executable name
-        return try self.parseSlice(args.items[1..]);
+        return try self.runSlice(args.items[1..]);
     }
 
     fn renderName(
@@ -486,9 +464,7 @@ pub const Parser = struct {
     ) Allocator.Error!kz.Ref {
         const header = try ctx.stack(&.{
             try ctx.print(.{}, "[", .{}),
-            try ctx.print(.{
-                .fg = .cyan,
-            }, "{s}", .{name}),
+            try ctx.print(.{ .fg = .cyan }, "{s}", .{name}),
             try ctx.print(.{}, "]", .{}),
         }, .right, .{});
         const size = kz.toOffset(ctx.getSize(header));
@@ -675,17 +651,24 @@ pub const Parser = struct {
 
     pub const ExitError = Allocator.Error || StdErrError;
 
+    fn onExit(on_exit: ExitBehavior) void {
+        switch (on_exit) {
+            .noexit => {},
+            .exit_process => std.process.exit(1),
+        }
+    }
+
     /// print usage message to stderr and exit(1)
-    pub fn usageExit(self: Self) ExitError!noreturn {
+    pub fn usageExit(self: Self) ExitError!void {
         try kz.display(self.ally, {}, self, stderr);
-        std.process.exit(1);
+        onExit(self.on_exit);
     }
 
     pub fn errorExit(
         self: Self,
         comptime fmt: []const u8,
         args: anytype,
-    ) ExitError!noreturn {
+    ) ExitError!void {
         var ctx = kz.Context.init(self.ally);
         defer ctx.deinit();
 
@@ -697,6 +680,6 @@ pub const Parser = struct {
         }, .right, .{});
 
         try ctx.write(rendered, stderr);
-        std.process.exit(1);
+        onExit(self.on_exit);
     }
 };

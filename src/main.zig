@@ -89,7 +89,7 @@ fn addLogFlags(parser: *cli.Parser) !void {
     }
 }
 
-fn checkLogFlags(options: *const cli.Output.Options) void {
+fn checkLogFlags(options: *const cli.Options) void {
     inline for (LOG_FIELDS) |field| {
         const name = "log-" ++ field.name;
         if (options.get(name) != null) {
@@ -98,73 +98,73 @@ fn checkLogFlags(options: *const cli.Output.Options) void {
     }
 }
 
-fn dispatchArgs(
-    parser: cli.Parser,
-    output: cli.Output,
-    env: *Env,
-    proj: *Project,
-) !void {
-    try output.filterHelp(&parser);
+fn replHook(opts: *const cli.Options) anyerror!void {
+    checkLogFlags(opts);
 
-    if (output.matches(&.{})) {
-        try parser.usageExit();
-    } else if (output.match(&.{"repl"})) |options| {
-        checkLogFlags(options);
-
-        try repl(env, proj);
-    } else if (output.match(&.{"run"})) |options| {
-        checkLogFlags(options);
-
-        const filepath = options.get("file").?.string;
-        const file = try proj.load(env.ally, filepath);
-        try execPrint(env, proj.*, file, .file);
-    } else if (output.match(&.{"zen"})) |_| {
-        try stdout.writeAll(ZEN);
-    } else {
-        unreachable;
-    }
+    try repl(&ENV, &PROJ);
 }
+
+fn runHook(opts: *const cli.Options) anyerror!void {
+    checkLogFlags(opts);
+
+    const filepath = opts.get("file").?.string;
+    const file = try PROJ.load(ENV.ally, filepath);
+    try execPrint(&ENV, PROJ, file, .file);
+}
+
+fn zenHook(_: *const cli.Options) anyerror!void {
+    try stdout.writeAll(ZEN);
+}
+
+var ENV: Env = undefined;
+var PROJ: Project = undefined;
 
 pub fn main() !void {
     // allocator boilerplate
-    var gpa = std.heap.GeneralPurposeAllocator(.{
-        .stack_trace_frames = 1000,
-    }){};
-    defer _ = gpa.deinit();
+    // var gpa = std.heap.GeneralPurposeAllocator(.{
+    // .stack_trace_frames = 1000,
+    // }){};
+    // defer _ = gpa.deinit();
     // const ally = gpa.allocator();
     const ally = std.heap.page_allocator;
 
     // cli input
-    var parser = try cli.Parser.init(ally, "fluent", "the fluent compiler");
+    var parser = try cli.Parser.init(
+        ally,
+        "fluent",
+        "the fluent compiler",
+        null,
+        .exit_process,
+    );
     defer parser.deinit();
 
-    try parser.addHelp();
-
-    const repl_cmd = try parser.addSubcommand("repl", "start the fluent repl");
-    try repl_cmd.addHelp();
+    const repl_cmd = try parser.addSubcommand(
+        "repl",
+        "start the fluent repl",
+        replHook,
+    );
     try addLogFlags(repl_cmd);
 
-    const run_cmd = try parser.addSubcommand("run", "run a fluent program");
-    try run_cmd.addHelp();
+    const run_cmd = try parser.addSubcommand(
+        "run",
+        "run a fluent program",
+        runHook,
+    );
     try addLogFlags(run_cmd);
     try run_cmd.addPositional("file", "the file to run", .string);
 
-    const zen_cmd = try parser.addSubcommand("zen", "display the fluent zen");
-    try zen_cmd.addHelp();
-
-    var output = try parser.parse();
-    defer output.deinit(ally);
+    _ = try parser.addSubcommand("zen", "display the fluent zen", null);
 
     // fluent globals
     try frontend.init(ally);
     defer frontend.deinit(ally);
 
     // fluent env
-    var env = try backend.generatePrelude(ally);
-    defer env.deinit();
+    ENV = try backend.generatePrelude(ally);
+    defer ENV.deinit();
 
-    var proj = com.Project.init();
-    defer proj.deinit(env.ally);
+    PROJ = com.Project.init();
+    defer PROJ.deinit(ENV.ally);
 
-    try dispatchArgs(parser, output, &env, &proj);
+    try parser.run();
 }
