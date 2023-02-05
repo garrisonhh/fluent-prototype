@@ -319,10 +319,12 @@ pub const Parser = struct {
 
         return switch (ty) {
             .flag => unreachable,
-            .nat => Value{ .nat = std.fmt.parseInt(usize, str, 0) catch {
-                try self.errorExit("{} expected nat", .{ot});
-                return null;
-            } },
+            .nat => Value{
+                .nat = std.fmt.parseInt(usize, str, 0) catch {
+                    try self.errorExit("{} expected nat", .{ot});
+                    return null;
+                },
+            },
             .string => Value{ .string = try self.ally.dupe(u8, str) },
         };
     }

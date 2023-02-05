@@ -7,7 +7,7 @@ fn addPackages(step: *std.build.LibExeObjStep) void {
 
     const linenoize = Pkg{
         .name = "linenoize",
-        .source = rel_fs("lib/linenoize/linenoize.zig")
+        .source = rel_fs("lib/linenoize/linenoize.zig"),
     };
     const kritzler = Pkg{
         .name = "kritzler",
@@ -32,7 +32,7 @@ pub fn build(b: *std.build.Builder) void {
         if (version.order(desired).compare(.neq)) {
             const msg = std.fmt.comptimePrint(
                 "expected zig version {}, found {}",
-                .{desired, version}
+                .{ desired, version },
             );
             @compileError(msg);
         }

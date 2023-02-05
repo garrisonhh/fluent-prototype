@@ -807,8 +807,6 @@ pub const Func = struct {
 pub const Program = struct {
     const Self = @This();
 
-    // TODO go merge refmap and use it here so I don't reimplement this pattern
-    // a million times
     unused: std.ArrayListUnmanaged(FuncRef) = .{},
     funcs: std.ArrayListUnmanaged(Func) = .{},
 

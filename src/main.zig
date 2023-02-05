@@ -89,7 +89,7 @@ fn addLogFlags(parser: *cli.Parser) !void {
     }
 }
 
-fn checkLogFlags(options: *const cli.Options) void {
+fn applyLogFlags(options: *const cli.Options) void {
     inline for (LOG_FIELDS) |field| {
         const name = "log-" ++ field.name;
         if (options.get(name) != null) {
@@ -99,13 +99,13 @@ fn checkLogFlags(options: *const cli.Options) void {
 }
 
 fn replHook(opts: *const cli.Options) anyerror!void {
-    checkLogFlags(opts);
+    applyLogFlags(opts);
 
     try repl(&ENV, &PROJ);
 }
 
 fn runHook(opts: *const cli.Options) anyerror!void {
-    checkLogFlags(opts);
+    applyLogFlags(opts);
 
     const filepath = opts.get("file").?.string;
     const file = try PROJ.load(ENV.ally, filepath);

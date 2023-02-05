@@ -746,7 +746,5 @@ pub fn analyze(
     const pp = try postprocess(env, &texpr);
     pp.get() orelse return pp.cast(TExpr);
 
-    // TODO verify texpr contains no pie stones as a postprocessing step
-
     return Result.ok(texpr);
 }

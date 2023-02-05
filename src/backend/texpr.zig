@@ -67,7 +67,6 @@ pub const Data = union(enum) {
     // and a SExpr which is only analyzed when used. when a template is
     // monomorphized, it can then be stored back in the env as a fully
     // functional lambda.
-    // TODO get rid of the comment above when I've implemented it
     builtin: Builtin,
 
     fn eql(data: Data, other: Data) bool {

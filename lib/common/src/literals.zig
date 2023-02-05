@@ -59,10 +59,8 @@ pub const Number = struct {
                     num = num * t_radix + @intCast(T, digit);
                 }
 
-                if (self.neg) {
-                    // NOTE the zig 0.10 compiler doesn't seem to understand
-                    // this will never negate a uint, so invoking false UB here
-                    num = @intCast(T, -@intCast(i64, num));
+                if (self.neg and comptime int.signedness == .signed) {
+                    num = -num;
                 }
 
                 return num;

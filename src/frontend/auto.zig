@@ -209,7 +209,7 @@ pub const FormExpr = union(enum) {
     const Tag = std.meta.Tag(Self);
 
     expr: Expr,
-    word: []const u8, // TODO use com.Symbol
+    word: []const u8,
 
     pub fn hash(self: Self) u64 {
         var hasher = std.hash.Wyhash.init(0);
