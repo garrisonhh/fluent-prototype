@@ -153,6 +153,7 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     const bin_cond = try fnType(&env, &.{ @"bool", @"bool" }, @"bool");
     const un_cond = try fnType(&env, &.{@"bool"}, @"bool");
     const bin_i64 = try fnType(&env, &.{ @"i64", @"i64" }, @"i64");
+    const bin_u64 = try fnType(&env, &.{ @"u64", @"u64" }, @"u64");
     const un_ty = try fnType(&env, &.{@"type"}, @"type");
     const bin_i64_cond = try fnType(&env, &.{ @"i64", @"i64" }, @"bool");
 
@@ -175,6 +176,8 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     try defBuiltin(&env, "*", bin_i64, .mul);
     try defBuiltin(&env, "/", bin_i64, .div);
     try defBuiltin(&env, "%", bin_i64, .mod);
+    try defBuiltin(&env, "<<", bin_u64, .shl);
+    try defBuiltin(&env, ">>", bin_u64, .shr);
 
     try defBuiltin(&env, "and", bin_cond, .@"and");
     try defBuiltin(&env, "or", bin_cond, .@"or");

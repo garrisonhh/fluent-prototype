@@ -48,6 +48,8 @@ pub const Form = enum {
     mul,
     div,
     mod,
+    shl,
+    shr,
 
     // conditions
     eq,
@@ -106,6 +108,8 @@ pub const Form = enum {
             .mul => "multiply operator",
             .div => "divide operator",
             .mod => "modulus operator",
+            .shl => "bitshift left operator",
+            .shr => "bitshift right operator",
             .eq => "equality operator",
             .gt => "greater than operator",
             .lt => "less than operator",
@@ -153,6 +157,8 @@ pub const Form = enum {
                 .{ .mul, "*" },
                 .{ .div, "/" },
                 .{ .mod, "%" },
+                .{ .shl, "<<" },
+                .{ .shr, ">>" },
 
                 .{ .eq, "==" },
                 .{ .gt, ">" },
@@ -596,6 +602,10 @@ pub const SYNTAX: []const []const Syntax = t: {
             x(Form.le, .l, "$ `<= $"),
         },
         &.{
+            x(Form.shl, .l, "$ `<< $"),
+            x(Form.shr, .l, "$ `>> $"),
+        },
+        &.{
             x(Form.add, .l, "$ `+ $"),
             x(Form.sub, .l, "$ `- $"),
         },
@@ -635,7 +645,7 @@ pub const KEYWORDS = comptimeStringSet(&.{
 const SYMBOL_LIST = &[_][]const u8{
     "&", ".", "=", "::", "->", ",",  ";", ":", "!",
     // math
-    "+", "-", "*", "/", "%",
+    "+", "-", "*", "/", "%", "<<", ">>",
     // cond
     "==", ">", "<", ">=", "<=",
     // matched

@@ -239,16 +239,12 @@ pub const Program = struct {
                         try line.append(try renderReg(ctx, arg));
                     }
                 },
-                .lnot, .bnot, .slice_ty => {
+                .lnot, .bnot, .slice_ty, .shl, .shr => {
                     for (args[0..2]) |arg| {
                         try line.append(try renderReg(ctx, arg));
                     }
                 },
                 .call => try line.append(try renderReg(ctx, args[0])),
-                else => std.debug.panic(
-                    "cannot render op `{s}` yet\n",
-                    .{@tagName(inst.op)},
-                ),
             }
 
             // stack the line
@@ -389,6 +385,8 @@ pub const Construct = struct {
     pub const imul = conRRR(.imul);
     pub const idiv = conRRR(.idiv);
     pub const imod = conRRR(.imod);
+    pub const shl = conRRR(.shl);
+    pub const shr = conRRR(.shr);
 
     pub const land = conRRR(.land);
     pub const lor = conRRR(.lor);

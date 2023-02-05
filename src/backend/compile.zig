@@ -243,7 +243,7 @@ fn compileOp(
 
             try b.addInst(ally, con(lhs, rhs, to));
         },
-        inline .add, .sub, .mul, .div => |pure, tag| {
+        inline .add, .sub, .mul, .div, .shl, .shr => |pure, tag| {
             // binary ops with type awareness
             const lhs = rmap.get(pure.params[0]);
             const rhs = rmap.get(pure.params[1]);
@@ -262,6 +262,8 @@ fn compileOp(
                     .mul => Bc.imul,
                     .div => Bc.idiv,
                     .mod => Bc.imod,
+                    .shl => Bc.shl,
+                    .shr => Bc.shr,
                     else => unreachable,
                 };
 

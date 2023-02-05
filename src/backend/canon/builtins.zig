@@ -27,6 +27,8 @@ pub const Builtin = enum {
     mul,
     div,
     mod,
+    shl,
+    shr,
 
     @"and",
     @"or",

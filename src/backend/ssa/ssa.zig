@@ -87,6 +87,8 @@ pub const Op = union(enum) {
     mul: Pure,
     div: Pure,
     mod: Pure,
+    shl: Pure,
+    shr: Pure,
 
     // conditional
     eq: Pure,

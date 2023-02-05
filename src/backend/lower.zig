@@ -72,8 +72,8 @@ fn lowerOperator(
     return switch (b) {
         // binary ops
         // zig fmt: off
-        inline .eq, .add, .sub, .mul, .div, .mod, .@"and", .@"or", .fn_ty, .not,
-        .cast, .slice_ty,
+        inline .eq, .add, .sub, .mul, .div, .mod, .shl, .shr, .@"and", .@"or",
+        .fn_ty, .not, .cast, .slice_ty,
         // zig fmt: on
         => |tag| op: {
             // TODO make sure this is checked in sema
@@ -264,8 +264,8 @@ fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
         switch (head.data.builtin) {
             .recur => unreachable,
             // zig fmt: off
-            .eq, .add, .sub, .mul, .div, .mod, .@"and", .@"or", .not, .cast,
-            .slice_ty, .fn_ty,
+            .eq, .add, .sub, .mul, .div, .mod, .shl, .shr, .@"and", .@"or",
+            .not, .cast, .slice_ty, .fn_ty,
             // zig fmt: on
             => |b| {
                 const tail = expr.data.call[1..];
@@ -305,6 +305,8 @@ fn lowerExpr(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     return switch (expr.data) {
         // always consts
         .@"bool", .number, .ty => unreachable,
+        // has separate functionality
+        .builtin => unreachable,
         // TODO named values should be cacheable and lowered only once, really.
         // afaik this will currently place the same named value multiple times
         // in the code.
@@ -318,14 +320,6 @@ fn lowerExpr(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
             // created
             std.debug.assert(p.func.eql(env.getFunc(ref).name));
             break :param Local.of(p.index);
-        },
-        .builtin => |b| {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "attempted to lower builtin `{s}` through lowerExpr",
-                    .{@tagName(b)},
-                );
-            } else unreachable;
         },
         else => {
             const tag = @tagName(expr.data);
