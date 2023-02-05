@@ -1,6 +1,6 @@
 # lambdas are the most unsugared form of functions, and are type inferred
 calc2 ::
-  as (Fn [i32, i32] i32)
+  as ({i32, i32} -> i32)
     |a, b| (a + b) * 2
 
 # `fn` is a nice way to define top level functions. this is entirely syntax

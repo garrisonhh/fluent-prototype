@@ -59,13 +59,13 @@ fn dupe(ally: Allocator, bytes: []const u8) Allocator.Error![]u8 {
 // TODO unsure about this syntax
 mem :: effect {
   context: *mut opaque,
-  realloc: *Fn [T] [slice T, usize] slice T,
+  realloc: *Fn {T} {[]T, usize} slice T,
 }
 
-alloc :: fn { size: usize } mem (slice u8) ->
-  mem.realloc &[] size
+alloc :: fn { size: usize } mem []mut u8 ->
+  mem.realloc &{} size;
 
-dupe :: fn { data: slice u8 } mem (slice u8) ->
+dupe :: fn { data: []u8 } mem []u8 ->
   // `ref` ensures a variable is stack allocated and gives you a `*mut` to it
   cloned = ref (alloc data.len);
   memcpy cloned data; // memcpy will probably be a prelude function

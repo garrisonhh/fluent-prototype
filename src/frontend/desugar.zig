@@ -20,7 +20,7 @@ const CheckResult = Message.Result(void);
 /// currently I am using this for compiler debugging only
 fn verify(ally: Allocator, expr: RawExpr) Allocator.Error!CheckResult {
     switch (expr.form) {
-        .parens, .comma, .kv, .dict, .stmt => |tag| {
+        .parens, .comma, .kv, .stmt => |tag| {
             return CheckResult.err(try Message.print(
                 ally,
                 .internal,
@@ -84,11 +84,11 @@ fn desugarExpr(
                 .exprs = coll.toOwnedSlice(),
             };
         },
-        inline .parens, .array, .dict => |tag| coll: {
+        inline .parens, .coll => |tag| coll: {
             if (expr.exprs.len == 0) {
                 const empty_form = switch (tag) {
                     .parens => .unit,
-                    .dict, .array => .array,
+                    .coll => .coll,
                     else => unreachable,
                 };
 
@@ -115,7 +115,7 @@ fn desugarExpr(
 
                 const coll_form = switch (tag) {
                     .parens => .tuple,
-                    .dict, .array => .array,
+                    .coll => .coll,
                     else => unreachable,
                 };
 

@@ -130,11 +130,12 @@ fn parseAtom(p: *Parser, out_prec: *usize) Allocator.Error!?RawExpr {
             // try to parse any prefixed ops
             const word = tok.loc.slice(p.proj);
 
-            break :prefixed if (TABLE.prefixed.get(word)) |term| parse: {
+            for (TABLE.getPrefix(word)) |term| {
                 const start_index = p.strm.index;
                 const res = try parsePrefixedSyntax(p, term.rule.*, term.prec);
                 if (res == null) {
                     p.reset(start_index);
+                    continue;
                 }
 
                 // get next prec for this rule
@@ -144,8 +145,10 @@ fn parseAtom(p: *Parser, out_prec: *usize) Allocator.Error!?RawExpr {
                     out_prec.* = final.expr.innerPrec(term.prec);
                 }
 
-                break :parse res;
-            } else null;
+                break :prefixed res;
+            }
+
+            break :prefixed null;
         },
         inline .ident, .number, .string => |tag| lit: {
             p.eat();
@@ -298,44 +301,36 @@ fn climb(p: *Parser, min_prec: usize) Allocator.Error!?RawExpr {
     };
 
     // greedily parse as many rules at or above this precedence as possible
-    loop: while (true) {
-        const next = p.peek() orelse {
-            break :loop;
-        };
-
-        if (next.tag == .word) infix: {
-            // try infix
+    loop: while (p.peek()) |next| {
+        // try to parse infix rules
+        if (next.tag == .word) {
             const word = next.loc.slice(p.proj);
 
-            const term = TABLE.infixed.get(word) orelse {
-                break :infix;
-            };
+            infix: for (TABLE.getInfix(word)) |term| {
+                // rule must equal or supercede this rule's precedence. if I've
+                // parsed a rule already, the next rule precedence must not
+                // exceed the previous rules' precedence
+                if (term.prec < min_prec or term.prec > max_prec) {
+                    continue :infix;
+                }
 
-            // rule must equal or supercede this rule's precedence. if I've
-            // parsed a rule already, the next rule precedence must not exceed
-            // the previous rules' precedence
-            if (term.prec < min_prec or term.prec > max_prec) {
-                break :loop;
-            }
+                const res = try parseUnprefixed(
+                    p,
+                    term.rule.*,
+                    term.prec,
+                    expr,
+                );
 
-            const res = try parseUnprefixed(
-                p,
-                term.rule.*,
-                term.prec,
-                expr,
-            );
-
-            if (res) |got| {
-                expr = got;
-                max_prec = term.prec;
-                continue :loop;
-            } else {
-                break :loop;
+                if (res) |got| {
+                    expr = got;
+                    max_prec = term.prec;
+                    continue :loop;
+                }
             }
         }
 
-        // try unfix
-        unfix: for (TABLE.unfixed.items) |term| {
+        // try to parse unfix rules
+        unfix: for (TABLE.unfixed.slice()) |term| {
             if (term.prec < min_prec or term.prec > max_prec) {
                 continue :unfix;
             }
@@ -364,7 +359,11 @@ fn climb(p: *Parser, min_prec: usize) Allocator.Error!?RawExpr {
 var TABLE = auto.SyntaxTable{};
 
 pub fn init(ally: Allocator) auto.SyntaxTable.PutError!void {
-    for (auto.SYNTAX) |ruleset, prec| {
+    var i = auto.SYNTAX.len;
+    while (i > 0) : (i -= 1) {
+        const prec = i - 1;
+        const ruleset = auto.SYNTAX[prec];
+
         for (ruleset) |*rule| {
             try TABLE.put(ally, rule, prec);
         }
