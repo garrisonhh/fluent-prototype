@@ -8,6 +8,9 @@ const com = @import("common");
 const Name = com.Name;
 const builtin = @import("builtin");
 
+pub const WriteAllocError =
+    std.ArrayList(u8).Writer.Error || std.fmt.AllocPrintError;
+
 pub const TypeId = packed struct {
     const Self = @This();
 
@@ -17,15 +20,12 @@ pub const TypeId = packed struct {
         return self.index == id.index;
     }
 
-    pub const WriteError =
-        std.ArrayList(u8).Writer.Error || std.fmt.AllocPrintError;
-
     pub fn write(
         self: Self,
         ally: Allocator,
         tw: TypeWelt,
         writer: anytype,
-    ) WriteError!void {
+    ) (@TypeOf(writer).Error || Allocator.Error)!void {
         if (tw.getName(self)) |name| {
             try writer.print("{}", .{name});
         } else {
@@ -37,7 +37,7 @@ pub const TypeId = packed struct {
         self: Self,
         ally: Allocator,
         tw: TypeWelt,
-    ) WriteError![]u8 {
+    ) WriteAllocError![]u8 {
         var list = std.ArrayList(u8).init(ally);
         defer list.deinit();
 
@@ -358,15 +358,22 @@ pub const Type = union(enum) {
         tw: *TypeWelt,
         target: Self,
     ) Allocator.Error!bool {
-        // special logic
+        if (self == .hole) {
+            return true;
+        }
+
+        // if target is a set, special logic must be applied
         switch (target) {
-            .any, .hole => return true,
+            .hole => unreachable,
+            .any => return true,
             .set => {
                 if (self == .set) {
                     // subsets coerce to supersets
                     var subtypes = self.set.keyIterator();
                     while (subtypes.next()) |subty| {
-                        if (!target.set.contains(subty.*)) return false;
+                        if (!target.set.contains(subty.*)) {
+                            return false;
+                        }
                     }
 
                     return true;
@@ -375,69 +382,37 @@ pub const Type = union(enum) {
                     return target.set.contains(try tw.identify(ally, self));
                 }
             },
-            else => if (@as(Tag, self) != @as(Tag, target)) return false,
+            else => {},
         }
 
-        // concrete matching
-        return switch (target) {
-            .any, .set, .hole => unreachable,
+        // most types must match tags
+        return @as(Tag, self) == @as(Tag, target) and switch (self) {
+            .any, .hole, .set => unreachable,
             .unit, .@"bool", .symbol, .ty, .namespace, .builtin => true,
             .atom => |sym| sym.eql(target.atom),
             .tuple, .array, .func => self.eql(target),
             .number => |num| num: {
-                // layout must match
-                if (num.layout != target.number.layout) {
-                    break :num false;
-                }
+                // zig fmt: off
+                const layouts_match = num.layout == target.number.layout;
+                const from_compiler_num = num.bits == null;
+                const bits_fit = num.bits != null and target.number.bits != null
+                             and num.bits.? <= target.number.bits.?;
+                // zig fmt: on
 
-                // compiler numbers always coerce if the layout matches
-                if (num.bits == null or target.number.bits == null) {
-                    break :num true;
-                }
-
-                // must not lose bits in coercion
-                break :num num.bits.? <= target.number.bits.?;
+                break :num layouts_match and (from_compiler_num or bits_fit);
             },
             .ptr => |ptr| ptr: {
                 // `*[_]T` should coerce to `[]T`
-                if (ptr.kind == .slice and self.ptr.kind == .single) {
-                    const to = tw.get(self.ptr.to);
+                if (ptr.kind == .single and target.ptr.kind == .slice) {
+                    const to = tw.get(ptr.to);
                     if (to.* == .array) {
-                        break :ptr to.array.of.eql(ptr.to);
+                        break :ptr to.array.of.eql(target.ptr.to);
                     }
                 }
 
                 break :ptr self.eql(target);
             },
         };
-    }
-
-    /// given two types, create a type that fits the values of each
-    /// TODO I think this should actually be called `peerResolve`
-    pub fn unify(
-        self: Self,
-        ally: Allocator,
-        tw: *TypeWelt,
-        other: Self,
-    ) Allocator.Error!TypeId {
-        if (self.eql(other)) {
-            return try tw.identify(ally, self);
-        } else if (self == .any or other == .any) {
-            return try tw.identify(ally, Type{ .any = {} });
-        } else if (try self.coercesTo(ally, tw, other)) {
-            return try tw.identify(ally, other);
-        } else if (try other.coercesTo(ally, tw, self)) {
-            return try tw.identify(ally, self);
-        }
-
-        // need a new set to fit both
-        var unified = try Self.initSet(ally, &.{
-            try tw.identify(ally, self),
-            try tw.identify(ally, other),
-        });
-        defer unified.deinit(ally);
-
-        return try tw.identify(ally, unified);
     }
 
     /// classifications for the runtime of a type; aka stages of the execution
@@ -448,15 +423,15 @@ pub const Type = union(enum) {
         analysis, // valid only in semantic analysis
 
         /// returns the most restrictive class that fits both classes
-        fn unify(self: @This(), other: @This()) @This() {
+        fn peerClassify(self: @This(), other: @This()) @This() {
             const max_int = std.math.min(@enumToInt(self), @enumToInt(other));
             return @intToEnum(@This(), max_int);
         }
 
-        fn unifyList(classes: []const @This()) @This() {
+        fn peerClassifyList(classes: []const @This()) @This() {
             var class = @intToEnum(@This(), 0);
             for (classes) |elem| {
-                class = class.unify(elem);
+                class = class.peerClassify(elem);
             }
 
             return class;
@@ -470,7 +445,7 @@ pub const Type = union(enum) {
             const elem_ty = typewelt.get(elem);
             const elem_class = elem_ty.classifyRuntime(typewelt);
 
-            class = class.unify(elem_class);
+            class = class.peerClassify(elem_class);
         }
 
         return class;
@@ -492,7 +467,7 @@ pub const Type = union(enum) {
                     typewelt.get(func.returns).classifyRuntime(typewelt),
                 };
 
-                break :func RuntimeClass.unifyList(&reqs);
+                break :func RuntimeClass.peerClassifyList(&reqs);
             },
         };
     }
@@ -512,15 +487,12 @@ pub const Type = union(enum) {
         };
     }
 
-    pub const WriteError =
-        std.ArrayList(u8).Writer.Error || std.fmt.AllocPrintError;
-
     fn writeList(
         list: []TypeId,
         ally: Allocator,
         tw: TypeWelt,
         writer: anytype,
-    ) WriteError!void {
+    ) (@TypeOf(writer).Error || Allocator.Error)!void {
         try writer.writeByte('[');
         for (list) |ty, i| {
             if (i > 0) try writer.writeByte(' ');
@@ -535,7 +507,7 @@ pub const Type = union(enum) {
         ally: Allocator,
         tw: TypeWelt,
         writer: anytype,
-    ) WriteError!void {
+    ) (@TypeOf(writer).Error || Allocator.Error)!void {
         switch (self) {
             // zig fmt: off
             .unit, .@"bool", .namespace, .builtin,
@@ -624,25 +596,12 @@ pub const Type = union(enum) {
         self: Self,
         ally: Allocator,
         tw: TypeWelt,
-    ) WriteError![]u8 {
+    ) WriteAllocError![]u8 {
         var list = std.ArrayList(u8).init(ally);
         defer list.deinit();
 
         try self.write(ally, tw, list.writer());
 
         return list.toOwnedSlice();
-    }
-
-    pub fn format(
-        self: Self,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) @TypeOf(writer).Error!void {
-        _ = self;
-        _ = fmt;
-        _ = options;
-
-        @compileError("Type.format is deprecated");
     }
 };

@@ -17,10 +17,10 @@ fn filterDefError(e: Env.DefError, comptime str: []const u8) Allocator.Error {
         error.NameNoRedef,
         error.RenamedType,
         error.NameTooLong,
-        => {
-            const fmt = "uh oh, got {} in prelude while trying to define {s}.";
-            std.debug.panic(fmt, .{ e, str });
-        },
+        => std.debug.panic(
+            "uh oh, got {} in prelude while trying to define {s}.",
+            .{ e, str },
+        ),
         error.OutOfMemory => return @errSetCast(Allocator.Error, e),
     };
 }

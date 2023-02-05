@@ -370,6 +370,7 @@ pub const Lifetime = struct {
     stop: Pos,
 
     fn of(start: Pos, stop: Pos) Self {
+        std.debug.assert(start.order(stop).compare(.lte));
         return Self{
             .start = start,
             .stop = stop,
@@ -707,10 +708,6 @@ pub const Func = struct {
                 try line.append(try ctx.print(.{}, "{s} ", .{tag}));
                 try self.renderParams(ctx, env, &line, impure.params);
             },
-            // else => std.debug.panic(
-            // "TODO render op class {s}",
-            // .{@tagName(class)}
-            // )
         }
 
         // stack and return

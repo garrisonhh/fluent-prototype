@@ -56,16 +56,18 @@ fn wrongNArgsError(
     loc: ?Loc,
     expected: usize,
     found: usize,
-) Allocator.Error!Result {
+) SemaError!Result {
     const fmt = "expected {} parameters, found {}";
     return try Message.err(ally, TExpr, loc, fmt, .{ expected, found });
 }
 
 fn typeOfNumber(env: *Env, num: Number) SemaError!TypeId {
-    return try env.identify(Type{ .number = .{
-        .bits = num.bits,
-        .layout = num.data,
-    } });
+    return try env.identify(Type{
+        .number = .{
+            .bits = num.bits,
+            .layout = num.data,
+        },
+    });
 }
 
 fn analyzeSymbol(
@@ -89,7 +91,7 @@ fn analyzeSymbol(
     };
 
     const inner_expr = TExpr.init(expr.loc, false, ty, .{ .name = name });
-    return try unifyTExpr(env, inner_expr, outward);
+    return try coerce(env, inner_expr, outward);
 }
 
 fn analyzeAs(
@@ -119,7 +121,7 @@ fn analyzeAs(
     // generate inner expr and unify
     const res = try analyzeExpr(env, scope, body_expr, anno);
     const texpr = res.get() orelse return res;
-    return try unifyTExpr(env, texpr, outward);
+    return try coerce(env, texpr, outward);
 }
 
 fn analyzeAddrOf(
@@ -153,7 +155,7 @@ fn analyzeAddrOf(
     const texpr = TExpr.init(expr.loc, false, ptr_ty, TExpr.Data{
         .ptr = try com.placeOn(ally, subexpr),
     });
-    return try unifyTExpr(env, texpr, outward);
+    return try coerce(env, texpr, outward);
 }
 
 fn analyzeDo(
@@ -200,7 +202,7 @@ fn analyzeDo(
 
     // create TExpr
     const texpr = TExpr.init(expr.loc, false, ret_expr.ty, .{ .call = texprs });
-    return try unifyTExpr(env, texpr, outward);
+    return try coerce(env, texpr, outward);
 }
 
 fn analyzeIf(
@@ -273,7 +275,7 @@ fn analyzeArray(
         .of = final_subty,
     } });
     const texpr = TExpr.init(expr.loc, false, ty, .{ .array = texprs });
-    return try unifyTExpr(env, texpr, outward);
+    return try coerce(env, texpr, outward);
 }
 
 fn filterDefError(
@@ -417,7 +419,7 @@ fn analyzeNamespace(
     // evaluate to unit
     const unit = try env.identify(Type{ .unit = {} });
     const texpr = TExpr.init(expr.loc, true, unit, .{ .unit = {} });
-    return try unifyTExpr(env, texpr, outward);
+    return try coerce(env, texpr, outward);
 }
 
 fn analyzeRecur(
@@ -466,7 +468,7 @@ fn analyzeRecur(
         func.returns,
         .{ .call = texprs },
     );
-    return try unifyTExpr(env, final, outward);
+    return try coerce(env, final, outward);
 }
 
 fn analyzeBuiltinCall(
@@ -589,7 +591,7 @@ fn analyzeCall(
     if (exprs.len == 0) {
         const unit = try env.identify(Type{ .unit = {} });
         const texpr = TExpr.init(expr.loc, true, unit, .{ .unit = {} });
-        return try unifyTExpr(env, texpr, outward);
+        return try coerce(env, texpr, outward);
     }
 
     const head = exprs[0];
@@ -647,54 +649,58 @@ fn analyzeCall(
     // create TExpr
     const ty = fn_ty.func.returns;
     const texpr = TExpr.init(expr.loc, false, ty, .{ .call = texprs });
-    return try unifyTExpr(env, texpr, outward);
+    return try coerce(env, texpr, outward);
 }
 
-/// given a TExpr, ensure that it will properly coerce to the outward
-/// expectation
+/// given a TExpr, ensure that it will properly coerce to its expectation
 ///
-/// in practice, this should either:
+/// this will either:
 /// a) do nothing (return the same expr)
-/// b) make an implicit cast explicitly expressed in the AST
-/// c) identify that an expectation was violated and produce an appropriate
-///    error
-fn unifyTExpr(env: *Env, texpr: TExpr, outward: TypeId) SemaError!Result {
+/// b) make an implicit cast explicit
+/// c) find that an expectation was violated and produce a nice error message
+fn coerce(env: *Env, texpr: TExpr, outward: TypeId) SemaError!Result {
+    const stderr = std.io.getStdErr().writer();
+
+    {
+        stderr.writeAll("[coerce] ") catch {};
+        texpr.ty.write(env.ally, env.tw, stderr) catch {};
+        stderr.writeAll(" -> ") catch {};
+        outward.write(env.ally, env.tw, stderr) catch {};
+        stderr.writeAll(" ? ") catch {};
+    }
+
+    if (texpr.ty.eql(outward)) {
+        stderr.writeAll("EQUAL\n") catch {};
+        return Result.ok(texpr);
+    }
+
+    // check for an allowed implicit cast
     const inner = env.tw.get(texpr.ty);
     const outer = env.tw.get(outward);
 
-    // check for already unified texprs
-    const is_unified = switch (outer.*) {
-        .any => true,
-        .set => try inner.coercesTo(env.ally, &env.tw, outer.*),
-        else => texpr.ty.eql(outward),
-    };
-
-    if (is_unified) return Result.ok(texpr);
-
-    // types aren't unified, check whether an implicit cast is allowed
-    // TODO this is quickly revealing itself to be a source of complexity that
-    // gets shunted down to the lowering and compiling stages. basically this
-    // code inserts `cast` operations whenever type coercion is allowed. this
-    // works well in many cases, but sema should handle the responsibility of
-    // adapting to type information, and I should get rid of the idea of a
-    // generic `cast` operation in the lower-level ends of the fluent compiler
-    // and replace it with more accurate ideas like `bitcast` `sign-extend`
-    // `truncate` etc.
     if (try inner.coercesTo(env.ally, &env.tw, outer.*)) {
-        // cast is possible
-        const builtin_ty = try env.identify(Type{ .builtin = {} });
-        const cast = TExpr.initBuiltin(texpr.loc, builtin_ty, .cast);
-        const final = try TExpr.initCall(
-            env.ally,
-            texpr.loc,
-            outward,
-            &[2]TExpr{ cast, texpr },
-        );
+        if (outer.* == .any or outer.* == .set) {
+            // within set
+            stderr.writeAll("WITHIN SET\n") catch {};
+            return Result.ok(texpr);
+        } else {
+            // cast is possible
+            const builtin_ty = try env.identify(.builtin);
+            const cast = TExpr.initBuiltin(texpr.loc, builtin_ty, .cast);
+            const final = try TExpr.initCall(
+                env.ally,
+                texpr.loc,
+                outward,
+                &[2]TExpr{ cast, texpr },
+            );
 
-        return Result.ok(final);
+            stderr.writeAll("CAST\n") catch {};
+            return Result.ok(final);
+        }
     }
 
-    // no unification :(
+    // no coercion :(
+    stderr.writeAll("NO DEAL\n") catch {};
     return expectError(env.*, texpr.loc, outward, texpr.ty);
 }
 
@@ -707,29 +713,29 @@ fn analyzeExpr(
     return switch (expr.data) {
         .call => try analyzeCall(env, scope, expr, outward),
         .symbol => try analyzeSymbol(env, scope, expr, outward),
-        else => lit: {
-            // construct equivalent literal TExpr
-            const ty = switch (expr.data) {
-                .number => |num| try typeOfNumber(env, num),
+        inline .number, .string => |data, tag| lit: {
+            const ty = switch (comptime tag) {
+                .number => try typeOfNumber(env, data),
                 // string literals are (Array N u8)
-                .string => |str| try env.identify(Type{ .array = Type.Array{
-                    .size = str.str.len,
-                    .of = try env.identify(Type{
-                        .number = .{ .layout = .uint, .bits = 8 },
-                    }),
-                } }),
-                .call, .symbol => unreachable,
-            };
-            const data = switch (expr.data) {
-                .number => |num| TExpr.Data{ .number = num },
-                .string => |sym| TExpr.Data{
-                    .string = try sym.clone(env.ally),
-                },
+                .string => try env.identify(Type{
+                    .array = Type.Array{
+                        .size = data.str.len,
+                        .of = try env.identify(Type{
+                            .number = .{ .layout = .uint, .bits = 8 },
+                        }),
+                    },
+                }),
                 else => unreachable,
             };
 
-            const texpr = TExpr.init(expr.loc, true, ty, data);
-            break :lit unifyTExpr(env, texpr, outward);
+            const typed_data = switch (comptime tag) {
+                .number => TExpr.Data{ .number = data },
+                .string => TExpr.Data{ .string = try data.clone(env.ally) },
+                else => unreachable,
+            };
+
+            const texpr = TExpr.init(expr.loc, true, ty, typed_data);
+            break :lit coerce(env, texpr, outward);
         },
     };
 }

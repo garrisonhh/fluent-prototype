@@ -65,7 +65,7 @@ pub fn cast(self: Self, bits: ?u8, layout: com.Number.Layout) Self {
 }
 
 /// returns this as a value on an allocator
-pub fn asValue(self: @This(), ally: Allocator) Allocator.Error!Value {
+pub fn asValue(self: Self, ally: Allocator) Allocator.Error!Value {
     const data = switch (self.data) {
         .int => |n| std.mem.asBytes(&n),
         .uint => |n| std.mem.asBytes(&n),
@@ -79,7 +79,7 @@ pub fn asValue(self: @This(), ally: Allocator) Allocator.Error!Value {
     return try Value.init(ally, data[0 .. bits / 8]);
 }
 
-pub fn eql(self: @This(), other: @This()) bool {
+pub fn eql(self: Self, other: Self) bool {
     // compare type
     // zig fmt: off
     const types_match = self.bits == other.bits
@@ -99,14 +99,11 @@ pub fn eql(self: @This(), other: @This()) bool {
 }
 
 pub fn format(
-    self: @This(),
-    comptime fmt: []const u8,
-    options: std.fmt.FormatOptions,
+    self: Self,
+    comptime _: []const u8,
+    _: std.fmt.FormatOptions,
     writer: anytype,
 ) @TypeOf(writer).Error!void {
-    _ = fmt;
-    _ = options;
-
     switch (self.data) {
         .int => |i| try writer.print("{}i", .{i}),
         .uint => |u| try writer.print("{}u", .{u}),
