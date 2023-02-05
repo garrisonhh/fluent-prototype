@@ -268,10 +268,6 @@ fn parseUnprefixed(
     }
 
     // parse the leftmost expr
-    if (syntax.fexprs[0].expr.flag != .one) {
-        @panic("TODO parse unprefixed with flags on the left");
-    }
-
     try exprs.append(left);
 
     // parse the rest of the exprs

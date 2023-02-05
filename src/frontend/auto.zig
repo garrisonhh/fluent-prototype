@@ -374,6 +374,11 @@ pub const Syntax = struct {
                 }
             }
 
+            // check for LR flags
+            if (fexprs[0] == .expr and fexprs[0].expr.flag != .one) {
+                @compileError("parsing flags on a LR expr is out of scope");
+            }
+
             return fexprs;
         }
     }
