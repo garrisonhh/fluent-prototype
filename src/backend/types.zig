@@ -20,7 +20,6 @@ pub const TypeId = packed struct {
     pub const WriteError =
         std.ArrayList(u8).Writer.Error || std.fmt.AllocPrintError;
 
-    // TODO use typewelt exclusively
     pub fn write(
         self: Self,
         ally: Allocator,
@@ -64,16 +63,16 @@ pub const TypeWelt = struct {
     const Self = @This();
 
     const TypeMapContext = struct {
-        pub fn hash(ctx: @This(), key: *const Type) u64 {
-            _ = ctx;
+        const K = *const Type;
+
+        pub fn hash(_: @This(), key: K) u64 {
             var wyhash = Wyhash.init(0);
             key.hash(&wyhash);
 
             return wyhash.final();
         }
 
-        pub fn eql(ctx: @This(), a: *const Type, b: *const Type) bool {
-            _ = ctx;
+        pub fn eql(_: @This(), a: K, b: K) bool {
             return a.eql(b.*);
         }
     };
@@ -85,10 +84,15 @@ pub const TypeWelt = struct {
         std.hash_map.default_max_load_percentage,
     );
 
-    types: std.ArrayListUnmanaged(*Type) = .{}, // TypeId -> Type
-    // symbols are unowned, aka probably owned by env
+    // maps TypeId -> Type
+    // types are individually allocated to allow the typewelt to reuse the data
+    // as the key to the other map
+    types: std.ArrayListUnmanaged(*Type) = .{},
+    // maps Type -> TypeId
+    map: TypeMap = .{},
+    // maps TypeId -> Name
+    // names are owned by the environment
     names: std.ArrayListUnmanaged(?Name) = .{},
-    map: TypeMap = .{}, // Type -> TypeId
 
     pub fn deinit(self: *Self, ally: Allocator) void {
         for (self.types.items) |ptr| {
@@ -175,7 +179,7 @@ pub const Type = union(enum) {
 
     pub const Pointer = struct {
         // generally self explanatory. slices have very similar type rules to
-        // pointers, but are actually a `struct { ptr: [*]to, len: usize  } `
+        // pointers, but are actually a `struct { ptr: [*]to, len: usize }`
         pub const Kind = enum { single, many, slice };
 
         kind: Kind,
@@ -185,13 +189,6 @@ pub const Type = union(enum) {
     pub const Func = struct {
         takes: []TypeId,
         returns: TypeId,
-
-        pub fn clone(self: Func, ally: Allocator) Allocator.Error!Func {
-            return Func{
-                .takes = try ally.dupe(TypeId, self.takes),
-                .returns = self.returns,
-            };
-        }
     };
 
     // unique
@@ -344,7 +341,12 @@ pub const Type = union(enum) {
             .set => |set| Self{ .set = try set.clone(ally) },
             .atom => |name| Self{ .atom = name },
             .tuple => |tup| Self{ .tuple = try ally.dupe(TypeId, tup) },
-            .func => |func| Self{ .func = try func.clone(ally) },
+            .func => |func| Self{
+                .func = Func{
+                    .takes = try ally.dupe(TypeId, func.takes),
+                    .returns = func.returns,
+                },
+            },
         };
     }
 
