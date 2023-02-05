@@ -138,7 +138,10 @@ pub const Form = enum {
                 .not,
             };
 
-            const pairs = .{
+            const pairs = @as([]const struct {
+                @"0": Form,
+                @"1": []const u8,
+            }, &.{
                 .{ .file, "ns" },
 
                 .{ .coll, "array" },
@@ -157,8 +160,8 @@ pub const Form = enum {
                 .{ .ge, ">=" },
                 .{ .le, "<=" },
 
-                .{ .arrow, "->" },
-            };
+                .{ .arrow, "Fn" },
+            });
 
             // strings -> symbols
             const LPair = struct {
@@ -168,8 +171,8 @@ pub const Form = enum {
 
             var data: [pairs.len + by_name.len]LPair = undefined;
             for (pairs) |pair, i| {
-                data[i].@"0" = @tagName(@as(Form, pair[0]));
-                data[i].@"1" = Symbol.init(pair[1]);
+                data[i].@"0" = @tagName(@as(Form, pair.@"0"));
+                data[i].@"1" = Symbol.init(pair.@"1");
             }
 
             for (by_name) |form, i| {

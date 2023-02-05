@@ -467,5 +467,9 @@ pub fn parse(
     };
 
     // postprocess and return
+    stdout.writeAll("[before desugaring]\n") catch {};
+    kz.display(ally, proj, expr, stdout) catch {};
+    stdout.writeAll("\n") catch {};
+
     return try desugar(ally, proj, expr);
 }

@@ -40,20 +40,48 @@ fn verify(ally: Allocator, expr: RawExpr) Allocator.Error!CheckResult {
     return CheckResult.ok({});
 }
 
+fn desugarChildrenOf(
+    ally: Allocator,
+    proj: Project,
+    expr: RawExpr,
+) Allocator.Error!Result {
+    for (expr.exprs) |*child| {
+        const res = try desugarExpr(ally, proj, child.*);
+        child.* = res.get() orelse return res;
+    }
+
+    return Result.ok(expr);
+}
+
 fn desugarExpr(
     ally: Allocator,
     proj: Project,
     expr: RawExpr,
 ) Allocator.Error!Result {
     // do special desugaring rules
-    const desugared = switch (expr.form) {
-        .kv => RawExpr{
+    switch (expr.form) {
+        .kv => return desugarChildrenOf(ally, proj, RawExpr{
             .loc = expr.loc,
             .form = .tuple,
             .exprs = expr.exprs,
+        }),
+        .arrow => {
+            const lhs = expr.exprs[0];
+
+            // replace parameters with the address of the parameters
+            const params = try ally.alloc(RawExpr, 1);
+            params[0] = lhs;
+
+            expr.exprs[0] = RawExpr{
+                .form = .addr,
+                .loc = lhs.loc,
+                .exprs = params,
+            };
+
+            return desugarChildrenOf(ally, proj, expr);
         },
         // sequences get collected so they are more intuitive to work with
-        inline .comma, .stmt => |tag| seq: {
+        inline .comma, .stmt => |tag| {
             const seq_form = switch (tag) {
                 .comma => .comma,
                 .stmt => .block,
@@ -78,13 +106,17 @@ fn desugarExpr(
                 ally.free(rhs.exprs);
             }
 
-            break :seq RawExpr{
+            return desugarChildrenOf(ally, proj, RawExpr{
                 .loc = expr.loc,
                 .form = seq_form,
                 .exprs = coll.toOwnedSlice(),
-            };
+            });
         },
-        inline .parens, .coll => |tag| coll: {
+        inline .parens, .coll => |tag| {
+            stderr.writeAll("[desugaring collected]\n") catch {};
+            @import("kritzler").display(ally, proj, expr, stderr) catch {};
+            stderr.writeAll("\n") catch {};
+
             if (expr.exprs.len == 0) {
                 const empty_form = switch (tag) {
                     .parens => .unit,
@@ -92,10 +124,10 @@ fn desugarExpr(
                     else => unreachable,
                 };
 
-                break :coll RawExpr{
+                return Result.ok(RawExpr{
                     .loc = expr.loc,
                     .form = empty_form,
-                };
+                });
             } else {
                 std.debug.assert(expr.exprs.len == 1);
 
@@ -105,10 +137,10 @@ fn desugarExpr(
                 if (inner.form != .comma) {
                     if (tag == .parens) {
                         ally.free(expr.exprs);
-                        break :coll inner;
+                        return Result.ok(inner);
                     }
 
-                    break :coll expr;
+                    return Result.ok(expr);
                 }
 
                 ally.free(expr.exprs);
@@ -119,23 +151,15 @@ fn desugarExpr(
                     else => unreachable,
                 };
 
-                break :coll RawExpr{
+                return Result.ok(RawExpr{
                     .loc = expr.loc,
                     .form = coll_form,
                     .exprs = inner.exprs,
-                };
+                });
             }
         },
-        else => expr,
-    };
-
-    // desugar children
-    for (desugared.exprs) |*child| {
-        const res = try desugarExpr(ally, proj, child.*);
-        child.* = res.get() orelse return res;
+        else => return desugarChildrenOf(ally, proj, expr),
     }
-
-    return Result.ok(desugared);
 }
 
 pub fn desugar(
