@@ -14,7 +14,13 @@ const SExpr = @import("backend.zig").SExpr;
 const Result = Message.Result(SExpr);
 
 fn numberError(ally: Allocator, loc: Loc) Allocator.Error!Result {
-    return try Message.err(ally, SExpr, loc, "malformed number literal", .{});
+    return Result.err(try Message.print(
+        ally,
+        .@"error",
+        loc,
+        "malformed number literal",
+        .{},
+    ));
 }
 
 fn translateNumber(
@@ -37,8 +43,13 @@ fn translateNumber(
         for (valid_bits) |valid| {
             if (bits == valid) break;
         } else {
-            const text = "invalid number width";
-            return try Message.err(ally, SExpr, loc, text, .{});
+            return Result.err(try Message.print(
+                ally,
+                .@"error",
+                loc,
+                "invalid number of bits",
+                .{},
+            ));
         }
     }
 

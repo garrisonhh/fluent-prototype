@@ -6,9 +6,19 @@ const builtin = @import("builtin");
 const Env = @import("../env.zig");
 const TExpr = @import("../texpr.zig");
 const com = @import("common");
+const Loc = com.Loc;
 const Message = com.Message;
 
 const Result = Message.Result(void);
+
+fn err(
+    ally: Allocator,
+    loc: ?Loc,
+    comptime fmt: []const u8,
+    args: anytype,
+) Allocator.Error!Result {
+    return Result.err(try Message.print(ally, .@"error", loc, fmt, args));
+}
 
 /// flattens `do` blocks with one expression into the expression
 fn pruneDoBlocks(env: Env, texpr: *TExpr) void {
@@ -37,8 +47,12 @@ fn verifyDynamic(env: Env, texpr: TExpr) Allocator.Error!Result {
         const ty_text = try texpr.ty.writeAlloc(env.ally, env.tw);
         defer env.ally.free(ty_text);
 
-        const fmt = "inferred type `{s}`, which cannot be executed";
-        return try Message.err(env.ally, void, texpr.loc, fmt, .{ty_text});
+        return try err(
+            env.ally,
+            texpr.loc,
+            "inferred type `{s}`, which cannot be executed",
+            .{ty_text},
+        );
     }
 
     for (texpr.getChildren()) |child| {
@@ -94,8 +108,12 @@ fn removeTrivialCasts(env: Env, texpr: *TExpr) void {
 
 fn identifyLeftovers(ally: Allocator, texpr: TExpr) Allocator.Error!Result {
     if (texpr.isBuiltin(.pie_stone)) {
-        const fmt = "found pie stone in expr after sema.";
-        return try Message.err(ally, void, texpr.loc, fmt, .{});
+        return try err(
+            ally,
+            texpr.loc,
+            "found pie stone in expr after sema.",
+            .{},
+        );
     }
 
     for (texpr.getChildren()) |child| {

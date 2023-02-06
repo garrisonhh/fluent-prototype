@@ -22,12 +22,21 @@ pub const SemaError = eval.Error;
 
 const Result = Message.Result(TExpr);
 
+fn err(
+    ally: Allocator,
+    loc: ?Loc,
+    comptime fmt: []const u8,
+    args: anytype,
+) Allocator.Error!Result {
+    return Result.err(try Message.print(ally, .@"error", loc, fmt, args));
+}
+
 fn holeError(env: Env, loc: ?Loc, ty: TypeId) Allocator.Error!Result {
     const ty_text = try ty.writeAlloc(env.ally, env.tw);
     defer env.ally.free(ty_text);
 
     const fmt = "this hole expects {s}";
-    return try Message.err(env.ally, TExpr, loc, fmt, .{ty_text});
+    return try err(env.ally, loc, fmt, .{ty_text});
 }
 
 fn expectError(
@@ -42,13 +51,7 @@ fn expectError(
     defer env.ally.free(found_text);
 
     const fmt = "expected {s}, found {s}";
-    return try Message.err(
-        env.ally,
-        TExpr,
-        loc,
-        fmt,
-        .{ exp_text, found_text },
-    );
+    return try err(env.ally, loc, fmt, .{ exp_text, found_text });
 }
 
 fn wrongNArgsError(
@@ -58,16 +61,7 @@ fn wrongNArgsError(
     found: usize,
 ) SemaError!Result {
     const fmt = "expected {} parameters, found {}";
-    return try Message.err(ally, TExpr, loc, fmt, .{ expected, found });
-}
-
-fn typeOfNumber(env: *Env, num: Number) SemaError!TypeId {
-    return try env.identify(Type{
-        .number = .{
-            .bits = num.bits,
-            .layout = num.data,
-        },
-    });
+    return try err(ally, loc, fmt, .{ expected, found });
 }
 
 fn analyzeSymbol(
@@ -87,7 +81,7 @@ fn analyzeSymbol(
     var name: Name = undefined;
     const ty = if (env.seek(scope, symbol, &name)) |value| value.ty else {
         const fmt = "unknown symbol `{}`";
-        return try Message.err(env.ally, TExpr, expr.loc, fmt, .{symbol});
+        return try err(env.ally, expr.loc, fmt, .{symbol});
     };
 
     const inner_expr = TExpr.init(expr.loc, false, ty, .{ .name = name });
@@ -104,7 +98,7 @@ fn analyzeAs(
 
     if (exprs.len != 3) {
         const fmt = "`as` expression requires a type and a body";
-        return try Message.err(env.ally, TExpr, expr.loc, fmt, .{});
+        return try err(env.ally, expr.loc, fmt, .{});
     }
 
     const type_expr = exprs[1];
@@ -135,7 +129,7 @@ fn analyzeAddrOf(
 
     if (exprs.len != 2) {
         const fmt = "`&` expression expects a single argument";
-        return try Message.err(ally, TExpr, expr.loc, fmt, .{});
+        return try err(ally, expr.loc, fmt, .{});
     }
 
     // analyze subexpr with any expectations I can pass through
@@ -170,7 +164,7 @@ fn analyzeDo(
     // verify form
     if (exprs.len < 2) {
         const fmt = "`do` block requires at least one expression";
-        return try Message.err(ally, TExpr, expr.loc, fmt, .{});
+        return try err(ally, expr.loc, fmt, .{});
     }
 
     const texprs = try env.ally.alloc(TExpr, exprs.len);
@@ -217,7 +211,7 @@ fn analyzeIf(
     // verify form
     if (exprs.len != 4) {
         const fmt = "`if` statement requires a condition and two branches";
-        return try Message.err(ally, TExpr, expr.loc, fmt, .{});
+        return try err(ally, expr.loc, fmt, .{});
     }
 
     // analyze children
@@ -281,17 +275,17 @@ fn analyzeArray(
 fn filterDefError(
     ally: Allocator,
     loc: Loc,
-    err: (SemaError || Env.DefError),
+    from_err: (SemaError || Env.DefError),
 ) SemaError!Result {
-    return switch (err) {
+    return switch (from_err) {
         error.NameNoRedef => unreachable,
         error.NameTooLong => err: {
             const fmt = "name is nested too deeply in namespaces";
-            break :err try Message.err(ally, TExpr, loc, fmt, .{});
+            break :err try err(ally, loc, fmt, .{});
         },
         error.NameRedef, error.RenamedType => err: {
             const fmt = "this name already exists";
-            break :err try Message.err(ally, TExpr, loc, fmt, .{});
+            break :err try err(ally, loc, fmt, .{});
         },
         else => |e| @errSetCast(SemaError, e),
     };
@@ -317,7 +311,7 @@ fn firstDefPass(
     // check syntax form
     if (args.len != 3) {
         const fmt = "`def` expression requires a name, a type, and a body";
-        return try Message.err(env.ally, DeferredDef, expr.loc, fmt, .{});
+        return (try err(env.ally, expr.loc, fmt, .{})).cast(DeferredDef);
     }
 
     const name_expr = args[0];
@@ -326,7 +320,7 @@ fn firstDefPass(
 
     if (name_expr.data != .symbol) {
         const fmt = "expected identifier";
-        return try Message.err(env.ally, DeferredDef, name_expr.loc, fmt, .{});
+        return (try err(env.ally, name_expr.loc, fmt, .{})).cast(DeferredDef);
     }
 
     const symbol = name_expr.data.symbol;
@@ -362,7 +356,7 @@ fn analyzeNamespace(
     // check syntax form
     if (args.len < 1) {
         const fmt = "`ns` expression requires a name";
-        return try Message.err(ally, TExpr, expr.loc, fmt, .{});
+        return try err(ally, expr.loc, fmt, .{});
     }
 
     const name_expr = args[0];
@@ -370,7 +364,7 @@ fn analyzeNamespace(
 
     if (name_expr.data != .symbol) {
         const fmt = "expected identifier";
-        return try Message.err(ally, TExpr, name_expr.loc, fmt, .{});
+        return try err(ally, name_expr.loc, fmt, .{});
     }
 
     // create ns
@@ -387,14 +381,14 @@ fn analyzeNamespace(
         // verify that this is a def
         if (def_expr.data != .call or def_expr.data.call.len == 0) {
             const fmt = "expected def";
-            return try Message.err(ally, TExpr, def_expr.loc, fmt, .{});
+            return try err(ally, def_expr.loc, fmt, .{});
         }
 
         const head = def_expr.data.call[0];
         const def_sym = comptime Symbol.init("def");
         if (head.data != .symbol or !head.data.symbol.eql(def_sym)) {
             const fmt = "expected def";
-            return try Message.err(ally, TExpr, head.loc, fmt, .{});
+            return try err(ally, head.loc, fmt, .{});
         }
 
         // do first pass
@@ -441,7 +435,7 @@ fn analyzeRecur(
 
         name = name.drop() orelse {
             const fmt = "expected def";
-            return try Message.err(ally, TExpr, expr.loc, fmt, .{});
+            return try err(ally, expr.loc, fmt, .{});
         };
     };
 
@@ -486,7 +480,7 @@ fn analyzeBuiltinCall(
         .def => def: {
             const fmt =
                 "`def` declarations can only exist inside of a namespace.";
-            break :def try Message.err(env.ally, TExpr, expr.loc, fmt, .{});
+            break :def try err(env.ally, expr.loc, fmt, .{});
         },
         .do => try analyzeDo(env, scope, expr, outward),
         .ns => try analyzeNamespace(env, scope, expr, outward),
@@ -517,7 +511,7 @@ fn analyzeLambda(
 
     if (exprs.len != 3) {
         const fmt = "`lambda` requires parameters and a single body expression";
-        return try Message.err(env.ally, TExpr, expr.loc, fmt, .{});
+        return try err(env.ally, expr.loc, fmt, .{});
     }
 
     if (builtin.mode == .Debug) {
@@ -529,7 +523,7 @@ fn analyzeLambda(
     if (false) {
         const fmt = "`lambda` requires parameters";
         const loc = params_expr.loc;
-        return try Message.err(env.ally, TExpr, loc, fmt, .{});
+        return try err(env.ally, loc, fmt, .{});
     }
 
     const params = params_expr.data.array;
@@ -553,7 +547,7 @@ fn analyzeLambda(
     for (params) |param, i| {
         if (param.data != .symbol) {
             const fmt = "`fn` parameters should be symbols";
-            return try Message.err(env.ally, TExpr, param.loc, fmt, .{});
+            return try err(env.ally, param.loc, fmt, .{});
         }
 
         // define parameter
@@ -627,7 +621,7 @@ fn analyzeCall(
         defer ally.free(ty_text);
 
         const fmt = "expected function, found {s}";
-        return try Message.err(ally, TExpr, texprs[0].loc, fmt, .{ty_text});
+        return try err(ally, texprs[0].loc, fmt, .{ty_text});
     }
 
     // analyze tail with fn param expectations
@@ -652,25 +646,14 @@ fn analyzeCall(
     return try coerce(env, texpr, outward);
 }
 
-/// given a TExpr, ensure that it will properly coerce to its expectation
+/// given a ensure that it will properly coerce to its expectation
 ///
 /// this will either:
 /// a) do nothing (return the same expr)
 /// b) make an implicit cast explicit
 /// c) find that an expectation was violated and produce a nice error message
 fn coerce(env: *Env, texpr: TExpr, outward: TypeId) SemaError!Result {
-    const stderr = std.io.getStdErr().writer();
-
-    {
-        stderr.writeAll("[coerce] ") catch {};
-        texpr.ty.write(env.ally, env.tw, stderr) catch {};
-        stderr.writeAll(" -> ") catch {};
-        outward.write(env.ally, env.tw, stderr) catch {};
-        stderr.writeAll(" ? ") catch {};
-    }
-
     if (texpr.ty.eql(outward)) {
-        stderr.writeAll("EQUAL\n") catch {};
         return Result.ok(texpr);
     }
 
@@ -681,7 +664,6 @@ fn coerce(env: *Env, texpr: TExpr, outward: TypeId) SemaError!Result {
     if (try inner.coercesTo(env.ally, &env.tw, outer.*)) {
         if (outer.* == .any or outer.* == .set) {
             // within set
-            stderr.writeAll("WITHIN SET\n") catch {};
             return Result.ok(texpr);
         } else {
             // cast is possible
@@ -694,13 +676,11 @@ fn coerce(env: *Env, texpr: TExpr, outward: TypeId) SemaError!Result {
                 &[2]TExpr{ cast, texpr },
             );
 
-            stderr.writeAll("CAST\n") catch {};
             return Result.ok(final);
         }
     }
 
     // no coercion :(
-    stderr.writeAll("NO DEAL\n") catch {};
     return expectError(env.*, texpr.loc, outward, texpr.ty);
 }
 
@@ -715,7 +695,12 @@ fn analyzeExpr(
         .symbol => try analyzeSymbol(env, scope, expr, outward),
         inline .number, .string => |data, tag| lit: {
             const ty = switch (comptime tag) {
-                .number => try typeOfNumber(env, data),
+                .number => try env.identify(Type{
+                    .number = .{
+                        .bits = data.bits,
+                        .layout = data.data,
+                    },
+                }),
                 // string literals are (Array N u8)
                 .string => try env.identify(Type{
                     .array = Type.Array{
@@ -749,8 +734,8 @@ pub fn analyze(
     const res = try analyzeExpr(env, scope, expr, expects);
     var texpr = res.get() orelse return res;
 
-    const pp = try postprocess(env, &texpr);
-    pp.get() orelse return pp.cast(TExpr);
-
-    return Result.ok(texpr);
+    return switch (try postprocess(env, &texpr)) {
+        .ok => Result.ok(texpr),
+        .err => |msg| Result.err(msg),
+    };
 }

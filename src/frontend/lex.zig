@@ -231,9 +231,13 @@ pub fn tokenize(
     lex(&lexer, &tokens, file) catch |e| switch (e) {
         Error.OutOfMemory => return Error.OutOfMemory,
         Error.InvalidCharacter => {
-            const loc = here(lexer, file, 0);
-            const fmt = "invalid character";
-            return try Message.err(ally, []Token, loc, fmt, .{});
+            return Result.err(try Message.print(
+                ally,
+                .@"error",
+                here(lexer, file, 0),
+                "invalid character",
+                .{},
+            ));
         },
     };
 

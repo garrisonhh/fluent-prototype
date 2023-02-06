@@ -254,11 +254,12 @@ pub fn render(
 
     // other inline header stuff
     const data = switch (self.data) {
-        .call, .array, .slice, .ptr, .func => try ctx.print(
-            .{},
-            "{s}",
-            .{@tagName(self.data)},
-        ),
+        .call,
+        .array,
+        .slice,
+        .ptr,
+        .func,
+        => try ctx.print(.{}, "{s}", .{@tagName(self.data)}),
         .unit => try ctx.print(.{}, "()", .{}),
         .func_ref => |fr| try ctx.slap(
             try ctx.print(.{}, "&func ", .{}),
@@ -268,7 +269,7 @@ pub fn render(
         ),
         .param => |p| try ctx.print(
             .{},
-            "parameter {d} of {}",
+            "parameter {d} of function {}",
             .{ p.index, p.func },
         ),
         .ty => |ty| ty: {

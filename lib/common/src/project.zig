@@ -278,18 +278,6 @@ pub const Message = struct {
         };
     }
 
-    /// TODO remove this, it's too much. use local helpers instead.
-    pub fn err(
-        ally: Allocator,
-        comptime T: type,
-        loc: ?Loc,
-        comptime fmt: []const u8,
-        args: anytype,
-    ) Allocator.Error!Message.Result(T) {
-        const msg = try print(ally, .@"error", loc, fmt, args);
-        return Message.Result(T).err(msg);
-    }
-
     pub fn deinit(self: Self, ally: Allocator) void {
         ally.free(self.text);
     }

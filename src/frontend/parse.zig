@@ -88,7 +88,7 @@ fn parseError(
     comptime fmt: []const u8,
     args: anytype,
 ) Allocator.Error!Result {
-    return try Message.err(ally, RawExpr, loc, fmt, args);
+    return Result.err(try Message.print(ally, .@"error", loc, fmt, args));
 }
 
 fn streamError(
