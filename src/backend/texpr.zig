@@ -11,10 +11,9 @@ const Symbol = com.Symbol;
 const Name = com.Name;
 const Loc = com.Loc;
 const kz = @import("kritzler");
-const types = @import("types.zig");
-const TypeId = types.TypeId;
 const Env = @import("env.zig");
 const canon = @import("canon.zig");
+const TypeId = canon.TypeId;
 const Builtin = canon.Builtin;
 const ssa = @import("ssa/ssa.zig");
 const FuncRef = ssa.FuncRef;
@@ -241,18 +240,11 @@ pub fn render(
     env: Env,
 ) Allocator.Error!kz.Ref {
     const INDENT = 2;
-    const faint = kz.Style{ .special = .faint };
     const magenta = kz.Style{ .fg = .magenta };
     const green = kz.Style{ .fg = .green };
     const red = kz.Style{ .fg = .red };
 
-    // type for header
-    const ty_text = try env.tw.get(self.ty).writeAlloc(ctx.ally, env.tw);
-    defer ctx.ally.free(ty_text);
-
-    const ty_tex = try ctx.print(faint, "{s}", .{ty_text});
-
-    // other inline header stuff
+    // inline header stuff
     const data = switch (self.data) {
         .call,
         .array,
@@ -272,11 +264,7 @@ pub fn render(
             "parameter {d} of function {}",
             .{ p.index, p.func },
         ),
-        .ty => |ty| ty: {
-            const str = try env.tw.get(ty).writeAlloc(ctx.ally, env.tw);
-            defer ctx.ally.free(str);
-            break :ty try ctx.print(green, "{s}", .{str});
-        },
+        .ty => |ty| try ty.render(ctx, env.tw),
         .@"bool" => |val| try ctx.print(magenta, "{}", .{val}),
         .number => |num| try ctx.print(magenta, "{}", .{num}),
         .string => |str| try ctx.print(green, "\"{}\"", .{str}),
@@ -285,6 +273,12 @@ pub fn render(
     };
 
     // header
+    const ty_tex = try ctx.stack(&.{
+        try ctx.print(.{}, "<", .{}),
+        try self.ty.render(ctx, env.tw),
+        try ctx.print(.{}, ">", .{}),
+    }, .right, .{});
+
     const header = try ctx.slap(ty_tex, data, .right, .{ .space = 1 });
 
     // any children

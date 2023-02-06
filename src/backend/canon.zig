@@ -1,4 +1,6 @@
-//! canonical data representation for the bytecode model
+//! canon provides:
+//! - canonical data representation for the bytecode model
+//! - data structures relied upon throughout the compiler
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -6,6 +8,9 @@ const builtin = @import("builtin");
 pub const Number = @import("canon/number.zig");
 pub const Builtin = @import("canon/builtins.zig").Builtin;
 pub const Value = @import("canon/value.zig");
+pub const TypeWelt = @import("canon/typewelt.zig");
+pub const TypeId = TypeWelt.TypeId;
+pub const Type = @import("canon/type.zig").Type;
 pub usingnamespace @import("canon/prelude.zig");
 pub usingnamespace @import("canon/fluency.zig");
 

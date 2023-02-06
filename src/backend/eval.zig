@@ -10,15 +10,14 @@ const Message = com.Message;
 const TExpr = @import("texpr.zig");
 const SExpr = @import("sexpr.zig");
 const Env = @import("env.zig");
-const types = @import("types.zig");
-const Type = types.Type;
-const TypeId = types.TypeId;
 const analyze = @import("sema.zig").analyze;
 const lower = @import("lower.zig").lower;
 const compile = @import("compile.zig").compile;
 const run = @import("bytecode/vm.zig").run;
 const canon = @import("canon.zig");
 const Value = canon.Value;
+const Type = canon.Type;
+const TypeId = canon.TypeId;
 
 pub const Error =
     std.mem.Allocator.Error || canon.ResError || @TypeOf(stdout).Error;

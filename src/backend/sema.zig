@@ -6,13 +6,12 @@ const Symbol = com.Symbol;
 const Name = com.Name;
 const Loc = com.Loc;
 const Message = com.Message;
-const types = @import("types.zig");
-const TypeId = types.TypeId;
-const Type = types.Type;
 const Env = @import("env.zig");
 const SExpr = @import("sexpr.zig");
 const TExpr = @import("texpr.zig");
 const canon = @import("canon.zig");
+const TypeId = canon.TypeId;
+const Type = canon.Type;
 const Number = canon.Number;
 const Builtin = canon.Builtin;
 const eval = @import("eval.zig");
@@ -32,7 +31,7 @@ fn err(
 }
 
 fn holeError(env: Env, loc: ?Loc, ty: TypeId) Allocator.Error!Result {
-    const ty_text = try ty.writeAlloc(env.ally, env.tw);
+    const ty_text = try ty.toString(env.ally, env.tw);
     defer env.ally.free(ty_text);
 
     const fmt = "this hole expects {s}";
@@ -45,9 +44,9 @@ fn expectError(
     expected: TypeId,
     found: TypeId,
 ) Allocator.Error!Result {
-    const exp_text = try expected.writeAlloc(env.ally, env.tw);
+    const exp_text = try expected.toString(env.ally, env.tw);
     defer env.ally.free(exp_text);
-    const found_text = try found.writeAlloc(env.ally, env.tw);
+    const found_text = try found.toString(env.ally, env.tw);
     defer env.ally.free(found_text);
 
     const fmt = "expected {s}, found {s}";
@@ -617,7 +616,7 @@ fn analyzeCall(
     // get called expr type, ensure it is a function
     const fn_ty = env.tw.get(texprs[0].ty);
     if (fn_ty.* != .func) {
-        const ty_text = try fn_ty.writeAlloc(ally, env.tw);
+        const ty_text = try fn_ty.toString(ally, env.tw);
         defer ally.free(ty_text);
 
         const fmt = "expected function, found {s}";

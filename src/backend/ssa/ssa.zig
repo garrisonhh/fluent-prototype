@@ -12,8 +12,8 @@ const kz = @import("kritzler");
 const com = @import("common");
 const Name = com.Name;
 const builtin = @import("builtin");
-const types = @import("../types.zig");
-const TypeId = types.TypeId;
+const canon = @import("../canon.zig");
+const TypeId = canon.TypeId;
 const Env = @import("../env.zig");
 const TExpr = @import("../texpr.zig");
 
@@ -598,13 +598,12 @@ pub const Func = struct {
         local: Local,
     ) !kz.Ref {
         const ty = self.locals.items[local.index];
-        const ty_text = try ty.writeAlloc(ctx.ally, env.tw);
-        defer ctx.ally.free(ty_text);
-
-        const ty_tex = try ctx.print(.{ .fg = .green }, "{s}", .{ty_text});
-        const var_tex = try ctx.print(.{}, "%{}", .{local.index});
-
-        return try ctx.slap(ty_tex, var_tex, .right, .{ .space = 1 });
+        return try ctx.slap(
+            try ty.render(ctx, env.tw),
+            try ctx.print(.{}, "%{}", .{local.index}),
+            .right,
+            .{ .space = 1 },
+        );
     }
 
     fn renderParams(
@@ -770,12 +769,7 @@ pub const Func = struct {
         }
 
         // return type
-        const returns = try self.returns.writeAlloc(ctx.ally, env.tw);
-        defer ctx.ally.free(returns);
-
-        try header_texs.appendSlice(&.{
-            try ctx.print(.{ .fg = .green }, "{s}", .{returns}),
-        });
+        try header_texs.append(try self.returns.render(ctx, env.tw));
 
         const header = try ctx.stack(header_texs.items, .right, .{});
 

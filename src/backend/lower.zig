@@ -11,12 +11,11 @@ const Op = ssa.Op;
 const Label = ssa.Label;
 const Func = ssa.Func;
 const FuncRef = ssa.FuncRef;
-const types = @import("types.zig");
-const TypeId = types.TypeId;
-const Type = types.Type;
 const Env = @import("env.zig");
 const TExpr = @import("texpr.zig");
 const canon = @import("canon.zig");
+const TypeId = canon.TypeId;
+const Type = canon.Type;
 const Builtin = canon.Builtin;
 
 pub const Error = Allocator.Error;

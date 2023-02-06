@@ -44,7 +44,7 @@ fn verifyDynamic(env: Env, texpr: TExpr) Allocator.Error!Result {
     const class = env.tw.get(texpr.ty).classifyRuntime(env.tw);
 
     if (class == .analysis) {
-        const ty_text = try texpr.ty.writeAlloc(env.ally, env.tw);
+        const ty_text = try texpr.ty.toString(env.ally, env.tw);
         defer env.ally.free(ty_text);
 
         return try err(

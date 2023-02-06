@@ -346,6 +346,31 @@ pub fn stack(
     };
 }
 
+/// reduce a series of slaps with a separator
+///
+/// all refs are dropped
+pub fn sep(
+    self: *Self,
+    separator: Ref,
+    refs: []const Ref,
+    dir: SlapDirection,
+    opt: SlapOpt,
+) Allocator.Error!Ref {
+    defer self.drop(separator);
+
+    if (refs.len == 0) {
+        return try self.stub();
+    }
+
+    var tex = refs[0];
+    for (refs[1..]) |ref| {
+        tex = try self.slap(tex, try self.clone(separator), dir, opt);
+        tex = try self.slap(tex, ref, dir, opt);
+    }
+
+    return tex;
+}
+
 // displaying chunks ===========================================================
 
 const WriteBuffer = struct {

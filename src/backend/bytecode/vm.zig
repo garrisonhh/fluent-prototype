@@ -5,11 +5,10 @@ const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const now = @import("common").now;
 const Program = @import("bytecode.zig").Program;
-const types = @import("../types.zig");
-const Type = types.Type;
-const TypeId = types.TypeId;
 const Env = @import("../env.zig");
 const canon = @import("../canon.zig");
+const Type = canon.Type;
+const TypeId = canon.TypeId;
 
 const Self = @This();
 

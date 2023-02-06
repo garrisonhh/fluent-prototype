@@ -2,14 +2,15 @@
 //! Fluent data
 
 const std = @import("std");
+const stderr = std.io.getStdErr().writer();
 const Allocator = std.mem.Allocator;
+const kz = @import("kritzler");
 const com = @import("common");
 const Loc = com.Loc;
 const TExpr = @import("../texpr.zig");
 const Env = @import("../env.zig");
-const types = @import("../types.zig");
-const TypeId = types.TypeId;
 const canon = @import("../canon.zig");
+const TypeId = canon.TypeId;
 const Number = canon.Number;
 const Value = canon.Value;
 const BcRef = @import("../bytecode/bytecode.zig").InstRef;
@@ -208,12 +209,9 @@ pub fn resurrect(
             break :func TExpr.Data{ .func_ref = env.lowered.get(bc).? };
         },
         else => {
-            const text = tid.writeAlloc(ally, env.tw) catch {
-                @panic("writeAlloc failed.");
-            };
-            defer ally.free(text);
-
-            std.debug.panic("TODO resurrect type {s}", .{text});
+            stderr.writeAll("TODO resurrect type:\n") catch {};
+            kz.display(ally, env.tw, ty, stderr) catch {};
+            @panic("^");
         },
     };
 

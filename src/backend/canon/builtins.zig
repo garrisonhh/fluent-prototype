@@ -37,4 +37,5 @@ pub const Builtin = enum {
     // type operators
     slice_ty,
     fn_ty,
+    tuple_ty,
 };

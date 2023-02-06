@@ -14,10 +14,6 @@ pub fn display(
     target: anytype,
     writer: anytype,
 ) (Allocator.Error || @TypeOf(writer).Error)!void {
-    if (!@hasDecl(@TypeOf(target), "render")) {
-        @compileError("target does not have a public render function.");
-    }
-
     var ctx = Context.init(ally);
     defer ctx.deinit();
 

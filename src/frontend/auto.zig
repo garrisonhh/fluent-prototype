@@ -149,7 +149,6 @@ pub const Form = enum {
                 .{ .file, "ns" },
 
                 .{ .coll, "array" },
-                .{ .slice, "Slice" },
                 .{ .addr, "&" },
 
                 .{ .add, "+" },
@@ -167,6 +166,7 @@ pub const Form = enum {
                 .{ .le, "<=" },
 
                 .{ .arrow, "Fn" },
+                .{ .slice, "Slice" },
             });
 
             // strings -> symbols

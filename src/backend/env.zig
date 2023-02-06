@@ -22,10 +22,6 @@ const Name = com.Name;
 const NameMap = com.NameMap;
 const Loc = com.Loc;
 const kz = @import("kritzler");
-const types = @import("types.zig");
-const TypeWelt = types.TypeWelt;
-const TypeId = types.TypeId;
-const Type = types.Type;
 const TExpr = @import("texpr.zig");
 const ssa = @import("ssa/ssa.zig");
 const SsaProgram = ssa.Program;
@@ -36,6 +32,9 @@ const BcRef = compile.InstRef;
 const Vm = @import("bytecode/vm.zig");
 const Program = @import("bytecode/bytecode.zig").Program;
 const canon = @import("canon.zig");
+const Type = canon.Type;
+const TypeId = canon.TypeId;
+const TypeWelt = canon.TypeWelt;
 
 const Self = @This();
 
@@ -216,16 +215,21 @@ pub fn dump(self: *Self, ally: Allocator, writer: anytype) !void {
     var decls = std.ArrayList(kz.Ref).init(ally);
     defer decls.deinit();
 
-    const eq = try ctx.print(.{}, " = ", .{});
+    const eq = try ctx.print(.{}, "=", .{});
     defer ctx.drop(eq);
 
     const entries = try self.nmap.getSortedEntries(ally);
     defer ally.free(entries);
     for (entries) |entry| {
-        const name = try renderName(&ctx, entry.key.*);
-        const pred = try ctx.slap(name, try ctx.clone(eq), .right, .{});
-        const value = try entry.value.render(&ctx, self.*);
-        const decl = try ctx.slap(pred, value, .right, .{});
+        const decl = try ctx.stack(
+            &.{
+                try renderName(&ctx, entry.key.*),
+                try ctx.clone(eq),
+                try entry.value.render(&ctx, self.*),
+            },
+            .right,
+            .{ .space = 1 },
+        );
 
         try decls.append(decl);
     }

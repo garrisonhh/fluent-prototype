@@ -4,9 +4,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const com = @import("common");
 const Symbol = com.Symbol;
-const types = @import("../types.zig");
-const Type = types.Type;
-const TypeId = types.TypeId;
+const TypeWelt = @import("typewelt.zig");
+const TypeId = TypeWelt.TypeId;
+const Type = @import("type.zig").Type;
 const Env = @import("../env.zig");
 const TExpr = @import("../texpr.zig");
 const Builtin = @import("../canon.zig").Builtin;
@@ -159,6 +159,7 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
 
     const type_slice_ty = try env.identify(Type.initPtr(.slice, @"type"));
     const fn_ty = try fnType(&env, &.{ type_slice_ty, @"type" }, @"type");
+    const tuple_ty = try fnType(&env, &.{type_slice_ty}, @"type");
 
     try defBuiltin(&env, "ns", flbuiltin, .ns);
     try defBuiltin(&env, "def", flbuiltin, .def);
@@ -183,8 +184,9 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     try defBuiltin(&env, "or", bin_cond, .@"or");
     try defBuiltin(&env, "not", un_cond, .not);
 
-    try defBuiltin(&env, "Slice", un_ty, .slice_ty);
     try defBuiltin(&env, "Fn", fn_ty, .fn_ty);
+    try defBuiltin(&env, "Slice", un_ty, .slice_ty);
+    try defBuiltin(&env, "Tuple", tuple_ty, .tuple_ty);
 
     return env;
 }
