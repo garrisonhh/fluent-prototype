@@ -127,6 +127,8 @@ pub const Form = enum {
     }
 
     /// the name of the form as a builtin (if it exists)
+    ///
+    /// these are used for translating RawExpr forms
     pub fn builtin(self: Form) ?Symbol {
         const builtin_map = comptime map: {
             const by_name = [_]Form{

@@ -69,10 +69,9 @@ fn lowerOperator(
 
     // generate operation
     return switch (b) {
-        // binary ops
         // zig fmt: off
         inline .eq, .add, .sub, .mul, .div, .mod, .shl, .shr, .@"and", .@"or",
-        .fn_ty, .not, .cast, .slice_ty,
+        .not, .cast, .slice_ty, .fn_ty,
         // zig fmt: on
         => |tag| op: {
             // TODO make sure this is checked in sema
@@ -264,7 +263,7 @@ fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
             .recur => unreachable,
             // zig fmt: off
             .eq, .add, .sub, .mul, .div, .mod, .shl, .shr, .@"and", .@"or",
-            .not, .cast, .slice_ty, .fn_ty,
+            .not, .cast, .slice_ty, .fn_ty, .tuple_ty
             // zig fmt: on
             => |b| {
                 const tail = expr.data.call[1..];

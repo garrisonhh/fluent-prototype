@@ -9,6 +9,7 @@ pub const Builtin = enum {
 
     // data
     array,
+    tuple,
 
     // control flow
     lambda,

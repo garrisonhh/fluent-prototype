@@ -6,6 +6,7 @@ const com = @import("common");
 const Name = com.Name;
 const TypeWelt = @import("typewelt.zig");
 const TypeId = TypeWelt.TypeId;
+const Repr = @import("repr.zig").Repr;
 
 pub const Type = union(enum) {
     const Self = @This();
@@ -333,21 +334,6 @@ pub const Type = union(enum) {
 
                 break :func RuntimeClass.peerClassifyList(&reqs);
             },
-        };
-    }
-
-    /// provides a size for dynamic and static types
-    pub fn sizeOf(self: Self, tw: TypeWelt) usize {
-        std.debug.assert(self.classifyRuntime(tw) != .analysis);
-
-        return switch (self) {
-            .any, .set, .hole, .namespace => unreachable,
-            .unit => 0,
-            .@"bool" => 1,
-            .number => |num| (num.bits orelse 64) / 8,
-            .ty, .builtin, .ptr, .func => 8,
-            .array => |arr| arr.size * tw.get(arr.of).sizeOf(tw),
-            else => std.debug.panic("TODO sizeOf {s}", .{@tagName(self)}),
         };
     }
 };

@@ -1,5 +1,5 @@
 //! canon provides:
-//! - canonical data representation for the bytecode model
+//! - canonical data translation between TExpr and bytes
 //! - data structures relied upon throughout the compiler
 
 const std = @import("std");
@@ -11,6 +11,9 @@ pub const Value = @import("canon/value.zig");
 pub const TypeWelt = @import("canon/typewelt.zig");
 pub const TypeId = TypeWelt.TypeId;
 pub const Type = @import("canon/type.zig").Type;
+pub const ReprWelt = @import("canon/reprwelt.zig");
+pub const ReprId = ReprWelt.ReprId;
+pub const Repr = @import("canon/repr.zig").Repr;
 pub usingnamespace @import("canon/prelude.zig");
 pub usingnamespace @import("canon/fluency.zig");
 

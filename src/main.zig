@@ -66,6 +66,48 @@ fn repl(env: *Env, proj: *Project) !void {
         try stdout.writeAll("[Env]\n");
         try env.dump(ally, stdout);
         try stdout.writeByte('\n');
+
+        try stdout.writeAll("[Type Reprs]\n");
+        var i: usize = 0;
+        while (i < env.tw.types.items.len) : (i += 1) {
+            var ctx = kz.Context.init(ally);
+            defer ctx.deinit();
+
+            const ty = backend.TypeId{ .index = i };
+            switch (env.tw.get(ty).*) {
+                .hole, .namespace, .builtin, .any, .set, .func => {
+                    const tex = try ctx.slap(
+                        try ty.render(&ctx, env.tw),
+                        try ctx.print(.{ .fg = .red }, "no repr", .{}),
+                        .right,
+                        .{ .space = 1 },
+                    );
+                    try ctx.write(tex, stdout);
+
+                    continue;
+                },
+                else => {},
+            }
+
+            if (try env.reprOf(ty)) |repr| {
+                const sz = env.rw.get(repr).sizeOf(env.rw);
+                const aln = env.rw.get(repr).alignOf(env.rw);
+
+                const tex = try ctx.stack(
+                    &.{
+                        try ty.render(&ctx, env.tw),
+                        try ctx.print(.{}, "->", .{}),
+                        try repr.render(&ctx, env.rw),
+                        try ctx.print(.{}, "(sz {}, aln {})", .{ sz, aln }),
+                    },
+                    .right,
+                    .{ .space = 1 },
+                );
+
+                try ctx.write(tex, stdout);
+            }
+        }
+        try stdout.writeByte('\n');
     }
 
     var ln = Linenoise.init(ally);

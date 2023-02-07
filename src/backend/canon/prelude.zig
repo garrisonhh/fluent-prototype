@@ -167,6 +167,7 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     try defBuiltin(&env, "&", flbuiltin, .addr_of);
     try defBuiltin(&env, ".", flbuiltin, .access);
     try defBuiltin(&env, "array", flbuiltin, .array);
+    try defBuiltin(&env, "tuple", flbuiltin, .tuple);
     try defBuiltin(&env, "lambda", flbuiltin, .lambda);
     try defBuiltin(&env, "recur", flbuiltin, .recur);
     try defBuiltin(&env, "if", flbuiltin, .@"if");

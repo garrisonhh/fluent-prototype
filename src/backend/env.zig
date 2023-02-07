@@ -10,6 +10,9 @@
 //!   - TypeWelt is the entire set of Types that have and will ever exist in a
 //!     fluent program
 //!     - it also stores some metadata, like typenames
+//! - ReprWelt
+//!   - pairs with TypeWelt, providing a lower-level unified understanding of
+//!     fluent's data representation
 //! - NameMap
 //!   - this is an associative map including all of the names that have ever
 //!     existed in a fluent program
@@ -35,6 +38,8 @@ const canon = @import("canon.zig");
 const Type = canon.Type;
 const TypeId = canon.TypeId;
 const TypeWelt = canon.TypeWelt;
+const ReprWelt = canon.ReprWelt;
+const ReprId = canon.ReprId;
 
 const Self = @This();
 
@@ -44,6 +49,7 @@ const VM_STACK_SIZE = 32 * 1024;
 
 ally: Allocator,
 tw: TypeWelt = .{},
+rw: ReprWelt = .{},
 // env owns everything in every binding
 nmap: NameMap(TExpr) = .{},
 // these store the lowered + compiled forms of functions
@@ -63,6 +69,7 @@ pub fn init(ally: Allocator) Allocator.Error!Self {
 
 pub fn deinit(self: *Self) void {
     self.tw.deinit(self.ally);
+    self.rw.deinit(self.ally);
     self.nmap.deinit(self.ally);
     self.prog.deinit(self.ally);
     self.bc.deinit(self.ally);
@@ -71,14 +78,25 @@ pub fn deinit(self: *Self) void {
     self.lowered.deinit(self.ally);
 }
 
-// types =======================================================================
+// types and reprs =============================================================
 
 pub fn identify(self: *Self, ty: Type) Allocator.Error!TypeId {
-    return self.tw.identify(self.ally, ty);
+    const id = try self.tw.identify(self.ally, ty);
+    _ = try self.reprOf(id);
+
+    return id;
+}
+
+pub fn reprOf(self: *Self, ty: TypeId) Allocator.Error!?ReprId {
+    const E = ReprWelt.ConvertError;
+    return self.rw.reprOf(self.ally, self.tw, ty) catch |e| switch (e) {
+        E.OutOfMemory => Allocator.Error.OutOfMemory,
+        E.AnalysisType, E.UnknownConversion => null,
+    };
 }
 
 pub fn sizeOf(self: Self, ty: TypeId) usize {
-    return self.tw.get(ty).sizeOf(self.tw);
+    return self.rw.sizeOf(self.rw.converts.get(ty).?);
 }
 
 // low-level IRs ===============================================================
@@ -167,20 +185,19 @@ pub fn redef(self: *Self, name: Name, value: TExpr) DefError!void {
 }
 
 pub fn defNamespace(self: *Self, scope: Name, sym: Symbol) DefError!Name {
-    const nsty = try self.identify(Type{ .namespace = {} });
+    const nsty = try self.identify(.namespace);
     // TODO what the fuck is stored in the namespace's value?
     const expr = TExpr.init(null, false, nsty, .{ .unit = {} });
     return self.def(scope, sym, expr);
 }
 
-/// type does not need to be owned, it is cloned during identification
 pub fn defType(
     self: *Self,
     scope: Name,
     sym: Symbol,
     value: TypeId,
 ) DefError!Name {
-    const tyty = try self.identify(Type{ .ty = {} });
+    const tyty = try self.identify(.ty);
     const expr = TExpr.init(null, true, tyty, .{ .ty = value });
     const name = try self.def(scope, sym, expr);
     try self.tw.setName(self.ally, value, name);

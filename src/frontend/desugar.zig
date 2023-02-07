@@ -112,47 +112,66 @@ fn desugarExpr(
                 .exprs = coll.toOwnedSlice(),
             });
         },
-        inline .parens, .coll => |tag| {
+        .parens => {
             if (expr.exprs.len == 0) {
-                const empty_form = switch (tag) {
-                    .parens => .unit,
-                    .coll => .coll,
-                    else => unreachable,
-                };
-
                 return Result.ok(RawExpr{
                     .loc = expr.loc,
-                    .form = empty_form,
-                });
-            } else {
-                std.debug.assert(expr.exprs.len == 1);
-
-                const res = try desugarExpr(ally, proj, expr.exprs[0]);
-                const inner = res.get() orelse return res;
-
-                if (inner.form != .comma) {
-                    if (tag == .parens) {
-                        ally.free(expr.exprs);
-                        return Result.ok(inner);
-                    }
-
-                    return Result.ok(expr);
-                }
-
-                ally.free(expr.exprs);
-
-                const coll_form = switch (tag) {
-                    .parens => .tuple,
-                    .coll => .coll,
-                    else => unreachable,
-                };
-
-                return Result.ok(RawExpr{
-                    .loc = expr.loc,
-                    .form = coll_form,
-                    .exprs = inner.exprs,
+                    .form = .unit,
                 });
             }
+
+            std.debug.assert(expr.exprs.len == 1);
+
+            const res = try desugarExpr(ally, proj, expr.exprs[0]);
+            const inner = res.get() orelse return res;
+
+            ally.free(expr.exprs);
+
+            // parens enclose inner expr
+            if (inner.form != .comma) {
+                return Result.ok(inner);
+            }
+
+            // parens enclose sequence, construct a tuple
+            const array_expr = RawExpr{
+                .loc = expr.loc,
+                .form = .coll,
+                .exprs = inner.exprs,
+            };
+
+            const addr_exprs = try ally.alloc(RawExpr, 1);
+            addr_exprs[0] = array_expr;
+
+            const addr_expr = RawExpr{
+                .loc = expr.loc,
+                .form = .addr,
+                .exprs = addr_exprs,
+            };
+
+            const tuple_exprs = try ally.alloc(RawExpr, 1);
+            tuple_exprs[0] = addr_expr;
+
+            return Result.ok(RawExpr{
+                .loc = expr.loc,
+                .form = .tuple,
+                .exprs = tuple_exprs,
+            });
+        },
+        .coll => {
+            const res = try desugarExpr(ally, proj, expr.exprs[0]);
+            const inner = res.get() orelse return res;
+
+            if (inner.form != .comma) {
+                return Result.ok(expr);
+            }
+
+            ally.free(expr.exprs);
+
+            return Result.ok(RawExpr{
+                .loc = expr.loc,
+                .form = .coll,
+                .exprs = inner.exprs,
+            });
         },
         else => return desugarChildrenOf(ally, proj, expr),
     }
