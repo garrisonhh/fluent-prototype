@@ -89,6 +89,7 @@ pub fn get(self: Self, id: TypeId) *const Type {
 
 pub const RenameError = error{RenamedType};
 
+/// used in conjunction with Env's namemap
 pub fn setName(
     self: *Self,
     ally: Allocator,

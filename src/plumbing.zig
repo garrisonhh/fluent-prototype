@@ -32,6 +32,15 @@ pub fn exec(
     const ast = parse_res.get() orelse return parse_res.cast(TExpr);
     defer ast.deinit(ally);
 
+    if (com.options.log.parse) {
+        const t = now();
+        defer render_time += now() - t;
+
+        try stdout.writeAll("[Parsed]\n");
+        try kz.display(ally, proj, ast, stdout);
+        try stdout.writeByte('\n');
+    }
+
     // translate
     const trans_res = try translate(ally, proj, ast);
     const sexpr = trans_res.get() orelse return trans_res.cast(TExpr);
@@ -41,7 +50,7 @@ pub fn exec(
         const t = now();
         defer render_time += now() - t;
 
-        try stdout.writeAll("[Translated AST]\n");
+        try stdout.writeAll("[Translated]\n");
         try kz.display(ally, .{ .force_parens = true }, sexpr, stdout);
         try stdout.writeByte('\n');
     }

@@ -1,7 +1,7 @@
 //! env manages the state of fluent's dynamic backend runtime.
 //!
-//! fluent's backend runtime consists of two components:
-//! - the TypeWelt
+//! fluent's backend runtime consists of several components:
+//! - TypeWelt
 //!   - this is the context for managing fluent types. there are two canonical
 //!     representations a fluent type can take, the Type and the TypeId.
 //!     - Type is a tagged union as you would expect, a structured type repr
@@ -10,9 +10,9 @@
 //!   - TypeWelt is the entire set of Types that have and will ever exist in a
 //!     fluent program
 //!     - it also stores some metadata, like typenames
-//! - the NameMap
-//!   - this is an associative map including all of the names that have and will
-//!     ever exist in a fluent program
+//! - NameMap
+//!   - this is an associative map including all of the names that have ever
+//!     existed in a fluent program
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -191,20 +191,17 @@ pub fn defType(
 // debugging ===================================================================
 
 fn renderName(ctx: *kz.Context, name: Name) !kz.Ref {
+    const red = kz.Style{ .fg = .red };
+
     var list = std.ArrayList(kz.Ref).init(ctx.ally);
     defer list.deinit();
 
-    const into = try ctx.print(.{}, "::", .{});
-    defer ctx.drop(into);
-
-    for (name.syms) |sym, i| {
-        if (i > 0) try list.append(try ctx.clone(into));
-
-        const sym_ref = try ctx.print(.{ .fg = .red }, "{}", .{sym});
-        try list.append(sym_ref);
+    for (name.syms) |sym| {
+        try list.append(try ctx.print(red, "{}", .{sym}));
     }
 
-    return try ctx.stack(list.items, .right, .{});
+    const dot = try ctx.print(.{}, ".", .{});
+    return try ctx.sep(dot, list.items, .right, .{});
 }
 
 pub fn dump(self: *Self, ally: Allocator, writer: anytype) !void {

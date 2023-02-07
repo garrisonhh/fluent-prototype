@@ -574,8 +574,9 @@ pub const FuncRef = packed struct {
 pub const Func = struct {
     const Self = @This();
 
-    name: Name, // unowned
+    name: Name, // owned by env
     takes: usize,
+    // TODO this is undefined until lowering is completed. TERRIBLE idea.
     returns: TypeId,
     ref: FuncRef,
 
