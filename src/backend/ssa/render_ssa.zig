@@ -235,6 +235,11 @@ fn renderFuncOp(self: Func, ctx: *kz.Context, env: Env, op: Op) !kz.Ref {
             try line.append(try ctx.print(.{}, "{s} ", .{tag}));
             try renderFuncParams(self, ctx, env, &line, effect.params);
         },
+        .mem => |mem| {
+            const head = try ctx.print(.{}, "{s} {d}, ", .{ tag, mem.offset });
+            try line.append(head);
+            try renderFuncParams(self, ctx, env, &line, &.{ mem.src, mem.dst });
+        },
     }
 
     // stack and return

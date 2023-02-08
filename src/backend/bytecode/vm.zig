@@ -90,32 +90,27 @@ fn makeFnType(
     param_slice: u64,
     return_id: u64,
 ) RuntimeError!TypeId {
-    // resurrect parameters (*[2]TypeId)
-    var slice_ptr = param_slice;
-    const params_val = canon.intoValue(&slice_ptr);
+    const TID_REPR_SIZE = 8;
 
-    const tyty = try env.identify(Type{ .ty = {} });
-    const ty_slice_ty = try env.identify(Type{
-        .ptr = .{ .kind = .slice, .to = tyty },
-    });
-    const expr = try canon.resurrect(
-        env.*,
-        params_val,
-        self.stack,
-        null,
-        ty_slice_ty,
-    );
-    defer expr.deinit(env.ally);
+    if (builtin.mode == .Debug) {
+        const Cloze = struct {
+            var called = false;
+        };
+        if (!Cloze.called) {
+            Cloze.called = true;
 
-    const children = expr.data.slice;
-
-    // manipulate parameters into type slice
-    var params_buf: [256]TypeId = undefined;
-    const params = params_buf[0..children.len];
-
-    for (children) |child, i| {
-        params[i] = child.data.ty;
+            const tid_size = env.sizeOf(try env.identify(.ty));
+            std.debug.assert(TID_REPR_SIZE == tid_size);
+            std.debug.assert(TID_REPR_SIZE == @sizeOf(TypeId));
+        }
     }
+
+    // get parameters ([]TypeId)
+    const ptr = canon.to(self.stack[param_slice .. param_slice + 8]);
+    const len = canon.to(self.stack[param_slice + 8 .. param_slice + 16]);
+
+    const raw_ptr = @ptrToInt(self.stack.ptr) + ptr;
+    const params = @intToPtr([*]TypeId, raw_ptr)[0..len];
 
     // id type
     return try env.identify(Type{

@@ -96,22 +96,26 @@ pub fn evalTyped(
         }
 
         // run compiled bytecode
-        const final_ty = ssa.getReturnType(env.*);
-        const final = try env.run(prog, texpr.loc, final_ty);
+        var final_ty = ssa.getReturnType(env.*);
+
+        const ssa_returns_repr = try env.reprOf(final_ty);
+        const is_structured = env.rw.get(ssa_returns_repr).isStructured();
+
+        if (is_structured) {
+            final_ty = try env.identify(Type{
+                .ptr = .{ .kind = .single, .to = final_ty },
+            });
+        }
+
+        var final = try env.run(prog, texpr.loc, final_ty);
 
         // remove ssa expr
         try env.removeFunc(ssa);
 
-        // when returning structured data, the vm may return a pointer to the
-        // data I actually wanted
-        if (!final.ty.eql(texpr.ty)) {
-            const out_ty = env.tw.get(final.ty);
-            std.debug.assert(out_ty.ptr.to.eql(texpr.ty));
-
+        if (is_structured) {
             const child = final.data.ptr.*;
             env.ally.destroy(final.data.ptr);
-
-            break :final child;
+            final = child;
         }
 
         break :final final;

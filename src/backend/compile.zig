@@ -42,7 +42,7 @@ fn compileAlloca(
     ally: Allocator,
     b: *Builder,
     rmap: *RegisterMap,
-    size: u64,
+    size: usize,
     dst: Register,
 ) Error!void {
     const size_reg = rmap.getTemp();
@@ -108,13 +108,24 @@ fn compileOp(
             const dst = rmap.get(all.to);
             try compileAlloca(ally, b, rmap, all.size, dst);
         },
-        .store => |eff| {
-            const src = rmap.get(eff.params[0]);
-            const dst = rmap.get(eff.params[1]);
-            const size = env.rw.sizeOf(ref.getLocal(env.*, eff.params[0]));
+        .store => |mem| {
+            const src = rmap.get(mem.src);
+            const dst = rmap.get(mem.dst);
+
+            const size = env.rw.sizeOf(ref.getLocal(env.*, mem.src));
             const nbytes = @intCast(u8, size);
 
-            try b.addInst(ally, Bc.store(nbytes, src, dst));
+            // if an offset is needed, load it and add it to src
+            if (mem.offset > 0) {
+                const tmp = rmap.getTemp();
+                defer rmap.dropTemp(tmp);
+
+                try Bc.imm(b, ally, tmp, canon.from(&mem.offset));
+                try b.addInst(ally, Bc.iadd(dst, tmp, tmp));
+                try b.addInst(ally, Bc.store(nbytes, src, tmp));
+            } else {
+                try b.addInst(ally, Bc.store(nbytes, src, dst));
+            }
         },
         .ret => |eff| {
             const src = rmap.get(eff.params[0]);

@@ -177,13 +177,9 @@ pub fn resurrect(
                 break :ptr TExpr.Data{ .ptr = try com.placeOn(ally, child) };
             },
             .slice => slice: {
-                // get struct data
-                const struct_index = canon.to(value.buf);
-                const struct_data = mem[struct_index .. struct_index + 16];
-
                 // get ptr + len
-                const index = canon.to(struct_data[0..8]);
-                const len = canon.to(struct_data[8..16]);
+                const index = canon.to(value.buf[0..8]);
+                const len = canon.to(value.buf[8..16]);
 
                 // resurrect each subvalue
                 const el_size = env.sizeOf(ptr.to);

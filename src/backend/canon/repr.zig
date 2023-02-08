@@ -202,8 +202,15 @@ pub const Repr = union(enum) {
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch (self) {
-            .uint, .int, .float, .coll => self,
+            .uint, .int, .float, .ptr, .array => self,
             .coll => |coll| try initColl(ally, coll),
+        };
+    }
+
+    pub fn isStructured(self: Self) bool {
+        return switch (self) {
+            .uint, .int, .float, .ptr => false,
+            .array, .coll => true,
         };
     }
 

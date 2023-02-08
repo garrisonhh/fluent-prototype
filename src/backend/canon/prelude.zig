@@ -105,8 +105,8 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     _ = namespace;
 
     // define number types
-    const compiler_int = try defNumeric(&env, "compiler-int", .int, null);
-    const compiler_float = try defNumeric(&env, "compiler-float", .float, null);
+    const compiler_int = try defNumeric(&env, "compiler_int", .int, null);
+    const compiler_float = try defNumeric(&env, "compiler_float", .float, null);
 
     const @"i8" = try defNumeric(&env, "i8", .int, 8);
     const @"i16" = try defNumeric(&env, "i16", .int, 16);

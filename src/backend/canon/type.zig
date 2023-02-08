@@ -215,6 +215,15 @@ pub const Type = union(enum) {
         };
     }
 
+    pub const Coercion = enum {
+        /// equivalent types, a type within a set, or a subset of another set
+        inbounds,
+        /// bitcast or truncation
+        natural,
+        /// `*[_]T` -> `[]T`
+        array_ptr_to_slice,
+    };
+
     /// types can coerce to other types in situations where the semantics
     /// remain well-defined, zB u32 coercing to u64
     pub fn coercesTo(
@@ -222,61 +231,73 @@ pub const Type = union(enum) {
         ally: Allocator,
         tw: *TypeWelt,
         target: Self,
-    ) Allocator.Error!bool {
-        if (self == .hole) {
-            return true;
-        }
-
-        // if target is a set, special logic must be applied
-        switch (target) {
+    ) Allocator.Error!?Coercion {
+        return switch (target) {
             .hole => unreachable,
-            .any => return true,
-            .set => {
+            .any => .inbounds,
+            .set => set: {
                 if (self == .set) {
                     // subsets coerce to supersets
                     var subtypes = self.set.keyIterator();
                     while (subtypes.next()) |subty| {
                         if (!target.set.contains(subty.*)) {
-                            return false;
+                            break :set null;
                         }
                     }
 
-                    return true;
-                } else {
+                    break :set .inbounds;
+                } else if (target.set.contains(try tw.identify(ally, self))) {
                     // types coerce to sets containing types
-                    return target.set.contains(try tw.identify(ally, self));
+                    break :set .inbounds;
                 }
-            },
-            else => {},
-        }
 
-        // most types must match tags
-        return @as(Tag, self) == @as(Tag, target) and switch (self) {
-            .any, .hole, .set => unreachable,
-            .unit, .@"bool", .symbol, .ty, .namespace, .builtin => true,
-            .atom => |sym| sym.eql(target.atom),
-            .tuple, .array, .func => self.eql(target),
+                break :set null;
+            },
             .number => |num| num: {
-                // zig fmt: off
-                const layouts_match = num.layout == target.number.layout;
-                const from_compiler_num = num.bits == null;
-                const bits_fit = num.bits != null and target.number.bits != null
-                             and num.bits.? <= target.number.bits.?;
-                // zig fmt: on
+                if (self != .number) break :num null;
 
-                break :num layouts_match and (from_compiler_num or bits_fit);
-            },
-            .ptr => |ptr| ptr: {
-                // `*[_]T` should coerce to `[]T`
-                if (ptr.kind == .single and target.ptr.kind == .slice) {
-                    const to = tw.get(ptr.to);
-                    if (to.* == .array) {
-                        break :ptr to.array.of.eql(target.ptr.to);
+                const layouts_match = self.number.layout == num.layout;
+
+                const from_compiler_num = self.number.bits == null;
+                const have_bits = num.bits != null and self.number.bits != null;
+
+                const bits_eql = have_bits and self.number.bits.? == num.bits.?;
+                const bits_fit = have_bits and self.number.bits.? < num.bits.?;
+
+                if (layouts_match) {
+                    if (bits_eql or from_compiler_num) {
+                        break :num .inbounds;
+                    } else if (bits_fit) {
+                        break :num .natural;
                     }
                 }
 
-                break :ptr self.eql(target);
+                break :num null;
             },
+            .ptr => |ptr| ptr: {
+                if (self != .ptr) {
+                    break :ptr null;
+                } else if (self.eql(target)) {
+                    break :ptr .inbounds;
+                } else if (ptr.kind == .slice and
+                    self.ptr.kind == .single)
+                aptr: {
+                    // inner must be array
+                    const inner = tw.get(self.ptr.to);
+                    if (inner.* != .array) break :aptr;
+
+                    // array element type must be inbounds of slice element type
+                    const arr_el = tw.get(inner.array.of);
+                    const slice_el = tw.get(ptr.to);
+                    const method = try arr_el.coercesTo(ally, tw, slice_el.*);
+                    if (method != Coercion.inbounds) break :aptr;
+
+                    break :ptr .array_ptr_to_slice;
+                }
+
+                break :ptr null;
+            },
+            else => if (self.eql(target)) .inbounds else null,
         };
     }
 

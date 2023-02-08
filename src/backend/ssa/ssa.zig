@@ -67,6 +67,12 @@ pub const Op = union(enum) {
         params: []Local,
     };
 
+    pub const Mem = struct {
+        offset: usize,
+        src: Local,
+        dst: Local,
+    };
+
     // unique
     ldc: LoadConst,
     copy: Pure,
@@ -80,9 +86,8 @@ pub const Op = union(enum) {
 
     // memory
     alloca: Alloca, // allocates a number of bytes and returns pointer
-    store: Effect, // store a at addr b
-    store_elem: Effect, // store a at addr b with offset c
-    load: Pure, // loads data from ptr a
+    store: Mem, // *dst = src
+    load: Mem, // dst = *src
 
     // math
     add: Pure,
@@ -170,6 +175,7 @@ pub const Op = union(enum) {
         alloca: Alloca,
         pure: Pure,
         effect: Effect,
+        mem: Mem,
 
         fn getFieldByType(comptime T: type) []const u8 {
             const fields = @typeInfo(Class).Union.fields;

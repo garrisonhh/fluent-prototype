@@ -652,6 +652,7 @@ fn analyzeCall(
 /// b) make an implicit cast explicit
 /// c) find that an expectation was violated and produce a nice error message
 fn coerce(env: *Env, texpr: TExpr, outward: TypeId) SemaError!Result {
+    // TypeId comparison is fastest
     if (texpr.ty.eql(outward)) {
         return Result.ok(texpr);
     }
@@ -660,27 +661,47 @@ fn coerce(env: *Env, texpr: TExpr, outward: TypeId) SemaError!Result {
     const inner = env.tw.get(texpr.ty);
     const outer = env.tw.get(outward);
 
-    if (try inner.coercesTo(env.ally, &env.tw, outer.*)) {
-        if (outer.* == .any or outer.* == .set) {
-            // within set
-            return Result.ok(texpr);
-        } else {
-            // cast is possible
+    const method = (try inner.coercesTo(env.ally, &env.tw, outer.*)) orelse {
+        // no coercion :(
+        return expectError(env.*, texpr.loc, outward, texpr.ty);
+    };
+
+    return switch (method) {
+        .inbounds => in: {
+            // nothing needs to be done
+            break :in Result.ok(texpr);
+        },
+        .natural => nat: {
+            // cast the expr
             const builtin_ty = try env.identify(.builtin);
             const cast = TExpr.initBuiltin(texpr.loc, builtin_ty, .cast);
             const final = try TExpr.initCall(
                 env.ally,
                 texpr.loc,
                 outward,
-                &[2]TExpr{ cast, texpr },
+                &[_]TExpr{ cast, texpr },
             );
 
-            return Result.ok(final);
-        }
-    }
+            break :nat Result.ok(final);
+        },
+        .array_ptr_to_slice => aptr: {
+            // create a slice from the expr
+            const builtin_ty = try env.identify(.builtin);
+            const convert = TExpr.initBuiltin(
+                texpr.loc,
+                builtin_ty,
+                .array_ptr_to_slice,
+            );
+            const final = try TExpr.initCall(
+                env.ally,
+                texpr.loc,
+                outward,
+                &[_]TExpr{ convert, texpr },
+            );
 
-    // no coercion :(
-    return expectError(env.*, texpr.loc, outward, texpr.ty);
+            break :aptr Result.ok(final);
+        },
+    };
 }
 
 fn analyzeExpr(

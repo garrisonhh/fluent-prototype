@@ -125,11 +125,12 @@ pub fn init(loc: ?Loc, known_const: bool, ty: TypeId, data: Data) Self {
         // stored data must not require some kind of execution
         break :con switch (self.data) {
             // zig fmt: off
-            .unit, .ty, .@"bool", .number, .string, .builtin, .func_ref, .ptr,
-            .array, .slice,
+            .unit, .ty, .@"bool", .number, .string, .builtin, .func_ref, .array,
+            .slice,
             // zig fmt: on
             => true,
-            .name, .call, .func, .param => false,
+            // TODO const ptrs + func ptrs?
+            .ptr, .func, .name, .call, .param => false,
         };
     };
 

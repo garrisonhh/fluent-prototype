@@ -96,3 +96,7 @@ pub fn reprOf(
 pub fn sizeOf(self: Self, id: ReprId) usize {
     return self.get(id).sizeOf(self);
 }
+
+pub fn alignOf(self: Self, id: ReprId) usize {
+    return self.get(id).alignOf(self);
+}

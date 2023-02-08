@@ -1,3 +1,5 @@
+/// individual values that have special semantics that the compiler needs to
+/// understand during sema
 pub const Builtin = enum {
     // this is a transient value that only exists during the first sema pass
     // over defs in a namespace (a.k.a while the pie crust is baking)
@@ -7,22 +9,24 @@ pub const Builtin = enum {
     ns,
     def,
 
-    // data
+    // data constructors
     array,
     tuple,
 
+    // data manipulation
+    cast,
+    addr_of,
+    array_ptr_to_slice,
+    access,
+
     // control flow
     lambda,
-    // TODO remove this
+    // TODO remove recur
     recur,
     do,
     @"if",
 
     // value operators
-    cast,
-    addr_of,
-    access,
-
     eq,
     add,
     sub,

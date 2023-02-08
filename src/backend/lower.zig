@@ -16,7 +16,13 @@ const TExpr = @import("texpr.zig");
 const canon = @import("canon.zig");
 const TypeId = canon.TypeId;
 const Type = canon.Type;
+const ReprWelt = canon.ReprWelt;
+const ReprId = canon.ReprId;
+const Repr = canon.Repr;
 const Builtin = canon.Builtin;
+
+// TODO read everything in this file again to ensure it's making use of repr
+// properly
 
 pub const Error = Allocator.Error;
 
@@ -50,6 +56,29 @@ fn lowerU64(env: *Env, ref: FuncRef, block: Label, n: u64) Error!Local {
     return try lowerLoadConst(env, ref, block, expr);
 }
 
+/// allocates some repr on the stack and returns a pointer to it
+fn lowerAlloca(
+    env: *Env,
+    ref: FuncRef,
+    block: Label,
+    repr: ReprId,
+) Error!Local {
+    const size = env.rw.sizeOf(repr);
+
+    const ptr_repr = try env.rw.intern(env.ally, Repr{ .ptr = repr });
+    const ptr = try ref.addLocal(env, ptr_repr);
+
+    // TODO use coll repr to model stack layout. this is a very dumb solution
+    // to fix stack alignment issues
+    const BOUNDARY = 8;
+    const aln_diff = size % BOUNDARY;
+    const aln_size = if (aln_diff > 0) size + (BOUNDARY - aln_diff) else size;
+
+    try ref.addOp(env, block, Op{ .alloca = .{ .size = aln_size, .to = ptr } });
+
+    return ptr;
+}
+
 fn lowerArray(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     const ally = env.ally;
     const exprs = expr.data.array;
@@ -63,51 +92,20 @@ fn lowerArray(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     }
 
     // alloca array
-    const arr_ptr_ty = try env.identify(Type.initPtr(.single, expr.ty));
-    const arr_ptr = try ref.addLocal(env, try env.reprOf(arr_ptr_ty));
+    const arr_repr = try env.reprOf(expr.ty);
+    const arr_ptr = try lowerAlloca(env, ref, block.*, arr_repr);
 
-    try ref.addOp(env, block.*, Op{
-        .alloca = .{ .size = env.sizeOf(expr.ty), .to = arr_ptr },
-    });
-
-    // for a zero-length array, everything is done
-    if (elements.len == 0) return arr_ptr;
-
-    // get ptr to first element
+    // store each element at the proper offset
     const el_ty = env.tw.get(expr.ty).array.of;
-    const el_ptr_ty = try env.identify(Type.initPtr(.single, el_ty));
-    const el_ptr_repr = try env.reprOf(el_ptr_ty);
+    const el_size = env.sizeOf(el_ty);
 
-    var cur_ptr = try ref.addLocal(env, el_ptr_repr);
-    const copy_op = try Op.initPure(ally, .copy, cur_ptr, &.{arr_ptr});
-    try ref.addOp(env, block.*, copy_op);
-
-    if (elements.len == 1) {
-        // single element arrays only need 1 store operation
-        const sto = try Op.initEffect(ally, .store, &.{ elements[0], cur_ptr });
-        try ref.addOp(env, block.*, sto);
-
-        return arr_ptr;
-    }
-
-    // get element size in the code as a constant
-    const el_size = try lowerU64(env, ref, block.*, env.sizeOf(el_ty));
-
-    // store each element
     for (elements) |elem, i| {
         // store this element at the current array ptr
-        const sto = try Op.initEffect(ally, .store, &.{ elem, cur_ptr });
-        try ref.addOp(env, block.*, sto);
-
-        // increment the current ptr, unless this is the last element
-        if (i < elements.len - 1) {
-            const next_ptr = try ref.addLocal(env, el_ptr_repr);
-            const add =
-                try Op.initPure(ally, .add, next_ptr, &.{ cur_ptr, el_size });
-            try ref.addOp(env, block.*, add);
-
-            cur_ptr = next_ptr;
-        }
+        try ref.addOp(env, block.*, Op{ .store = .{
+            .offset = el_size * i,
+            .src = elem,
+            .dst = arr_ptr,
+        } });
     }
 
     return arr_ptr;
@@ -189,6 +187,36 @@ fn lowerIf(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     return final;
 }
 
+fn lowerArrayPtrToSlice(
+    env: *Env,
+    ref: FuncRef,
+    block: *Label,
+    expr: TExpr,
+) Error!Local {
+    const child = expr.data.call[1];
+
+    // get length and ptr
+    const array_ptr_ty = env.tw.get(child.ty);
+    const array_ty = env.tw.get(array_ptr_ty.ptr.to);
+    const array_len = array_ty.array.size;
+
+    const len = try lowerU64(env, ref, block.*, array_len);
+    const ptr = try lowerExpr(env, ref, block, child);
+
+    // alloca space for slice
+    const slice_repr = try env.reprOf(expr.ty);
+    const slice_ptr = try lowerAlloca(env, ref, block.*, slice_repr);
+
+    try ref.addOp(env, block.*, Op{
+        .store = .{ .offset = 0, .src = ptr, .dst = slice_ptr },
+    });
+    try ref.addOp(env, block.*, Op{
+        .store = .{ .offset = 8, .src = len, .dst = slice_ptr },
+    });
+
+    return slice_ptr;
+}
+
 fn lowerBuiltin(
     env: *Env,
     ref: FuncRef,
@@ -200,6 +228,7 @@ fn lowerBuiltin(
         .recur => unreachable,
         .lambda => try lowerLambda(env, ref, block, expr),
         .@"if" => try lowerIf(env, ref, block, expr),
+        .array_ptr_to_slice => try lowerArrayPtrToSlice(env, ref, block, expr),
         .cast => cast: {
             const ally = env.ally;
             const child = try lowerExpr(env, ref, block, expr.data.call[1]);
