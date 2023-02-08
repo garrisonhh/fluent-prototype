@@ -29,7 +29,7 @@ fn lowerLoadConst(
     std.debug.assert(expr.known_const);
 
     const @"const" = try ref.addConst(env, expr);
-    const out = try ref.addLocal(env, expr.ty);
+    const out = try ref.addLocal(env, try env.reprOf(expr.ty));
     try ref.addOp(env, block, Op{ .ldc = .{ .a = @"const", .to = out } });
 
     return out;
@@ -74,8 +74,7 @@ fn lowerOperator(
         .not, .cast, .slice_ty, .fn_ty,
         // zig fmt: on
         => |tag| op: {
-            // TODO make sure this is checked in sema
-            const to = try ref.addLocal(env, returns);
+            const to = try ref.addLocal(env, try env.reprOf(returns));
             const op = @unionInit(Op, @tagName(tag), Op.Pure{
                 .to = to,
                 .params = locals,
@@ -102,7 +101,7 @@ fn lowerArray(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
 
     // alloca array
     const arr_ptr_ty = try env.identify(Type.initPtr(.single, expr.ty));
-    const arr_ptr = try ref.addLocal(env, arr_ptr_ty);
+    const arr_ptr = try ref.addLocal(env, try env.reprOf(arr_ptr_ty));
 
     try ref.addOp(env, block.*, Op{
         .alloca = .{ .size = env.sizeOf(expr.ty), .to = arr_ptr },
@@ -114,8 +113,9 @@ fn lowerArray(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     // get ptr to first element
     const el_ty = env.tw.get(expr.ty).array.of;
     const el_ptr_ty = try env.identify(Type.initPtr(.single, el_ty));
+    const el_ptr_repr = try env.reprOf(el_ptr_ty);
 
-    var cur_ptr = try ref.addLocal(env, el_ptr_ty);
+    var cur_ptr = try ref.addLocal(env, el_ptr_repr);
     const cast_op = try Op.initPure(ally, .cast, cur_ptr, &.{arr_ptr});
     try ref.addOp(env, block.*, cast_op);
 
@@ -138,7 +138,7 @@ fn lowerArray(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
 
         // increment the current ptr, unless this is the last element
         if (i < elements.len - 1) {
-            const next_ptr = try ref.addLocal(env, el_ptr_ty);
+            const next_ptr = try ref.addLocal(env, el_ptr_repr);
             const add =
                 try Op.initPure(ally, .add, next_ptr, &.{ cur_ptr, el_size });
             try ref.addOp(env, block.*, add);
@@ -150,7 +150,7 @@ fn lowerArray(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     return arr_ptr;
 }
 
-/// lowers the operation of taking the stack address of a subexpr
+/// lowers the operation of taking the address of a subexpr
 fn lowerAddrOf(
     env: *Env,
     ref: FuncRef,
@@ -159,17 +159,15 @@ fn lowerAddrOf(
 ) Error!Local {
     // lower subexpr
     const subexpr = expr.data.ptr.*;
+    const subrepr = try env.reprOf(subexpr.ty);
     const sub = try lowerExpr(env, ref, block, subexpr);
+    const repr = env.rw.get(ref.getLocal(env.*, sub));
 
-    // with structured data, lowering automatically places the data on the stack
-    const lty = env.tw.get(ref.getLocal(env.*, sub));
-
-    // zig fmt: off
-    const on_stack = lty.* == .ptr and lty.ptr.kind == .single
-                 and lty.ptr.to.eql(subexpr.ty);
-    // zig fmt: on
-
-    if (on_stack) return sub;
+    // with a structured data, data with automatically be placed on the stack
+    // and taking its address is trivial
+    if (repr.* == .ptr and repr.ptr.eql(subrepr)) {
+        return sub;
+    }
 
     @panic("TODO lowering taking the address of something not stack allocated");
 }
@@ -183,15 +181,11 @@ fn lowerLambda(
     expr: TExpr,
 ) Error!Local {
     // lower function expr
-    const ty = env.tw.get(expr.ty);
-    std.debug.assert(ty.* == .func);
+    std.debug.assert(env.tw.get(expr.ty).* == .func);
 
-    const lambda = try lowerFunction(
-        env,
-        expr.data.func.name,
-        ty.func.takes,
-        expr.data.func.body.*,
-    );
+    const name = expr.data.func.name;
+    const body = expr.data.func.body;
+    const lambda = try lowerFunction(env, name, expr.ty, body.*);
 
     // load func ref as callable constant
     const final = TExpr.init(expr.loc, true, expr.ty, .{ .func_ref = lambda });
@@ -224,7 +218,7 @@ fn lowerIf(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     }
 
     // final block with phi
-    const final = try ref.addLocal(env, expr.ty);
+    const final = try ref.addLocal(env, try env.reprOf(expr.ty));
     try ref.addOp(env, final_block, try Op.initPhi(ally, final, &branches));
 
     block.* = final_block;
@@ -288,7 +282,7 @@ fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
 
     // lower call and return value
     const returns = env.tw.get(head.ty).func.returns;
-    const dst = try ref.addLocal(env, returns);
+    const dst = try ref.addLocal(env, try env.reprOf(returns));
     const call = try Op.initCall(env.ally, dst, locals[0], locals[1..]);
     try ref.addOp(env, block.*, call);
 
@@ -331,26 +325,28 @@ fn lowerExpr(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
 fn lowerFunction(
     env: *Env,
     name: Name,
-    takes: []const TypeId,
+    ty: TypeId,
     body: TExpr,
 ) Error!FuncRef {
     // create func and entry block
-    var ref = try env.prog.add(env.ally, name, takes);
+    var ref = try env.prog.add(env.ally, env, name, ty);
     var block = try ref.addBlock(env);
 
     // lowering expr will return the final value
     const final = try lowerExpr(env, ref, &block, body);
     try ref.addOp(env, block, try Op.initImpure(env.ally, .ret, &.{final}));
 
-    // return value is unknown until this point
-    env.getFunc(ref).returns = ref.getLocal(env.*, final);
-
     return ref;
 }
 
 /// lowers expression as if it is the body of a function with no args
 pub fn lower(env: *Env, scope: Name, expr: TExpr) Error!FuncRef {
-    const ref = try lowerFunction(env, scope, &.{}, expr);
+    const ty = try env.identify(Type{ .func = .{
+        .takes = &.{},
+        .returns = expr.ty,
+    } });
+
+    const ref = try lowerFunction(env, scope, ty, expr);
 
     if (builtin.mode == .Debug) {
         const verify = @import("ssa/verify.zig").verify;

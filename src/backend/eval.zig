@@ -96,7 +96,8 @@ pub fn evalTyped(
         }
 
         // run compiled bytecode
-        const final = try env.run(prog, texpr.loc, env.getFunc(ssa).returns);
+        const final_ty = ssa.getReturnType(env.*);
+        const final = try env.run(prog, texpr.loc, final_ty);
 
         // remove ssa expr
         try env.removeFunc(ssa);

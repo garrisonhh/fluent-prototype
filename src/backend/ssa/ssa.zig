@@ -13,7 +13,9 @@ const com = @import("common");
 const Name = com.Name;
 const builtin = @import("builtin");
 const canon = @import("../canon.zig");
+const TypeWelt = canon.TypeWelt;
 const TypeId = canon.TypeId;
+const ReprId = canon.ReprId;
 const Env = @import("../env.zig");
 const TExpr = @import("../texpr.zig");
 const rendering = @import("render_ssa.zig");
@@ -432,7 +434,7 @@ pub const FuncRef = packed struct {
         return env.getFuncConst(self).consts.items[c.index];
     }
 
-    pub fn getLocal(self: Self, env: Env, l: Local) TypeId {
+    pub fn getLocal(self: Self, env: Env, l: Local) ReprId {
         return env.getFuncConst(self).locals.items[l.index];
     }
 
@@ -447,10 +449,10 @@ pub const FuncRef = packed struct {
         return @"const";
     }
 
-    pub fn addLocal(self: Self, env: *Env, ty: TypeId) Allocator.Error!Local {
+    pub fn addLocal(self: Self, env: *Env, repr: ReprId) Allocator.Error!Local {
         const func = env.getFunc(self);
         const local = Local.of(func.locals.items.len);
-        try func.locals.append(env.ally, ty);
+        try func.locals.append(env.ally, repr);
 
         return local;
     }
@@ -473,19 +475,27 @@ pub const FuncRef = packed struct {
         const block = &func.blocks.items[label.index];
         try block.ops.append(env.ally, op);
     }
+
+    pub fn getReturnType(self: Self, env: Env) TypeId {
+        const func = env.getFuncConst(self);
+        return env.tw.get(func.ty).func.returns;
+    }
 };
 
 pub const Func = struct {
     const Self = @This();
 
-    name: Name, // owned by env
+    // owned by env
+    name: Name,
+    /// type of function
+    ty: TypeId,
+    /// number of parameters, or null if this is not a function
     takes: usize,
-    // TODO this is undefined until lowering is completed. TERRIBLE idea.
-    returns: TypeId,
+    /// func id (TODO I really shouldn't store this here)
     ref: FuncRef,
 
     consts: std.ArrayListUnmanaged(TExpr) = .{},
-    locals: std.ArrayListUnmanaged(TypeId) = .{},
+    locals: std.ArrayListUnmanaged(ReprId) = .{},
     blocks: std.ArrayListUnmanaged(Block) = .{},
 
     fn deinit(self: *Self, ally: Allocator) void {
@@ -523,18 +533,24 @@ pub const Program = struct {
     pub fn add(
         self: *Self,
         ally: Allocator,
+        env: *Env,
         name: Name,
-        params: []const TypeId,
+        tid: TypeId,
     ) Allocator.Error!FuncRef {
+        const params = env.tw.get(tid).func.takes;
+
         const ref = try self.nextRef(ally);
         var func = Func{
             .name = name,
+            .ty = tid,
             .takes = params.len,
-            .returns = undefined,
             .ref = ref,
         };
 
-        try func.locals.appendSlice(ally, params);
+        for (params) |param| {
+            try func.locals.append(ally, try env.reprOf(param));
+        }
+
         self.funcs.items[ref.index] = func;
 
         return ref;

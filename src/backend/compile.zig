@@ -97,38 +97,6 @@ fn compileOp(
                 try Bc.imm(b, ally, dst, value.buf);
             }
         },
-        .cast => |pure| {
-            const src = rmap.get(pure.params[0]);
-            const dst = rmap.get(pure.to);
-
-            const src_ty = env.tw.get(ref.getLocal(env.*, pure.params[0]));
-            const dst_ty = env.tw.get(ref.getLocal(env.*, pure.to));
-
-            // zig fmt: off
-            const coerceable = dst_ty.* == .ptr and dst_ty.ptr.kind == .slice
-                           and src_ty.* == .ptr;
-            // zig fmt: on
-
-            if (coerceable) {
-                // coerce ptr to array to slice
-                const arr_size = env.tw.get(src_ty.ptr.to).array.size;
-
-                const tmp = rmap.getTemp();
-                const len_ptr = rmap.getTemp();
-                defer rmap.dropTemp(tmp);
-                defer rmap.dropTemp(len_ptr);
-
-                try compileAlloca(ally, b, rmap, 16, dst);
-                try b.addInst(ally, Bc.store(8, src, dst));
-                try Bc.imm(b, ally, tmp, canon.from(&@as(u64, 8)));
-                try b.addInst(ally, Bc.iadd(dst, tmp, len_ptr));
-                try Bc.imm(b, ally, tmp, canon.from(&arr_size));
-                try b.addInst(ally, Bc.store(8, tmp, len_ptr));
-            } else {
-                // bitcast
-                try b.addInst(ally, Bc.mov(src, dst));
-            }
-        },
         .alloca => |all| {
             // store stack pointer in a register and add to it
             const dst = rmap.get(all.to);
@@ -137,7 +105,7 @@ fn compileOp(
         .store => |imp| {
             const src = rmap.get(imp.params[0]);
             const dst = rmap.get(imp.params[1]);
-            const size = env.sizeOf(ref.getLocal(env.*, imp.params[0]));
+            const size = env.rw.sizeOf(ref.getLocal(env.*, imp.params[0]));
             const nbytes = @intCast(u8, size);
 
             try b.addInst(ally, Bc.store(nbytes, src, dst));
@@ -249,25 +217,25 @@ fn compileOp(
             const rhs = rmap.get(pure.params[1]);
             const to = rmap.get(pure.to);
 
-            const ty = env.tw.get(ref.getLocal(env.*, pure.to));
+            const repr = env.rw.get(ref.getLocal(env.*, pure.to));
 
-            if (ty.* == .number and ty.number.layout == .float) {
-                // floats
-                @panic("TODO compile float arithmetic");
-            } else {
-                // integers + pointers
-                const con = switch (comptime tag) {
-                    .add => Bc.iadd,
-                    .sub => Bc.isub,
-                    .mul => Bc.imul,
-                    .div => Bc.idiv,
-                    .mod => Bc.imod,
-                    .shl => Bc.shl,
-                    .shr => Bc.shr,
-                    else => unreachable,
-                };
+            switch (repr.*) {
+                .int, .uint => {
+                    const con = switch (comptime tag) {
+                        .add => Bc.iadd,
+                        .sub => Bc.isub,
+                        .mul => Bc.imul,
+                        .div => Bc.idiv,
+                        .mod => Bc.imod,
+                        .shl => Bc.shl,
+                        .shr => Bc.shr,
+                        else => unreachable,
+                    };
 
-                try b.addInst(ally, con(lhs, rhs, to));
+                    try b.addInst(ally, con(lhs, rhs, to));
+                },
+                .float, .ptr => @panic("TODO non-integral arithmetic"),
+                .array, .coll => unreachable,
             }
         },
         else => |tag| std.debug.panic("TODO compile op {}", .{tag}),
@@ -312,6 +280,5 @@ fn compileFunc(env: *Env, super: *Builder, ref: FuncRef) Error!void {
 }
 
 pub fn compile(env: *Env, ref: FuncRef) Error!void {
-    std.debug.assert(env.sizeOf(env.getFunc(ref).returns) <= 8);
     try compileFunc(env, &env.bc, ref);
 }

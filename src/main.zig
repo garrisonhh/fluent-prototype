@@ -89,7 +89,7 @@ fn repl(env: *Env, proj: *Project) !void {
                 else => {},
             }
 
-            if (try env.reprOf(ty)) |repr| {
+            if (env.reprOf(ty) catch null) |repr| {
                 const sz = env.rw.get(repr).sizeOf(env.rw);
                 const aln = env.rw.get(repr).alignOf(env.rw);
 

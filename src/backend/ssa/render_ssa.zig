@@ -127,7 +127,7 @@ fn renderFuncLocal(
 ) !kz.Ref {
     const ty = self.locals.items[local.index];
     return try ctx.slap(
-        try ty.render(ctx, env.tw),
+        try ty.render(ctx, env.rw),
         try local.render(ctx, {}),
         .right,
         .{ .space = 1 },
@@ -269,36 +269,14 @@ fn renderFuncBlock(
 pub fn renderFunc(self: Func, ctx: *kz.Context, env: Env) !kz.Ref {
     const red = kz.Style{ .fg = .red };
 
-    // name
-    var header_texs = std.ArrayList(kz.Ref).init(ctx.ally);
-    defer header_texs.deinit();
+    // header
+    const name = if (self.name.syms.len > 0) named: {
+        break :named try ctx.print(red, "{}", .{self.name});
+    } else try ctx.print(red, "<expr>", .{});
 
-    if (self.name.syms.len > 0) {
-        try header_texs.append(try ctx.print(red, "{}", .{self.name}));
-    } else {
-        try header_texs.append(try ctx.print(red, "<expr>", .{}));
-    }
+    const ty = try self.ty.render(ctx, env.tw);
 
-    // parameters
-    try header_texs.append(try ctx.print(.{}, " :: ", .{}));
-
-    var param = Local.of(0);
-    while (param.index < self.takes) : (param.index += 1) {
-        if (param.index > 0) {
-            try header_texs.append(try ctx.print(.{}, ", ", .{}));
-        }
-
-        try header_texs.append(try renderFuncLocal(self, ctx, env, param));
-    }
-
-    if (self.takes > 0) {
-        try header_texs.append(try ctx.print(.{}, " -> ", .{}));
-    }
-
-    // return type
-    try header_texs.append(try self.returns.render(ctx, env.tw));
-
-    const header = try ctx.stack(header_texs.items, .right, .{});
+    const header = try ctx.slap(name, ty, .right, .{ .space = 1 });
 
     // body
     var block_texs = std.ArrayList(kz.Ref).init(ctx.ally);

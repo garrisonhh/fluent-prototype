@@ -82,16 +82,26 @@ pub fn deinit(self: *Self) void {
 
 pub fn identify(self: *Self, ty: Type) Allocator.Error!TypeId {
     const id = try self.tw.identify(self.ally, ty);
-    _ = try self.reprOf(id);
+
+    const E = ReprWelt.ConvertError;
+    _ = self.rw.reprOf(self.ally, self.tw, id) catch |e| switch (e) {
+        E.OutOfMemory => return Allocator.Error.OutOfMemory,
+        E.AnalysisType, E.UnknownConversion => {},
+    };
 
     return id;
 }
 
-pub fn reprOf(self: *Self, ty: TypeId) Allocator.Error!?ReprId {
+pub fn reprOf(self: *Self, ty: TypeId) Allocator.Error!ReprId {
     const E = ReprWelt.ConvertError;
     return self.rw.reprOf(self.ally, self.tw, ty) catch |e| switch (e) {
         E.OutOfMemory => Allocator.Error.OutOfMemory,
-        E.AnalysisType, E.UnknownConversion => null,
+        // if one of these happens, the compiler has (almost) definitely failed
+        // in verifying some piece of code
+        E.AnalysisType, E.UnknownConversion => std.debug.panic(
+            "reprOf failed with error: {s}",
+            .{@errorName(e)},
+        ),
     };
 }
 
