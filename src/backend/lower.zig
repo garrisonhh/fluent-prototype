@@ -50,43 +50,6 @@ fn lowerU64(env: *Env, ref: FuncRef, block: Label, n: u64) Error!Local {
     return try lowerLoadConst(env, ref, block, expr);
 }
 
-/// lower builtins that connect directly to ssa IR ops
-fn lowerOperator(
-    env: *Env,
-    ref: FuncRef,
-    block: *Label,
-    b: Builtin,
-    args: []const TExpr,
-    returns: TypeId,
-) Error!Local {
-    const ally = env.ally;
-
-    // lower args
-    const locals = try ally.alloc(Local, args.len);
-    for (args) |arg, i| {
-        locals[i] = try lowerExpr(env, ref, block, arg);
-    }
-
-    // generate operation
-    return switch (b) {
-        // zig fmt: off
-        inline .eq, .add, .sub, .mul, .div, .mod, .shl, .shr, .@"and", .@"or",
-        .not, .cast, .slice_ty, .fn_ty,
-        // zig fmt: on
-        => |tag| op: {
-            const to = try ref.addLocal(env, try env.reprOf(returns));
-            const op = @unionInit(Op, @tagName(tag), Op.Pure{
-                .to = to,
-                .params = locals,
-            });
-            try ref.addOp(env, block.*, op);
-
-            break :op to;
-        },
-        else => unreachable,
-    };
-}
-
 fn lowerArray(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     const ally = env.ally;
     const exprs = expr.data.array;
@@ -116,12 +79,12 @@ fn lowerArray(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     const el_ptr_repr = try env.reprOf(el_ptr_ty);
 
     var cur_ptr = try ref.addLocal(env, el_ptr_repr);
-    const cast_op = try Op.initPure(ally, .cast, cur_ptr, &.{arr_ptr});
-    try ref.addOp(env, block.*, cast_op);
+    const copy_op = try Op.initPure(ally, .copy, cur_ptr, &.{arr_ptr});
+    try ref.addOp(env, block.*, copy_op);
 
     if (elements.len == 1) {
         // single element arrays only need 1 store operation
-        const sto = try Op.initImpure(ally, .store, &.{ elements[0], cur_ptr });
+        const sto = try Op.initEffect(ally, .store, &.{ elements[0], cur_ptr });
         try ref.addOp(env, block.*, sto);
 
         return arr_ptr;
@@ -133,7 +96,7 @@ fn lowerArray(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     // store each element
     for (elements) |elem, i| {
         // store this element at the current array ptr
-        const sto = try Op.initImpure(ally, .store, &.{ elem, cur_ptr });
+        const sto = try Op.initEffect(ally, .store, &.{ elem, cur_ptr });
         try ref.addOp(env, block.*, sto);
 
         // increment the current ptr, unless this is the last element
@@ -226,6 +189,62 @@ fn lowerIf(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     return final;
 }
 
+fn lowerBuiltin(
+    env: *Env,
+    ref: FuncRef,
+    block: *Label,
+    b: Builtin,
+    expr: TExpr,
+) Error!Local {
+    return switch (b) {
+        .recur => unreachable,
+        .lambda => try lowerLambda(env, ref, block, expr),
+        .@"if" => try lowerIf(env, ref, block, expr),
+        .cast => cast: {
+            const ally = env.ally;
+            const child = try lowerExpr(env, ref, block, expr.data.call[1]);
+            const to = try ref.addLocal(env, try env.reprOf(expr.ty));
+
+            const op = try Op.initPure(ally, .copy, to, &.{child});
+            try ref.addOp(env, block.*, op);
+
+            break :cast to;
+        },
+        // zig fmt: off
+        .eq, .add, .sub, .mul, .div, .mod, .shl, .shr, .@"and", .@"or",
+        .not, .slice_ty, .fn_ty
+        // zig fmt: on
+        => |tag| op: {
+            // builtins that directly map to ssa ops
+            const args = expr.data.call[1..];
+            const locals = try env.ally.alloc(Local, args.len);
+            for (args) |arg, i| {
+                locals[i] = try lowerExpr(env, ref, block, arg);
+            }
+
+            const to = try ref.addLocal(env, try env.reprOf(expr.ty));
+
+            // this convinces the zig compiler that Op will always have this tag
+            const op = switch (tag) {
+                inline else => |t| t: {
+                    const name = @tagName(t);
+                    if (!@hasField(Op, name)) unreachable;
+
+                    break :t @unionInit(Op, name, Op.Pure{
+                        .to = to,
+                        .params = locals,
+                    });
+                },
+            };
+
+            try ref.addOp(env, block.*, op);
+
+            break :op to;
+        },
+        else => std.debug.panic("TODO lower builtin {s}", .{@tagName(b)}),
+    };
+}
+
 fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     const exprs = expr.data.call;
     std.debug.assert(exprs.len > 0);
@@ -233,14 +252,7 @@ fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     // get true head
     const raw_head = exprs[0];
     const head = switch (raw_head.data) {
-        .name => |name| name: {
-            const got = env.get(name);
-            if (builtin.mode == .Debug and got.isBuiltin(.pie_stone)) {
-                std.debug.panic("called pie_stone {}", .{name});
-            }
-
-            break :name got;
-        },
+        .name => |name| env.get(name),
         .builtin => |b| b: {
             if (b == .recur) {
                 break :b TExpr.initFuncRef(raw_head.loc, raw_head.ty, ref);
@@ -253,22 +265,7 @@ fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
 
     // dispatch on builtins (except for recur)
     if (head.data == .builtin) {
-        switch (head.data.builtin) {
-            .recur => unreachable,
-            // zig fmt: off
-            .eq, .add, .sub, .mul, .div, .mod, .shl, .shr, .@"and", .@"or",
-            .not, .cast, .slice_ty, .fn_ty, .tuple_ty
-            // zig fmt: on
-            => |b| {
-                const tail = expr.data.call[1..];
-                return try lowerOperator(env, ref, block, b, tail, expr.ty);
-            },
-            .lambda => return try lowerLambda(env, ref, block, expr),
-            .@"if" => return try lowerIf(env, ref, block, expr),
-            else => |b| {
-                std.debug.panic("TODO lower builtin {s}", .{@tagName(b)});
-            },
-        }
+        return try lowerBuiltin(env, ref, block, head.data.builtin, expr);
     }
 
     // lower all children
@@ -334,7 +331,7 @@ fn lowerFunction(
 
     // lowering expr will return the final value
     const final = try lowerExpr(env, ref, &block, body);
-    try ref.addOp(env, block, try Op.initImpure(env.ally, .ret, &.{final}));
+    try ref.addOp(env, block, try Op.initEffect(env.ally, .ret, &.{final}));
 
     return ref;
 }

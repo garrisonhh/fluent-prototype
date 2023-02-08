@@ -63,14 +63,14 @@ pub const Op = union(enum) {
         to: Local,
     };
 
-    pub const Impure = struct {
+    pub const Effect = struct {
         params: []Local,
     };
 
     // unique
     ldc: LoadConst,
-    cast: Pure,
-    ret: Impure,
+    copy: Pure,
+    ret: Effect,
     call: Call,
 
     // control flow
@@ -80,8 +80,8 @@ pub const Op = union(enum) {
 
     // memory
     alloca: Alloca, // allocates a number of bytes and returns pointer
-    store: Impure, // store a at addr b
-    store_elem: Impure, // store a at addr b with offset c
+    store: Effect, // store a at addr b
+    store_elem: Effect, // store a at addr b with offset c
     load: Pure, // loads data from ptr a
 
     // math
@@ -139,7 +139,7 @@ pub const Op = union(enum) {
         });
     }
 
-    pub fn initImpure(
+    pub fn initEffect(
         ally: Allocator,
         comptime tag: std.meta.Tag(Self),
         params: []const Local,
@@ -147,7 +147,7 @@ pub const Op = union(enum) {
         return @unionInit(
             Self,
             @tagName(tag),
-            Impure{ .params = try ally.dupe(Local, params) },
+            Effect{ .params = try ally.dupe(Local, params) },
         );
     }
 
@@ -155,7 +155,7 @@ pub const Op = union(enum) {
         switch (self.classify()) {
             .call => |call| ally.free(call.params),
             .pure => |pure| ally.free(pure.params),
-            .impure => |impure| ally.free(impure.params),
+            .effect => |effect| ally.free(effect.params),
             .phi => |phi| ally.free(phi.from),
             else => {},
         }
@@ -169,7 +169,7 @@ pub const Op = union(enum) {
         phi: Phi,
         alloca: Alloca,
         pure: Pure,
-        impure: Impure,
+        effect: Effect,
 
         fn getFieldByType(comptime T: type) []const u8 {
             const fields = @typeInfo(Class).Union.fields;

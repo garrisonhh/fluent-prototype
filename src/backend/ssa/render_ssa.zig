@@ -231,9 +231,9 @@ fn renderFuncOp(self: Func, ctx: *kz.Context, env: Env, op: Op) !kz.Ref {
 
             try renderFuncParams(self, ctx, env, &line, pure.params);
         },
-        .impure => |impure| {
+        .effect => |effect| {
             try line.append(try ctx.print(.{}, "{s} ", .{tag}));
-            try renderFuncParams(self, ctx, env, &line, impure.params);
+            try renderFuncParams(self, ctx, env, &line, effect.params);
         },
     }
 

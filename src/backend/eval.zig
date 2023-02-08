@@ -128,11 +128,13 @@ pub fn evalTyped(
     }
 
     // time logging
-    const duration = now() - start;
-    try stdout.print("eval finished in {d:.6}ms.\n", .{duration});
+    const duration = now() - start - render_time;
+
+    try stdout.print("eval finished in {d:.6}ms", .{duration});
     if (render_time > 0) {
-        try stdout.print("render time {d:.6}ms.\n", .{render_time});
+        try stdout.print(" (render time {d:.6}ms)", .{render_time});
     }
+    try stdout.writeAll(".\n");
 
     return Result.ok(final);
 }

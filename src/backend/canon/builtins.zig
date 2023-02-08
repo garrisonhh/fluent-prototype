@@ -13,6 +13,7 @@ pub const Builtin = enum {
 
     // control flow
     lambda,
+    // TODO remove this
     recur,
     do,
     @"if",

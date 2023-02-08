@@ -97,21 +97,27 @@ fn compileOp(
                 try Bc.imm(b, ally, dst, value.buf);
             }
         },
+        .copy => |copy| {
+            const src = rmap.get(copy.params[0]);
+            const dst = rmap.get(copy.to);
+
+            try b.addInst(ally, Bc.mov(src, dst));
+        },
         .alloca => |all| {
             // store stack pointer in a register and add to it
             const dst = rmap.get(all.to);
             try compileAlloca(ally, b, rmap, all.size, dst);
         },
-        .store => |imp| {
-            const src = rmap.get(imp.params[0]);
-            const dst = rmap.get(imp.params[1]);
-            const size = env.rw.sizeOf(ref.getLocal(env.*, imp.params[0]));
+        .store => |eff| {
+            const src = rmap.get(eff.params[0]);
+            const dst = rmap.get(eff.params[1]);
+            const size = env.rw.sizeOf(ref.getLocal(env.*, eff.params[0]));
             const nbytes = @intCast(u8, size);
 
             try b.addInst(ally, Bc.store(nbytes, src, dst));
         },
-        .ret => |imp| {
-            const src = rmap.get(imp.params[0]);
+        .ret => |eff| {
+            const src = rmap.get(eff.params[0]);
 
             try b.addInst(ally, Bc.mov(src, Vm.RETURN));
             try b.addInst(ally, Bc.ret);
@@ -234,7 +240,16 @@ fn compileOp(
 
                     try b.addInst(ally, con(lhs, rhs, to));
                 },
-                .float, .ptr => @panic("TODO non-integral arithmetic"),
+                .ptr => {
+                    const con = switch (comptime tag) {
+                        .add => Bc.iadd,
+                        .sub => Bc.isub,
+                        else => unreachable,
+                    };
+
+                    try b.addInst(ally, con(lhs, rhs, to));
+                },
+                .float => @panic("TODO non-integral arithmetic"),
                 .array, .coll => unreachable,
             }
         },

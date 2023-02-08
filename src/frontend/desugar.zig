@@ -158,6 +158,13 @@ fn desugarExpr(
             });
         },
         .coll => {
+            if (expr.exprs.len == 0) {
+                return Result.ok(RawExpr{
+                    .loc = expr.loc,
+                    .form = .coll,
+                });
+            }
+
             const res = try desugarExpr(ally, proj, expr.exprs[0]);
             const inner = res.get() orelse return res;
 

@@ -76,12 +76,24 @@ pub const Repr = union(enum) {
             .any,
             .set,
             => return ReprWelt.ConvertError.AnalysisType,
-            .builtin,
-            .func,
-            => return ReprWelt.ConvertError.UnknownConversion,
+            .func => return ReprWelt.ConvertError.UnknownConversion,
             .unit => Self{ .coll = &.{} },
             .@"bool" => U8,
-            .atom, .ty => U64,
+            .atom, .ty, .builtin => U64,
+            .array => |arr| Self{ .array = .{
+                .size = arr.size,
+                .of = try rw.reprOf(ally, tw, arr.of),
+            } },
+            .number => |num| num: {
+                const nbytes = if (num.bits) |bits| @divExact(bits, 8) else 8;
+                break :num switch (num.layout) {
+                    inline else => |tag| @unionInit(
+                        Self,
+                        @tagName(tag),
+                        @intCast(u4, nbytes),
+                    ),
+                };
+            },
             .ptr => |ptr| switch (ptr.kind) {
                 .single, .many => Self{
                     .ptr = try rw.reprOf(ally, tw, ptr.to),
@@ -98,16 +110,6 @@ pub const Repr = union(enum) {
                         &.{ ptr_repr, u64_id },
                     );
                 },
-            },
-            .number => |num| num: {
-                const nbytes = if (num.bits) |bits| @divExact(bits, 8) else 8;
-                break :num switch (num.layout) {
-                    inline else => |tag| @unionInit(
-                        Self,
-                        @tagName(tag),
-                        @intCast(u4, nbytes),
-                    ),
-                };
             },
             else => |tag| std.debug.panic("TODO convert repr of {}", .{tag}),
         };
