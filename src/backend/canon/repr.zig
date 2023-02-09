@@ -19,19 +19,12 @@ pub const Repr = union(enum) {
         of: ReprId,
     };
 
-    const Self = @This();
+    pub const Field = struct {
+        offset: usize,
+        of: ReprId,
+    };
 
-    // TODO move this
-    pub const U8 = Self{ .uint = 1 };
-    pub const U16 = Self{ .uint = 2 };
-    pub const U32 = Self{ .uint = 4 };
-    pub const U64 = Self{ .uint = 8 };
-    pub const I8 = Self{ .int = 1 };
-    pub const I16 = Self{ .int = 2 };
-    pub const I32 = Self{ .int = 4 };
-    pub const I64 = Self{ .int = 8 };
-    pub const F32 = Self{ .float = 4 };
-    pub const F64 = Self{ .float = 8 };
+    const Self = @This();
 
     // hold byte width (MUST be 1, 2, 4, or 8)
     uint: u4,
@@ -40,14 +33,14 @@ pub const Repr = union(enum) {
     // structured data
     ptr: ReprId,
     array: Array,
-    coll: []ReprId,
+    coll: []Field,
 
     /// dupes input
     pub fn initColl(
         ally: Allocator,
-        coll: []const ReprId,
+        coll: []const Field,
     ) Allocator.Error!Self {
-        return Self{ .coll = try ally.dupe(ReprId, coll) };
+        return Self{ .coll = try ally.dupe(Field, coll) };
     }
 
     pub fn deinit(self: Self, ally: Allocator) void {
@@ -78,8 +71,8 @@ pub const Repr = union(enum) {
             => return ReprWelt.ConvertError.AnalysisType,
             .func => return ReprWelt.ConvertError.UnknownConversion,
             .unit => Self{ .coll = &.{} },
-            .@"bool" => U8,
-            .atom, .ty, .builtin => U64,
+            .@"bool" => Self{ .uint = 1 },
+            .atom, .ty, .builtin => Self{ .uint = 8 },
             .array => |arr| Self{ .array = .{
                 .size = arr.size,
                 .of = try rw.reprOf(ally, tw, arr.of),
@@ -100,18 +93,45 @@ pub const Repr = union(enum) {
                 },
                 .slice => slice: {
                     // TODO this should be const
-                    const u64_id = rw.reprs.get(U64).?;
+                    const u64_repr = rw.reprs.get(.{ .uint = 8 }).?;
                     const ptr_repr = try rw.intern(ally, Self{
                         .ptr = try rw.reprOf(ally, tw, ptr.to),
                     });
 
-                    break :slice try Self.initColl(
-                        ally,
-                        &.{ ptr_repr, u64_id },
-                    );
+                    const fields = [_]Field{
+                        Field{ .offset = 0, .of = ptr_repr },
+                        Field{ .offset = 8, .of = u64_repr },
+                    };
+
+                    break :slice try Self.initColl(ally, &fields);
                 },
             },
             else => |tag| std.debug.panic("TODO convert repr of {}", .{tag}),
+        };
+    }
+
+    pub const AccessError = error{ NotCollection, OutOfBounds };
+
+    /// get the repr of a field (assuming this is a collection of some kind)
+    pub fn access(self: Self, rw: ReprWelt, index: usize) AccessError!Field {
+        return switch (self) {
+            .uint, .int, .float, .ptr => AccessError.NotCollection,
+            .array => |arr| arr: {
+                if (index >= arr.size) {
+                    break :arr AccessError.NotCollection;
+                }
+
+                _ = rw;
+
+                @panic("TODO array field access");
+            },
+            .coll => |coll| coll: {
+                if (index >= coll.len) {
+                    break :coll AccessError.NotCollection;
+                }
+
+                break :coll coll[index];
+            },
         };
     }
 
@@ -123,8 +143,8 @@ pub const Repr = union(enum) {
             .array => |arr| rw.get(arr.of).alignOf(rw),
             .coll => |coll| coll: {
                 var max_aln: usize = 1;
-                for (coll) |child| {
-                    const child_aln = rw.get(child).alignOf(rw);
+                for (coll) |field| {
+                    const child_aln = rw.get(field.of).alignOf(rw);
                     max_aln = @max(max_aln, child_aln);
                 }
 
@@ -144,7 +164,7 @@ pub const Repr = union(enum) {
 
                 var size: usize = 0;
                 for (coll) |field| {
-                    const repr = rw.get(field);
+                    const repr = rw.get(field.of);
 
                     // ensure field is on an aligned boundary
                     const aln = repr.alignOf(rw);
@@ -173,7 +193,12 @@ pub const Repr = union(enum) {
                 wyhash.update(b(&arr.size));
                 wyhash.update(b(&arr.of));
             },
-            .coll => |coll| wyhash.update(b(&coll)),
+            .coll => |coll| {
+                for (coll) |field| {
+                    wyhash.update(b(&field.offset));
+                    wyhash.update(b(&field.of));
+                }
+            },
         }
     }
 
@@ -191,8 +216,11 @@ pub const Repr = union(enum) {
                     break :coll false;
                 }
 
-                for (coll) |child, i| {
-                    if (!child.eql(other.coll[i])) {
+                for (coll) |field, i| {
+                    const other_field = other.coll[i];
+                    if (field.offset != other_field.offset or
+                        !field.of.eql(other_field.of))
+                    {
                         break :coll false;
                     }
                 }
@@ -222,6 +250,7 @@ pub const Repr = union(enum) {
         rw: ReprWelt,
     ) Allocator.Error!kz.Ref {
         const sty = kz.Style{ .fg = .blue };
+        const offset_sty = kz.Style{ .fg = .yellow };
 
         return switch (self) {
             .uint, .int, .float => |bytes| try ctx.print(
@@ -245,8 +274,13 @@ pub const Repr = union(enum) {
                 var list = try ctx.ally.alloc(kz.Ref, coll.len);
                 defer ctx.ally.free(list);
 
-                for (coll) |elem, i| {
-                    list[i] = try elem.render(ctx, rw);
+                for (coll) |field, i| {
+                    list[i] = try ctx.slap(
+                        try field.of.render(ctx, rw),
+                        try ctx.print(offset_sty, "+{}", .{field.offset}),
+                        .right,
+                        .{ .space = 1 },
+                    );
                 }
 
                 break :coll try ctx.stack(&.{

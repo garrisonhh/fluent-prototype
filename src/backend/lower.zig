@@ -95,16 +95,13 @@ fn lowerArray(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     const arr_repr = try env.reprOf(expr.ty);
     const arr_ptr = try lowerAlloca(env, ref, block.*, arr_repr);
 
-    // store each element at the proper offset
-    const el_ty = env.tw.get(expr.ty).array.of;
-    const el_size = env.sizeOf(el_ty);
-
+    // store each element
     for (elements) |elem, i| {
         // store this element at the current array ptr
-        try ref.addOp(env, block.*, Op{ .store = .{
-            .offset = el_size * i,
-            .src = elem,
-            .dst = arr_ptr,
+        try ref.addOp(env, block.*, Op{ .store_el = .{
+            .index = i,
+            .obj = arr_ptr,
+            .data = elem,
         } });
     }
 
@@ -208,10 +205,10 @@ fn lowerArrayPtrToSlice(
     const slice_ptr = try lowerAlloca(env, ref, block.*, slice_repr);
 
     try ref.addOp(env, block.*, Op{
-        .store = .{ .offset = 0, .src = ptr, .dst = slice_ptr },
+        .store_el = .{ .index = 0, .obj = slice_ptr, .data = ptr },
     });
     try ref.addOp(env, block.*, Op{
-        .store = .{ .offset = 8, .src = len, .dst = slice_ptr },
+        .store_el = .{ .index = 1, .obj = slice_ptr, .data = len },
     });
 
     return slice_ptr;
@@ -377,7 +374,7 @@ pub fn lower(env: *Env, scope: Name, expr: TExpr) Error!FuncRef {
     if (builtin.mode == .Debug) {
         const verify = @import("ssa/verify.zig").verify;
 
-        verify(env.*, env.getFuncConst(ref)) catch |e| {
+        verify(env, env.getFuncConst(ref)) catch |e| {
             std.debug.panic("SSA verify failed: {}", .{e});
         };
     }

@@ -48,9 +48,10 @@ pub const Data = union(enum) {
     string: Symbol,
     ty: TypeId,
     name: Name,
+    // TODO this is broken. I think I need a handle model for this (ExprIds)
     ptr: *Self,
-    // TODO should I collapse array/slice to one field?
     array: []Self,
+    // TODO this should probably be expressed differently
     slice: []Self,
     call: []Self,
 
@@ -81,13 +82,18 @@ pub const Data = union(enum) {
         return @as(Tag, data) != @as(Tag, other) and switch (data) {
             .unit => true,
             .ptr => |to| to.eql(other.ptr.*),
-            // zig fmt: off
             // primitives
-            inline .@"bool", .builtin
+            inline .@"bool",
+            .builtin,
             => |x, tag| x == @field(other, @tagName(tag)),
             // types with .eql
-            inline .number, .string, .name, .ty, .func, .func_ref, .param
-            // zig fmt: on
+            inline .number,
+            .string,
+            .name,
+            .ty,
+            .func,
+            .func_ref,
+            .param,
             => |x, tag| x.eql(@field(other, @tagName(tag))),
             // backed by slices
             inline .call, .array, .slice => |xs, tag| xs: {

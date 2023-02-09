@@ -67,10 +67,11 @@ pub const Op = union(enum) {
         params: []Local,
     };
 
-    pub const Mem = struct {
-        offset: usize,
-        src: Local,
-        dst: Local,
+    /// accessing a repr field
+    pub const Access = struct {
+        index: usize,
+        obj: Local,
+        data: Local,
     };
 
     // unique
@@ -86,8 +87,10 @@ pub const Op = union(enum) {
 
     // memory
     alloca: Alloca, // allocates a number of bytes and returns pointer
-    store: Mem, // *dst = src
-    load: Mem, // dst = *src
+    store: Effect, // *a = b
+    load: Effect, // b = *a
+    store_el: Access, // obj[n] = data
+    load_el: Access, // data = obj[n]
 
     // math
     add: Pure,
@@ -175,7 +178,7 @@ pub const Op = union(enum) {
         alloca: Alloca,
         pure: Pure,
         effect: Effect,
-        mem: Mem,
+        access: Access,
 
         fn getFieldByType(comptime T: type) []const u8 {
             const fields = @typeInfo(Class).Union.fields;
@@ -437,11 +440,11 @@ pub const FuncRef = packed struct {
     }
 
     pub fn getConst(self: Self, env: Env, c: Const) TExpr {
-        return env.getFuncConst(self).consts.items[c.index];
+        return env.getFuncConst(self).getConst(c);
     }
 
     pub fn getLocal(self: Self, env: Env, l: Local) ReprId {
-        return env.getFuncConst(self).locals.items[l.index];
+        return env.getFuncConst(self).getLocal(l);
     }
 
     /// clones expr and stores in func
@@ -510,6 +513,14 @@ pub const Func = struct {
         self.locals.deinit(ally);
         for (self.blocks.items) |*block| block.deinit(ally);
         self.blocks.deinit(ally);
+    }
+
+    pub fn getConst(self: Self, @"const": Const) TExpr {
+        return self.consts.items[@"const".index];
+    }
+
+    pub fn getLocal(self: Self, local: Local) ReprId {
+        return self.locals.items[local.index];
     }
 
     pub const render = rendering.renderFunc;

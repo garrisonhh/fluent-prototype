@@ -265,9 +265,9 @@ pub const Type = union(enum) {
                 const bits_fit = have_bits and self.number.bits.? < num.bits.?;
 
                 if (layouts_match) {
-                    if (bits_eql or from_compiler_num) {
+                    if (bits_eql) {
                         break :num .inbounds;
-                    } else if (bits_fit) {
+                    } else if (bits_fit or from_compiler_num) {
                         break :num .natural;
                     }
                 }

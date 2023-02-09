@@ -108,24 +108,15 @@ fn compileOp(
             const dst = rmap.get(all.to);
             try compileAlloca(ally, b, rmap, all.size, dst);
         },
-        .store => |mem| {
-            const src = rmap.get(mem.src);
-            const dst = rmap.get(mem.dst);
+        .store => |eff| {
+            const dst = rmap.get(eff.params[0]);
+            const src = rmap.get(eff.params[1]);
+            const src_repr = ref.getLocal(env.*, eff.params[1]);
 
-            const size = env.rw.sizeOf(ref.getLocal(env.*, mem.src));
+            const size = env.rw.sizeOf(src_repr);
             const nbytes = @intCast(u8, size);
 
-            // if an offset is needed, load it and add it to src
-            if (mem.offset > 0) {
-                const tmp = rmap.getTemp();
-                defer rmap.dropTemp(tmp);
-
-                try Bc.imm(b, ally, tmp, canon.from(&mem.offset));
-                try b.addInst(ally, Bc.iadd(dst, tmp, tmp));
-                try b.addInst(ally, Bc.store(nbytes, src, tmp));
-            } else {
-                try b.addInst(ally, Bc.store(nbytes, src, dst));
-            }
+            try b.addInst(ally, Bc.store(nbytes, src, dst));
         },
         .ret => |eff| {
             const src = rmap.get(eff.params[0]);
