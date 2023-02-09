@@ -115,6 +115,7 @@ pub const Repr = union(enum) {
         };
     }
 
+    /// TODO cache this
     pub fn alignOf(self: Self, rw: ReprWelt) usize {
         return switch (self) {
             .uint, .int, .float => |nbytes| nbytes,
@@ -132,6 +133,7 @@ pub const Repr = union(enum) {
         };
     }
 
+    /// TODO cache this
     pub fn sizeOf(self: Self, rw: ReprWelt) usize {
         return switch (self) {
             .uint, .int, .float => |nbytes| nbytes,

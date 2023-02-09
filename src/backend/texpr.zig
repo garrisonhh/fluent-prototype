@@ -68,6 +68,15 @@ pub const Data = union(enum) {
     // functional lambda.
     builtin: Builtin,
 
+    fn getChildren(data: Data) []Self {
+        return switch (data) {
+            .call, .array, .slice => |xs| xs,
+            .ptr => |child| @ptrCast(*[1]Self, child),
+            .func => |func| @ptrCast(*[1]Self, func.body),
+            else => &.{},
+        };
+    }
+
     fn eql(data: Data, other: Data) bool {
         return @as(Tag, data) != @as(Tag, other) and switch (data) {
             .unit => true,
@@ -97,6 +106,27 @@ pub const Data = union(enum) {
             },
         };
     }
+
+    /// computation for cached `known_const`
+    fn isConst(data: Data) bool {
+        // children must be const
+        for (data.getChildren()) |child| {
+            if (!child.known_const) {
+                return false;
+            }
+        }
+
+        // stored data must not require some kind of execution
+        return switch (data) {
+            // zig fmt: off
+            .unit, .ty, .@"bool", .number, .string, .builtin, .func_ref, .array,
+            .slice,
+            // zig fmt: on
+            => true,
+            // TODO const ptrs + func ptrs?
+            .ptr, .func, .name, .call, .param => false,
+        };
+    }
 };
 
 ty: TypeId,
@@ -106,35 +136,12 @@ loc: ?Loc,
 known_const: bool,
 
 pub fn init(loc: ?Loc, known_const: bool, ty: TypeId, data: Data) Self {
-    var self = Self{
+    return Self{
         .data = data,
         .loc = loc,
         .ty = ty,
-        .known_const = known_const,
+        .known_const = known_const or data.isConst(),
     };
-
-    // check for known const-ness if not provided
-    self.known_const = self.known_const or con: {
-        // children must be const
-        for (self.getChildren()) |child| {
-            if (!child.known_const) {
-                break :con false;
-            }
-        }
-
-        // stored data must not require some kind of execution
-        break :con switch (self.data) {
-            // zig fmt: off
-            .unit, .ty, .@"bool", .number, .string, .builtin, .func_ref, .array,
-            .slice,
-            // zig fmt: on
-            => true,
-            // TODO const ptrs + func ptrs?
-            .ptr, .func, .name, .call, .param => false,
-        };
-    };
-
-    return self;
 }
 
 pub fn initBuiltin(loc: ?Loc, ty: TypeId, b: Builtin) Self {
@@ -179,15 +186,6 @@ pub fn deinit(self: Self, ally: Allocator) void {
     }
 }
 
-fn cloneChildren(ally: Allocator, exprs: []Self) Allocator.Error![]Self {
-    const cloned = try ally.alloc(Self, exprs.len);
-    for (exprs) |child, i| {
-        cloned[i] = try child.clone(ally);
-    }
-
-    return cloned;
-}
-
 pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
     const data = switch (self.data) {
         // zig fmt: off
@@ -197,14 +195,21 @@ pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         .ptr => |child| Data{
             .ptr = try com.placeOn(ally, try child.clone(ally)),
         },
-        .func => |func| Data{ .func = .{
-            .name = func.name,
-            .body = try com.placeOn(ally, try func.body.clone(ally)),
-        } },
+        .func => |func| Data{
+            .func = .{
+                .name = func.name,
+                .body = try com.placeOn(ally, try func.body.clone(ally)),
+            },
+        },
         .string => |sym| Data{ .string = try sym.clone(ally) },
-        .call => |children| Data{ .call = try cloneChildren(ally, children) },
-        .array => |children| Data{ .array = try cloneChildren(ally, children) },
-        .slice => |children| Data{ .slice = try cloneChildren(ally, children) },
+        inline .call, .array, .slice => |exprs, tag| coll: {
+            const cloned = try ally.alloc(Self, exprs.len);
+            for (exprs) |child, i| {
+                cloned[i] = try child.clone(ally);
+            }
+
+            break :coll @unionInit(Data, @tagName(tag), cloned);
+        },
     };
 
     return Self{
@@ -223,12 +228,7 @@ pub fn eql(self: Self, other: Self) bool {
 ///
 /// useful for recursive operations on TExprs.
 pub fn getChildren(self: Self) []Self {
-    return switch (self.data) {
-        .call, .array, .slice => |xs| xs,
-        .ptr => |child| @ptrCast(*[1]Self, child),
-        .func => |func| @ptrCast(*[1]Self, func.body),
-        else => &.{},
-    };
+    return self.data.getChildren();
 }
 
 pub fn isBuiltin(self: Self, tag: Builtin) bool {
