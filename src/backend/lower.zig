@@ -309,7 +309,7 @@ fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Local {
     // lower call and return value
     const returns = env.tw.get(head.ty).func.returns;
     const dst = try ref.addLocal(env, try env.reprOf(returns));
-    const call = try Op.initCall(env.ally, dst, locals[0], locals[1..]);
+    const call = try Op.initValCall(env.ally, dst, locals[0], locals[1..]);
     try ref.addOp(env, block.*, call);
 
     return dst;

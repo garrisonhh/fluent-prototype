@@ -32,10 +32,17 @@ pub const Op = union(enum) {
         to: Local,
     };
 
-    pub const Call = struct {
+    /// call which returns by value
+    pub const ValCall = struct {
         func: Local,
         params: []Local,
         to: Local,
+    };
+
+    /// call which returns by reference
+    pub const RefCall = struct {
+        func: Local,
+        params: []Local,
     };
 
     pub const Branch = struct {
@@ -79,7 +86,8 @@ pub const Op = union(enum) {
     ldc: LoadConst,
     copy: Pure,
     ret: Effect,
-    call: Call,
+    vcall: ValCall,
+    rcall: RefCall,
 
     // control flow
     br: Branch,
@@ -112,14 +120,25 @@ pub const Op = union(enum) {
     slice_ty: Pure,
     fn_ty: Pure,
 
-    pub fn initCall(
+    pub fn initValCall(
         ally: Allocator,
         to: Local,
         func: Local,
         params: []const Local,
     ) Allocator.Error!Self {
-        return Self{ .call = .{
+        return Self{ .vcall = .{
             .to = to,
+            .func = func,
+            .params = try ally.dupe(Local, params),
+        } };
+    }
+
+    pub fn initRefCall(
+        ally: Allocator,
+        func: Local,
+        params: []const Local,
+    ) Allocator.Error!Self {
+        return Self{ .rcall = .{
             .func = func,
             .params = try ally.dupe(Local, params),
         } };
@@ -162,9 +181,11 @@ pub const Op = union(enum) {
 
     pub fn deinit(self: *Self, ally: Allocator) void {
         switch (self.classify()) {
-            .call => |call| ally.free(call.params),
-            .pure => |pure| ally.free(pure.params),
-            .effect => |effect| ally.free(effect.params),
+            inline .vcall,
+            .rcall,
+            .pure,
+            .effect,
+            => |data| ally.free(data.params),
             .phi => |phi| ally.free(phi.from),
             else => {},
         }
@@ -172,7 +193,8 @@ pub const Op = union(enum) {
 
     pub const Class = union(enum) {
         ldc: LoadConst,
-        call: Call,
+        vcall: ValCall,
+        rcall: RefCall,
         branch: Branch,
         jump: Jump,
         phi: Phi,

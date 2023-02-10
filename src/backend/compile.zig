@@ -127,7 +127,7 @@ fn compileOp(
             try b.addInst(ally, Bc.mov(src, Vm.RETURN));
             try b.addInst(ally, Bc.ret);
         },
-        .call => |call| {
+        .vcall => |call| {
             // push all live ssa values that aren't dying or being born here
             var live = std.BoundedArray(Register, Register.COUNT){};
             var iter = rmap.iterator();

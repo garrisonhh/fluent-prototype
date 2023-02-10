@@ -26,6 +26,7 @@ pub const Error =
     LargeLocal,
     InvalidArgLen,
     InvalidOffset,
+    InvalidCallArgs,
     MismatchedReprs,
     MismatchedAllocaSize,
 };
@@ -75,10 +76,8 @@ fn verifyOp(env: *Env, func: *const Func, op: Op) Error!void {
             const const_repr = try env.reprOf(func.getConst(ldc.a).ty);
             try expectEql(func.getLocal(ldc.to), const_repr);
         },
-        .call => |call| {
-            _ = call;
-
-            @panic("TODO verify ssa calls");
+        .vcall, .rcall => {
+            // TODO verify calls
         },
         .ret => |ret| {
             const args = ret.params;

@@ -181,15 +181,24 @@ fn renderFuncOp(self: Func, ctx: *kz.Context, env: Env, op: Op) !kz.Ref {
                 try expr.render(ctx, env),
             });
         },
-        .call => |call| {
+        .vcall => |vcall| {
             try line.appendSlice(&.{
-                try renderFuncLocal(self, ctx, env, call.to),
+                try renderFuncLocal(self, ctx, env, vcall.to),
                 try ctx.print(.{}, " = {s} ", .{tag}),
-                try renderFuncLocal(self, ctx, env, call.func),
+                try renderFuncLocal(self, ctx, env, vcall.func),
                 try ctx.clone(comma),
             });
 
-            try renderFuncParams(self, ctx, env, &line, call.params);
+            try renderFuncParams(self, ctx, env, &line, vcall.params);
+        },
+        .rcall => |rcall| {
+            try line.appendSlice(&.{
+                try ctx.print(.{}, "{s} ", .{tag}),
+                try renderFuncLocal(self, ctx, env, rcall.func),
+                try ctx.clone(comma),
+            });
+
+            try renderFuncParams(self, ctx, env, &line, rcall.params);
         },
         .phi => |phi| {
             try line.appendSlice(&.{
