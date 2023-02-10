@@ -100,7 +100,7 @@ fn compileOp(
                 try Bc.imm(b, ally, dst, value.buf);
             }
         },
-        .copy => |copy| {
+        .copy, .ptrcast => |copy| {
             const src = rmap.get(copy.params[0]);
             const dst = rmap.get(copy.to);
 

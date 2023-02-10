@@ -79,10 +79,13 @@ pub const Op = union(enum) {
 
     // unique
     ldc: LoadConst,
-    copy: Pure,
     ret: Effect,
     vcall: Call, // call & return by value
     rcall: Call, // call & return thru reference
+
+    // casts and copies
+    copy: Pure, // x: A = y: A
+    ptrcast: Pure, // x: *A = y: *B
 
     // control flow
     br: Branch,

@@ -251,17 +251,35 @@ fn lowerArrayPtrToSlice(
     const len = (try lowerU64(env, ref, block.*, array_len)).by_value;
     const ptr = (try lowerExpr(env, ref, block, child)).by_ref;
 
-    // alloca space for slice
+    // stack alloc for slice
     const slice_repr = try env.reprOf(expr.ty);
-    const len_repr = try env.rw.intern(ally, Repr{ .uint = 8 });
-    const len_ptr_repr = try env.rw.intern(ally, Repr{ .ptr = len_repr });
-
     const slice_ptr = try stackAlloc(env, ref, block.*, slice_repr);
+
+    // get field reprs
+    const slice_fields = env.rw.get(slice_repr).coll;
+    const ptr_ptr_repr = try env.rw.intern(ally, Repr{
+        .ptr = slice_fields[0].of,
+    });
+    const len_ptr_repr = try env.rw.intern(ally, Repr{
+        .ptr = slice_fields[1].of,
+    });
+
+    const ptr_ptr = try ref.addLocal(env, ptr_ptr_repr);
     const len_ptr = try ref.addLocal(env, len_ptr_repr);
 
+    // copy everything over
+    const cast_ptr = try ref.addLocal(env, slice_fields[0].of);
+    const cast_op = try Op.initPure(ally, .ptrcast, cast_ptr, &.{ptr});
+    try ref.addOp(env, block.*, cast_op);
+
+    try ref.addOp(env, block.*, Op{ .gfp = .{
+        .to = ptr_ptr,
+        .index = 0,
+        .obj = slice_ptr,
+    } });
     try ref.addOp(env, block.*, try Op.initEffect(ally, .store, &.{
-        slice_ptr,
-        ptr,
+        ptr_ptr,
+        cast_ptr,
     }));
 
     try ref.addOp(env, block.*, Op{ .gfp = .{

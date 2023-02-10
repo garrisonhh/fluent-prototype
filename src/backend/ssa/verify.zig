@@ -139,14 +139,16 @@ fn verifyOp(env: *Env, func: *const Func, op: Op) Error!void {
             const fn_returns = func.getLocal(args[1]);
             const to = func.getLocal(pure.to);
 
-            const type_ty = try env.identify(.ty);
-            const type_slice_ty = try env.identify(Type{
-                .ptr = .{ .kind = .slice, .to = type_ty },
-            });
-            const type_repr = try env.reprOf(type_ty);
-            const type_slice_repr = try env.reprOf(type_slice_ty);
+            const tyty = try env.identify(.ty);
+            const type_slice_ty = try env.identify(Type.initPtr(.slice, tyty));
+            const type_slice_ref_ty = try env.identify(
+                Type.initPtr(.single, type_slice_ty),
+            );
 
-            try expectEql(fn_params, type_slice_repr);
+            const type_repr = try env.reprOf(tyty);
+            const type_slice_ref_repr = try env.reprOf(type_slice_ref_ty);
+
+            try expectEql(fn_params, type_slice_ref_repr);
             try expectEql(fn_returns, type_repr);
             try expectEql(to, type_repr);
         },
@@ -154,6 +156,19 @@ fn verifyOp(env: *Env, func: *const Func, op: Op) Error!void {
             _ = gfp;
 
             // TODO verify gfp
+        },
+
+        // casts
+        .ptrcast => |pure| {
+            const args = pure.params;
+            try expectArgLen(args, 1);
+
+            const from = env.rw.get(func.getLocal(args[0]));
+            const to = env.rw.get(func.getLocal(pure.to));
+
+            if (from.* != .ptr or to.* != .ptr) {
+                return Error.MismatchedReprs;
+            }
         },
 
         // homogenous pure binary ops
@@ -167,7 +182,6 @@ fn verifyOp(env: *Env, func: *const Func, op: Op) Error!void {
         .eq,
         .@"or",
         .@"and",
-        .slice_ty,
         => |pure| {
             try expectArgLen(pure.params, 2);
             try expectHomogenous(func, pure.to, pure.params);
@@ -176,6 +190,7 @@ fn verifyOp(env: *Env, func: *const Func, op: Op) Error!void {
         // homogenous pure unary ops
         .copy,
         .not,
+        .slice_ty,
         => |pure| {
             try expectArgLen(pure.params, 1);
             try expectHomogenous(func, pure.to, pure.params);
