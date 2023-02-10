@@ -279,12 +279,10 @@ fn filterDefError(
     return switch (from_err) {
         error.NameNoRedef => unreachable,
         error.NameTooLong => err: {
-            const fmt = "name is nested too deeply in namespaces";
-            break :err try err(ally, loc, fmt, .{});
+            break :err try err(ally, loc, "name is nested too deeply", .{});
         },
         error.NameRedef, error.RenamedType => err: {
-            const fmt = "this name already exists";
-            break :err try err(ally, loc, fmt, .{});
+            break :err try err(ally, loc, "this name already exists", .{});
         },
         else => |e| @errSetCast(SemaError, e),
     };

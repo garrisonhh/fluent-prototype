@@ -15,25 +15,40 @@ pub const Opcode = enum(u8) {
 
     nop,
 
-    mov, // mov %src %dst
+    /// mov %src %dst
+    mov,
 
-    imm2, // imm %dst $hi $lo
-    imm4, // imm %dst ; load next opcode as u32
-    imm8, // imm %dst ; load next two opcodes as u64
+    /// imm %dst $hi $lo
+    imm2,
+    /// imm %dst ; load next opcode as u32
+    imm4,
+    /// imm %dst ; load next two opcodes as u64
+    imm8,
 
     // control flow
-    jump, // load next opcode as u32 index, and jump to that instruction
-    jump_if, // jump_if %cond ; same as jump, but only if %test != 0
-    ret, // no args. mov fp -> sp, pop fp, pop ip
-    call, // call %dst ; push ip, push fp, mov sp -> fp, mov dst -> ip
+    /// load next opcode as u32 index, and jump to that instruction
+    jump,
+    /// jump_if %cond ; same as jump, but only if %test != 0
+    jump_if,
+    /// no args. mov fp -> sp, pop fp, pop ip
+    ret,
+    /// call %dst ; push ip, push fp, mov sp -> fp, mov dst -> ip
+    call,
 
     // stack manipulation
-    pop, // pop $bytes %dst
-    push, // push $bytes %src
+    /// pop $bytes %dst
+    pop,
+    /// push $bytes %src
+    push,
 
     // memory manipulation
-    load, // load $bytes %src %dst ; read pointer %src into value %dst
-    store, // store $bytes %src %dst ; write value %src into pointer %dst
+    /// load $bytes %src %dst ; read pointer %src into value %dst
+    load,
+    /// store $bytes %src %dst ; write value %src into pointer %dst
+    store,
+    /// memcpy %src %dst
+    /// ; load next opcode as u32 $bytes, copy $bytes from %src into %dst
+    memcpy,
 
     // basic operations
     // take one of two forms:
@@ -230,6 +245,15 @@ pub const Program = struct {
                     try line.append(try renderReg(ctx, args[1]));
                     try line.append(try renderReg(ctx, args[2]));
                 },
+                .memcpy => {
+                    const bytes = @ptrCast(*const [4]u8, &insts[i + 1]);
+                    const n = canon.to(bytes);
+                    i += 1;
+
+                    try line.append(try renderReg(ctx, args[0]));
+                    try line.append(try renderReg(ctx, args[1]));
+                    try line.append(try renderImm(ctx, n));
+                },
                 // zig fmt: off
                 .iadd, .isub, .imul, .idiv, .imod, .lor, .land, .bor, .band,
                 .xor, .fn_ty,
@@ -367,6 +391,17 @@ pub const Construct = struct {
     ) Allocator.Error!void {
         try b.addInst(ally, make(.jump_if, cond.n, 0, 0));
         try b.addBranch(ally, dst);
+    }
+
+    pub fn memcpy(
+        b: *Builder,
+        ally: Allocator,
+        src: Reg,
+        dst: Reg,
+        nbytes: u32,
+    ) Allocator.Error!void {
+        try b.addInst(ally, make(.memcpy, src.n, dst.n, 0));
+        try b.addInst(ally, Inst.fromInt(nbytes));
     }
 
     pub const nop = make(.nop, 0, 0, 0);

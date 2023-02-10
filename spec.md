@@ -62,7 +62,8 @@ effect handling.
 - the context variable acts like an invisible first parameter
 - collections, arrays, and functions are always referenced, never by value
 - parameters are passed on the registers 1..=N (where N = #params)
-  - reference reprs are passed by pointer
+  - reference reprs are passed by pointer thru register 0, and function then
+    must return the reference back on register 0
 - return values have two conventions
   - for reference reprs, the caller must pass a pointer to available memory in
     register 0

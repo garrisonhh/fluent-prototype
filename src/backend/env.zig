@@ -38,8 +38,9 @@ const canon = @import("canon.zig");
 const Type = canon.Type;
 const TypeId = canon.TypeId;
 const TypeWelt = canon.TypeWelt;
-const ReprWelt = canon.ReprWelt;
+const Repr = canon.Repr;
 const ReprId = canon.ReprId;
+const ReprWelt = canon.ReprWelt;
 
 const Self = @This();
 
@@ -91,11 +92,11 @@ pub fn identify(self: *Self, ty: Type) Allocator.Error!TypeId {
     return id;
 }
 
-pub fn reprOf(self: *Self, ty: TypeId) ReprWelt.ConversionError!ReprId {
+pub fn reprOf(self: *Self, ty: TypeId) Repr.ConversionError!ReprId {
     return try self.rw.reprOf(self.ally, self.tw, ty);
 }
 
-pub fn sizeOf(self: Self, ty: TypeId) ReprWelt.QualError!usize {
+pub fn sizeOf(self: Self, ty: TypeId) Repr.QualError!usize {
     return try self.rw.sizeOf(self.rw.converts.get(ty).?);
 }
 
@@ -144,17 +145,45 @@ pub fn tieLLRefs(
 
 // execution ===================================================================
 
+pub const RunError = canon.ResError;
+
 pub fn run(
     self: *Self,
     prog: Program,
     loc: ?Loc,
     ty: TypeId,
-) (Vm.RuntimeError || canon.ResError)!TExpr {
-    try self.vm.execute(self, prog);
+) RunError!TExpr {
+    // find ret_bytes
+    const repr = try self.reprOf(ty);
+    const conv = self.rw.getConv(repr);
+
+    const ret_bytes: ?usize = switch (conv) {
+        .by_value => null,
+        .by_ref => try self.rw.sizeOf(repr),
+    };
+
+    // exec
+    try self.vm.execute(self, prog, ret_bytes);
 
     // resurrect return value
     const value = canon.intoValue(&self.vm.scratch[Vm.RETURN.n]);
-    return try canon.resurrect(self.*, value, self.vm.stack, loc, ty);
+
+    const ret_ty = switch (conv) {
+        .by_value => ty,
+        .by_ref => try self.identify(Type.initPtr(.single, ty)),
+    };
+
+    const expr = try canon.resurrect(self.*, value, self.vm.stack, loc, ret_ty);
+
+    return switch (conv) {
+        .by_value => expr,
+        .by_ref => deref: {
+            const inner = expr.data.ptr.*;
+            self.ally.destroy(expr.data.ptr);
+
+            break :deref inner;
+        },
+    };
 }
 
 // name accessors ==============================================================

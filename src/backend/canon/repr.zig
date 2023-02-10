@@ -13,6 +13,7 @@ const ReprId = ReprWelt.ReprId;
 /// used alongside ReprWelt
 pub const Repr = union(enum) {
     pub const Tag = std.meta.Tag(Self);
+    pub const Error = ConversionError || AccessError || QualError;
 
     pub const Array = struct {
         size: usize,
@@ -90,7 +91,7 @@ pub const Repr = union(enum) {
         rw: *ReprWelt,
         tw: TypeWelt,
         id: TypeId,
-    ) ReprWelt.ConversionError!Param {
+    ) ConversionError!Param {
         const repr = try Self.ofType(ally, rw, tw, id);
         return Param{
             .conv = repr.getConv(),
@@ -98,12 +99,14 @@ pub const Repr = union(enum) {
         };
     }
 
+    pub const ConversionError = Allocator.Error || error{NoRepr};
+
     pub fn ofType(
         ally: Allocator,
         rw: *ReprWelt,
         tw: TypeWelt,
         id: TypeId,
-    ) ReprWelt.ConversionError!Self {
+    ) ConversionError!Self {
         const ty = tw.get(id);
         return switch (ty.*) {
             // no repr
@@ -190,7 +193,7 @@ pub const Repr = union(enum) {
         };
     }
 
-    pub const AccessError = error{ NotCollection, OutOfBounds };
+    pub const AccessError = QualError || error{ NotCollection, OutOfBounds };
 
     /// get the repr of a field (assuming this is a collection of some kind)
     pub fn access(self: Self, rw: ReprWelt, index: usize) AccessError!Field {
@@ -208,9 +211,13 @@ pub const Repr = union(enum) {
                     break :arr AccessError.OutOfBounds;
                 }
 
-                _ = rw;
+                const el_aln = try rw.alignOf(arr.of);
+                const el_size = try rw.sizeOfAligned(arr.of, el_aln);
 
-                @panic("TODO array field access");
+                return Field{
+                    .offset = el_size * index,
+                    .of = arr.of,
+                };
             },
             .coll => |coll| coll: {
                 if (index >= coll.len) {
@@ -222,8 +229,10 @@ pub const Repr = union(enum) {
         };
     }
 
+    pub const QualError = error{ SizeOfFunc, AlignOfFunc };
+
     // TODO cache this
-    pub fn alignOf(self: Self, rw: ReprWelt) ReprWelt.QualError!usize {
+    pub fn alignOf(self: Self, rw: ReprWelt) QualError!usize {
         return switch (self) {
             .func => error.AlignOfFunc,
             .unit => 1,
@@ -243,7 +252,7 @@ pub const Repr = union(enum) {
     }
 
     // TODO cache this
-    pub fn sizeOf(self: Self, rw: ReprWelt) ReprWelt.QualError!usize {
+    pub fn sizeOf(self: Self, rw: ReprWelt) QualError!usize {
         return switch (self) {
             .func => error.SizeOfFunc,
             .unit => 0,
@@ -270,6 +279,17 @@ pub const Repr = union(enum) {
                 break :coll size;
             },
         };
+    }
+
+    pub fn sizeOfAligned(self: Self, rw: ReprWelt, aln: usize) QualError!usize {
+        const size = try self.sizeOf(rw);
+
+        const aln_diff = size % aln;
+        if (aln_diff > 0) {
+            return size + (aln - aln_diff);
+        }
+
+        return size;
     }
 
     pub fn hash(self: Self, wyhash: *Wyhash) void {

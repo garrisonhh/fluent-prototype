@@ -17,13 +17,9 @@ const Repr = canon.Repr;
 const TypeId = canon.TypeId;
 const Type = canon.Type;
 
-pub const Error =
-    Allocator.Error ||
-    Repr.AccessError ||
-    ReprWelt.ConversionError ||
-    ReprWelt.QualError ||
-    error{
+pub const Error = Allocator.Error || Repr.Error || error{
     LargeLocal,
+    WrongReturnLocal,
     InvalidArgLen,
     InvalidOffset,
     InvalidCallArgs,
@@ -33,10 +29,10 @@ pub const Error =
 
 /// ssa values should all clock in at up to 8 bytes
 fn verifyReprSizes(rw: ReprWelt, func: *const Func) Error!void {
-    for (func.locals.items) |local| {
+    for (func.locals.items) |local, i| {
         const size = try rw.sizeOf(local);
         if (size > 8) {
-            std.debug.print("local {} is {} bytes\n", .{ local, size });
+            std.debug.print("{} is {} bytes\n", .{ Local.of(i), size });
             return Error.LargeLocal;
         }
     }
@@ -87,7 +83,21 @@ fn verifyOp(env: *Env, func: *const Func, op: Op) Error!void {
             const ret_repr = try env.reprOf(ret_ty);
 
             const arg = func.getLocal(args[0]);
-            try expectEql(arg, ret_repr);
+            switch (func.ret_conv) {
+                .by_value => {
+                    try expectEql(arg, ret_repr);
+                },
+                .by_ref => {
+                    const ret_ref_repr = try env.rw.intern(env.ally, Repr{
+                        .ptr = ret_repr,
+                    });
+                    try expectEql(arg, ret_ref_repr);
+
+                    if (args[0].index != 0) {
+                        return Error.WrongReturnLocal;
+                    }
+                },
+            }
         },
         .alloca => |all| {
             const repr = env.rw.get(func.getLocal(all.to));
@@ -109,12 +119,18 @@ fn verifyOp(env: *Env, func: *const Func, op: Op) Error!void {
                 return Error.MismatchedReprs;
             }
         },
-        .store_el, .load_el => |access| {
-            const obj = env.rw.get(func.getLocal(access.obj));
-            const field = try obj.access(env.rw, access.index);
-            const data = func.getLocal(access.data);
+        .memcpy => |eff| {
+            const args = eff.params;
+            try expectArgLen(args, 2);
 
-            try expectEql(field.of, data);
+            const dst = func.getLocal(args[0]);
+            const src = func.getLocal(args[1]);
+            try expectEql(src, dst);
+
+            const repr = env.rw.get(src);
+            if (repr.* != .ptr) {
+                return Error.MismatchedReprs;
+            }
         },
         .fn_ty => |pure| {
             const args = pure.params;
@@ -133,6 +149,11 @@ fn verifyOp(env: *Env, func: *const Func, op: Op) Error!void {
             try expectEql(fn_params, type_slice_repr);
             try expectEql(fn_returns, type_repr);
             try expectEql(to, type_repr);
+        },
+        .gfp => |gfp| {
+            _ = gfp;
+
+            // TODO verify gfp
         },
 
         // homogenous pure binary ops

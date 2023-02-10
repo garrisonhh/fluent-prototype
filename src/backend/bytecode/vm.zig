@@ -24,7 +24,7 @@ pub const Register = packed struct {
 
     /// parameter register by callconv
     pub fn param(n: Index) Register {
-        return Register.of(n + RESERVED + 1);
+        return Register.of(RETURN.n + n);
     }
 };
 
@@ -121,7 +121,15 @@ fn makeFnType(
     });
 }
 
-pub fn execute(self: *Self, env: *Env, program: Program) RuntimeError!void {
+/// runs a program on the vm
+///
+/// if program entry point requires an implicit return ref, supply ret_bytes
+pub fn execute(
+    self: *Self,
+    env: *Env,
+    program: Program,
+    ret_bytes: ?usize,
+) RuntimeError!void {
     const start = now();
 
     const insts = program.program;
@@ -130,6 +138,12 @@ pub fn execute(self: *Self, env: *Env, program: Program) RuntimeError!void {
     // initialization
     std.mem.set(u64, self.scratch[0..RESERVED], 0);
     ip.* = program.entry;
+
+    // allocate any return memory required
+    if (ret_bytes) |nbytes| {
+        self.set(RETURN, self.get(FP));
+        self.set(SP, self.get(FP) + nbytes);
+    }
 
     // execution loop
     loop: while (ip.* < insts.len) {
@@ -222,11 +236,25 @@ pub fn execute(self: *Self, env: *Env, program: Program) RuntimeError!void {
                 // format register canonically
                 const value = self.get(src);
                 const data = canon.from(&value);
+
                 // write
                 const addr = self.get(dst);
                 const slice = self.stack[addr .. addr + nbytes];
                 std.mem.set(u8, slice, 0);
                 std.mem.copy(u8, slice, data);
+            },
+            .memcpy => {
+                const src = Register.of(args[0]);
+                const dst = Register.of(args[1]);
+                ip.* += 1;
+
+                const nbytes = insts[ip.*].toInt();
+                const src_addr = self.get(src);
+                const dst_addr = self.get(dst);
+
+                const from = self.stack[src_addr .. src_addr + nbytes];
+                const to = self.stack[dst_addr .. dst_addr + nbytes];
+                std.mem.copy(u8, to, from);
             },
             inline .lnot, .bnot, .slice_ty => |v| {
                 const arg = self.get(Register.of(args[0]));

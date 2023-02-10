@@ -39,7 +39,7 @@ pub const Program = bytecode.Program;
 pub const Error =
     Allocator.Error ||
     canon.CrucifyError ||
-    canon.ReprWelt.QualError;
+    canon.Repr.Error;
 
 fn compileAlloca(
     ally: Allocator,
@@ -121,10 +121,33 @@ fn compileOp(
 
             try b.addInst(ally, Bc.store(nbytes, src, dst));
         },
+        .gfp => |gfp| {
+            const dst = rmap.get(gfp.to);
+            const ptr = rmap.get(gfp.obj);
+
+            const obj_ptr_repr = env.rw.get(ref.getLocal(env.*, gfp.obj));
+            const obj_repr = env.rw.get(obj_ptr_repr.ptr);
+            const offset = (try obj_repr.access(env.rw, gfp.index)).offset;
+
+            try Bc.imm(b, ally, dst, canon.from(&offset));
+            try b.addInst(ally, Bc.iadd(dst, ptr, dst));
+        },
+        .memcpy => |eff| {
+            const dst = rmap.get(eff.params[0]);
+            const src = rmap.get(eff.params[1]);
+
+            const repr = env.rw.get(ref.getLocal(env.*, eff.params[0])).ptr;
+            const nbytes = @intCast(u32, try env.rw.sizeOf(repr));
+
+            try Bc.memcpy(b, ally, src, dst, nbytes);
+        },
         .ret => |eff| {
             const src = rmap.get(eff.params[0]);
 
-            try b.addInst(ally, Bc.mov(src, Vm.RETURN));
+            if (src.n != Vm.RETURN.n) {
+                try b.addInst(ally, Bc.mov(src, Vm.RETURN));
+            }
+
             try b.addInst(ally, Bc.ret);
         },
         .vcall => |call| {
@@ -157,7 +180,7 @@ fn compileOp(
             }
 
             // do call op
-            const dst = rmap.get(call.to);
+            const dst = rmap.get(call.ret);
 
             try b.addInst(ally, Bc.call(Vm.RETURN));
             try b.addInst(ally, Bc.mov(Vm.RETURN, dst));

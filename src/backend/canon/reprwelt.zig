@@ -45,31 +45,37 @@ const ReprMap = std.HashMapUnmanaged(
     std.hash_map.default_max_load_percentage,
 );
 
+/// stores repr and cached computations
+const Slot = struct {
+    repr: Repr,
+    aln: ?usize = null,
+    sz: ?usize = null,
+};
+
 /// maps ReprId -> Repr
-map: std.ArrayListUnmanaged(Repr) = .{},
+map: std.MultiArrayList(Slot) = .{},
 /// maps Repr -> ReprId
 reprs: ReprMap = .{},
 /// maps TypeId -> ReprId
 converts: std.AutoHashMapUnmanaged(TypeId, ReprId) = .{},
 
 pub fn deinit(self: *Self, ally: Allocator) void {
-    for (self.map.items) |repr| repr.deinit(ally);
+    for (self.map.items(.repr)) |repr| repr.deinit(ally);
     self.map.deinit(ally);
     self.reprs.deinit(ally);
     self.converts.deinit(ally);
 }
 
+/// invalidated on next intern() call
 pub fn get(self: Self, id: ReprId) *const Repr {
-    return &self.map.items[id.index];
+    return &self.map.get(id.index).repr;
 }
-
-pub const ConversionError = Allocator.Error || error{NoRepr};
 
 pub fn intern(self: *Self, ally: Allocator, repr: Repr) Allocator.Error!ReprId {
     const res = try self.reprs.getOrPut(ally, repr);
     if (!res.found_existing) {
-        const id = ReprId{ .index = self.map.items.len };
-        try self.map.append(ally, repr);
+        const id = ReprId{ .index = self.map.len };
+        try self.map.append(ally, Slot{ .repr = repr });
 
         res.value_ptr.* = id;
         res.key_ptr.* = repr;
@@ -84,7 +90,7 @@ pub fn reprOf(
     ally: Allocator,
     tw: TypeWelt,
     ty: TypeId,
-) ConversionError!ReprId {
+) Repr.ConversionError!ReprId {
     if (self.converts.get(ty)) |id| {
         return id;
     }
@@ -97,12 +103,28 @@ pub fn reprOf(
     return id;
 }
 
-pub const QualError = error{ SizeOfFunc, AlignOfFunc };
+pub fn alignOf(self: Self, id: ReprId) Repr.QualError!usize {
+    const aln = &self.map.items(.aln)[id.index];
+    if (aln.* == null) {
+        aln.* = try self.get(id).alignOf(self);
+    }
 
-pub fn sizeOf(self: Self, id: ReprId) QualError!usize {
-    return try self.get(id).sizeOf(self);
+    return aln.*.?;
 }
 
-pub fn alignOf(self: Self, id: ReprId) QualError!usize {
-    return try self.get(id).alignOf(self);
+pub fn sizeOf(self: Self, id: ReprId) Repr.QualError!usize {
+    const sz = &self.map.items(.sz)[id.index];
+    if (sz.* == null) {
+        sz.* = try self.get(id).sizeOf(self);
+    }
+
+    return sz.*.?;
+}
+
+pub fn sizeOfAligned(self: Self, id: ReprId, aln: usize) Repr.QualError!usize {
+    return try self.get(id).sizeOfAligned(self, aln);
+}
+
+pub fn getConv(self: Self, id: ReprId) Repr.Conv {
+    return self.get(id).getConv();
 }

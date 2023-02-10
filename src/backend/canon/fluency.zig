@@ -17,7 +17,7 @@ const BcRef = @import("../bytecode/bytecode.zig").InstRef;
 
 // crucifixion =================================================================
 
-pub const CrucifyError = Allocator.Error || canon.ReprWelt.QualError;
+pub const CrucifyError = Allocator.Error || canon.Repr.Error;
 
 /// fills dst with zeroes and then copies canonical data
 fn writeCanon(dst: []u8, n: u64) void {
@@ -76,7 +76,7 @@ pub fn crucify(env: Env, texpr: TExpr) CrucifyError!Value {
 
 pub const ResError =
     Allocator.Error ||
-    canon.ReprWelt.QualError ||
+    canon.Repr.Error ||
     error{Unresurrectable};
 
 fn valueToNumber(value: Value, bits: u8, layout: Number.Layout) Number {

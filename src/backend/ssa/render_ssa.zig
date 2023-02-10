@@ -181,24 +181,21 @@ fn renderFuncOp(self: Func, ctx: *kz.Context, env: Env, op: Op) !kz.Ref {
                 try expr.render(ctx, env),
             });
         },
-        .vcall => |vcall| {
-            try line.appendSlice(&.{
-                try renderFuncLocal(self, ctx, env, vcall.to),
-                try ctx.print(.{}, " = {s} ", .{tag}),
-                try renderFuncLocal(self, ctx, env, vcall.func),
-                try ctx.clone(comma),
-            });
-
-            try renderFuncParams(self, ctx, env, &line, vcall.params);
-        },
-        .rcall => |rcall| {
+        .call => |call| {
             try line.appendSlice(&.{
                 try ctx.print(.{}, "{s} ", .{tag}),
-                try renderFuncLocal(self, ctx, env, rcall.func),
+                try renderFuncLocal(self, ctx, env, call.func),
+                try ctx.clone(comma),
+                try renderFuncLocal(self, ctx, env, call.ctx),
                 try ctx.clone(comma),
             });
 
-            try renderFuncParams(self, ctx, env, &line, rcall.params);
+            try renderFuncParams(self, ctx, env, &line, call.params);
+
+            try line.appendSlice(&.{
+                try ctx.print(.{}, " -> ", .{}),
+                try renderFuncLocal(self, ctx, env, call.ret),
+            });
         },
         .phi => |phi| {
             try line.appendSlice(&.{
@@ -244,16 +241,11 @@ fn renderFuncOp(self: Func, ctx: *kz.Context, env: Env, op: Op) !kz.Ref {
             try line.append(try ctx.print(.{}, "{s} ", .{tag}));
             try renderFuncParams(self, ctx, env, &line, effect.params);
         },
-        .access => |access| {
-            const head = try ctx.print(
-                .{},
-                "{s} {d}, ",
-                .{ tag, access.index },
-            );
-            try line.append(head);
-            try renderFuncParams(self, ctx, env, &line, &.{
-                access.obj,
-                access.data,
+        .gfp => |gfp| {
+            try line.appendSlice(&.{
+                try renderFuncLocal(self, ctx, env, gfp.to),
+                try ctx.print(.{}, " = {s} {d}, ", .{ tag, gfp.index }),
+                try renderFuncLocal(self, ctx, env, gfp.obj),
             });
         },
     }

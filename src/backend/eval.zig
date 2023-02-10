@@ -18,13 +18,13 @@ const canon = @import("canon.zig");
 const Value = canon.Value;
 const Type = canon.Type;
 const TypeId = canon.TypeId;
+const Repr = canon.Repr;
 const ReprWelt = canon.ReprWelt;
 
 pub const Error =
     std.mem.Allocator.Error ||
     canon.ResError ||
-    ReprWelt.ConversionError ||
-    ReprWelt.QualError ||
+    Repr.Error ||
     @TypeOf(stdout).Error;
 
 pub const Result = Message.Result(TExpr);
@@ -101,27 +101,10 @@ pub fn evalTyped(
         }
 
         // run compiled bytecode
-        var final_ty = ssa.getReturnType(env.*);
-
-        const ssa_returns_repr = try env.reprOf(final_ty);
-        const is_structured = env.rw.get(ssa_returns_repr).isStructured();
-
-        if (is_structured) {
-            final_ty = try env.identify(Type{
-                .ptr = .{ .kind = .single, .to = final_ty },
-            });
-        }
-
-        var final = try env.run(prog, texpr.loc, final_ty);
+        const final = try env.run(prog, texpr.loc, texpr.ty);
 
         // remove ssa expr
         try env.removeFunc(ssa);
-
-        if (is_structured) {
-            const child = final.data.ptr.*;
-            env.ally.destroy(final.data.ptr);
-            final = child;
-        }
 
         break :final final;
     };

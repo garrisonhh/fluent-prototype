@@ -17,6 +17,7 @@ const TypeWelt = canon.TypeWelt;
 const TypeId = canon.TypeId;
 const ReprWelt = canon.ReprWelt;
 const ReprId = canon.ReprId;
+const Repr = canon.Repr;
 const Env = @import("../env.zig");
 const TExpr = @import("../texpr.zig");
 const rendering = @import("render_ssa.zig");
@@ -32,17 +33,11 @@ pub const Op = union(enum) {
         to: Local,
     };
 
-    /// call which returns by value
-    pub const ValCall = struct {
+    pub const Call = struct {
         func: Local,
+        ctx: Local,
         params: []Local,
-        to: Local,
-    };
-
-    /// call which returns by reference
-    pub const RefCall = struct {
-        func: Local,
-        params: []Local,
+        ret: Local,
     };
 
     pub const Branch = struct {
@@ -75,19 +70,19 @@ pub const Op = union(enum) {
         params: []Local,
     };
 
-    /// accessing a repr field
-    pub const Access = struct {
+    /// get pointer to a repr field
+    pub const GetFieldPtr = struct {
         index: usize,
         obj: Local,
-        data: Local,
+        to: Local,
     };
 
     // unique
     ldc: LoadConst,
     copy: Pure,
     ret: Effect,
-    vcall: ValCall,
-    rcall: RefCall,
+    vcall: Call, // call & return by value
+    rcall: Call, // call & return thru reference
 
     // control flow
     br: Branch,
@@ -96,10 +91,10 @@ pub const Op = union(enum) {
 
     // memory
     alloca: Alloca, // allocates a number of bytes and returns pointer
+    gfp: GetFieldPtr,
     store: Effect, // *a = b
     load: Effect, // b = *a
-    store_el: Access, // obj[n] = data
-    load_el: Access, // data = obj[n]
+    memcpy: Effect, // *a = *b
 
     // math
     add: Pure,
@@ -120,28 +115,29 @@ pub const Op = union(enum) {
     slice_ty: Pure,
     fn_ty: Pure,
 
-    pub fn initValCall(
+    pub fn initCall(
         ally: Allocator,
-        to: Local,
+        ret_conv: Repr.Conv,
         func: Local,
+        ctx: Local,
         params: []const Local,
+        ret: Local,
     ) Allocator.Error!Self {
-        return Self{ .vcall = .{
-            .to = to,
-            .func = func,
-            .params = try ally.dupe(Local, params),
-        } };
-    }
+        switch (ret_conv) {
+            inline else => |conv| {
+                const tag: std.meta.Tag(Self) = comptime switch (conv) {
+                    .by_ref => .rcall,
+                    .by_value => .vcall,
+                };
 
-    pub fn initRefCall(
-        ally: Allocator,
-        func: Local,
-        params: []const Local,
-    ) Allocator.Error!Self {
-        return Self{ .rcall = .{
-            .func = func,
-            .params = try ally.dupe(Local, params),
-        } };
+                return @unionInit(Self, @tagName(tag), Call{
+                    .func = func,
+                    .ctx = ctx,
+                    .params = try ally.dupe(Local, params),
+                    .ret = ret,
+                });
+            },
+        }
     }
 
     pub fn initPhi(
@@ -181,11 +177,7 @@ pub const Op = union(enum) {
 
     pub fn deinit(self: *Self, ally: Allocator) void {
         switch (self.classify()) {
-            inline .vcall,
-            .rcall,
-            .pure,
-            .effect,
-            => |data| ally.free(data.params),
+            inline .call, .pure, .effect => |data| ally.free(data.params),
             .phi => |phi| ally.free(phi.from),
             else => {},
         }
@@ -193,15 +185,14 @@ pub const Op = union(enum) {
 
     pub const Class = union(enum) {
         ldc: LoadConst,
-        vcall: ValCall,
-        rcall: RefCall,
+        call: Call,
         branch: Branch,
         jump: Jump,
         phi: Phi,
         alloca: Alloca,
         pure: Pure,
         effect: Effect,
-        access: Access,
+        gfp: GetFieldPtr,
 
         fn getFieldByType(comptime T: type) []const u8 {
             const fields = @typeInfo(Class).Union.fields;
@@ -507,11 +498,6 @@ pub const FuncRef = packed struct {
         const block = &func.blocks.items[label.index];
         try block.ops.append(env.ally, op);
     }
-
-    pub fn getReturnType(self: Self, env: Env) TypeId {
-        const func = env.getFuncConst(self);
-        return env.tw.get(func.ty).func.returns;
-    }
 };
 
 pub const Func = struct {
@@ -523,7 +509,9 @@ pub const Func = struct {
     ty: TypeId,
     /// number of parameters, or null if this is not a function
     takes: usize,
-    /// func id (TODO I really shouldn't store this here)
+    /// how the function returns a value
+    ret_conv: Repr.Conv,
+    /// func id (TODO I really shouldn't have to store this here)
     ref: FuncRef,
 
     consts: std.ArrayListUnmanaged(TExpr) = .{},
@@ -576,19 +564,32 @@ pub const Program = struct {
         env: *Env,
         name: Name,
         tid: TypeId,
-    ) ReprWelt.ConversionError!FuncRef {
+    ) Repr.ConversionError!FuncRef {
         const params = env.tw.get(tid).func.takes;
+        const fn_repr = env.rw.get(try env.reprOf(tid)).func;
 
         const ref = try self.nextRef(ally);
         var func = Func{
             .name = name,
             .ty = tid,
             .takes = params.len,
+            .ret_conv = fn_repr.returns.conv,
             .ref = ref,
         };
 
-        for (params) |param| {
-            try func.locals.append(ally, try env.reprOf(param));
+        // implicit parameters
+        if (func.ret_conv == .by_ref) {
+            const ret_ptr = try env.rw.intern(env.ally, Repr{
+                .ptr = fn_repr.returns.of,
+            });
+            try func.locals.append(ally, ret_ptr);
+        }
+
+        try func.locals.append(ally, fn_repr.ctx.of);
+
+        // params
+        for (fn_repr.takes) |param| {
+            try func.locals.append(ally, param.of);
         }
 
         self.funcs.items[ref.index] = func;

@@ -116,7 +116,11 @@ fn syntaxErrorAt(ally: Allocator, loc: Loc) Allocator.Error!Result {
 
 /// generic error at current parsing location
 fn syntaxError(p: *const Parser) Allocator.Error!Result {
-    const max_loc = p.strm.tokens[p.max_parsed].loc;
+    const max_loc = if (p.max_parsed == p.strm.tokens.len) eos: {
+        const last = p.strm.tokens[p.max_parsed - 1].loc;
+        break :eos Loc.of(last.file, last.stop, last.stop);
+    } else p.strm.tokens[p.max_parsed].loc;
+
     return syntaxErrorAt(p.ally, Loc.of(p.file, max_loc.stop, max_loc.stop));
 }
 
