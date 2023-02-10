@@ -67,12 +67,12 @@ fn repl(env: *Env, proj: *Project) !void {
         try env.dump(ally, stdout);
         try stdout.writeByte('\n');
 
+        var ctx = kz.Context.init(ally);
+        defer ctx.deinit();
+
         try stdout.writeAll("[Type Reprs]\n");
         var i: usize = 0;
         while (i < env.tw.types.items.len) : (i += 1) {
-            var ctx = kz.Context.init(ally);
-            defer ctx.deinit();
-
             const ty = backend.TypeId{ .index = i };
 
             if (env.reprOf(ty)) |repr| {
@@ -97,6 +97,13 @@ fn repl(env: *Env, proj: *Project) !void {
 
                 try ctx.write(tex, stdout);
             }
+        }
+        try stdout.writeByte('\n');
+
+        try stdout.writeAll("[Reprs]\n");
+        for (env.rw.map.items(.repr)) |repr| {
+            const tex = try repr.render(&ctx, env.rw);
+            try ctx.write(tex, stdout);
         }
         try stdout.writeByte('\n');
     }

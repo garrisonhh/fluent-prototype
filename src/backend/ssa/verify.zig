@@ -20,6 +20,7 @@ const Type = canon.Type;
 pub const Error = Allocator.Error || Repr.Error || error{
     LargeLocal,
     WrongReturnLocal,
+    ExpectedPointer,
     InvalidArgLen,
     InvalidOffset,
     InvalidCallArgs,
@@ -129,7 +130,7 @@ fn verifyOp(env: *Env, func: *const Func, op: Op) Error!void {
 
             const repr = env.rw.get(src);
             if (repr.* != .ptr) {
-                return Error.MismatchedReprs;
+                return Error.ExpectedPointer;
             }
         },
         .fn_ty => |pure| {

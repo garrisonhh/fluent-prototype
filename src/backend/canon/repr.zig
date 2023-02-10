@@ -15,6 +15,8 @@ pub const Repr = union(enum) {
     pub const Tag = std.meta.Tag(Self);
     pub const Error = ConversionError || AccessError || QualError;
 
+    const Self = @This();
+
     pub const Array = struct {
         size: usize,
         of: ReprId,
@@ -38,8 +40,6 @@ pub const Repr = union(enum) {
         takes: []Param,
         returns: Param,
     };
-
-    const Self = @This();
 
     // primitives
     unit,
@@ -293,33 +293,29 @@ pub const Repr = union(enum) {
     }
 
     pub fn hash(self: Self, wyhash: *Wyhash) void {
-        const b = std.mem.asBytes;
+        std.hash.autoHashStrat(wyhash, self, .Deep);
+    }
 
-        wyhash.update(b(&@as(Tag, self)));
+    fn sliceEql(comptime T: type, a: []const T, b: []const T) bool {
+        if (a.len != b.len) return false;
 
-        switch (self) {
-            .unit => {},
-            .int, .uint, .float => |nbytes| wyhash.update(b(&nbytes)),
-            .ptr => |to| wyhash.update(b(&to)),
-            .array => |arr| {
-                wyhash.update(b(&arr.size));
-                wyhash.update(b(&arr.of));
-            },
-            .coll => |coll| {
-                for (coll) |field| {
-                    wyhash.update(b(&field.offset));
-                    wyhash.update(b(&field.of));
-                }
-            },
-            .func => |func| {
-                wyhash.update(b(&func.takes));
-                wyhash.update(b(&func.returns));
-            },
+        for (a) |el, i| {
+            if (!std.meta.eql(el, b[i])) {
+                return false;
+            }
         }
+
+        return true;
     }
 
     pub fn eql(self: Self, other: Self) bool {
-        return std.meta.eql(self, other);
+        return @as(Tag, self) == @as(Tag, other) and switch (self) {
+            .coll => |coll| sliceEql(Field, coll, other.coll),
+            .func => |func| std.meta.eql(func.ctx, other.func.ctx) and
+                std.meta.eql(func.returns, other.func.returns) and
+                sliceEql(Param, func.takes, other.func.takes),
+            else => std.meta.eql(self, other),
+        };
     }
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
