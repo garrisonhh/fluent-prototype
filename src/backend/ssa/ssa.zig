@@ -15,6 +15,7 @@ const builtin = @import("builtin");
 const canon = @import("../canon.zig");
 const TypeWelt = canon.TypeWelt;
 const TypeId = canon.TypeId;
+const ReprWelt = canon.ReprWelt;
 const ReprId = canon.ReprId;
 const Env = @import("../env.zig");
 const TExpr = @import("../texpr.zig");
@@ -553,7 +554,7 @@ pub const Program = struct {
         env: *Env,
         name: Name,
         tid: TypeId,
-    ) Allocator.Error!FuncRef {
+    ) ReprWelt.ConversionError!FuncRef {
         const params = env.tw.get(tid).func.takes;
 
         const ref = try self.nextRef(ally);

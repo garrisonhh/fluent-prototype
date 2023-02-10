@@ -44,6 +44,7 @@ pub fn renderType(
 
             break :title try ctx.print(sty, "{c}{s}", .{ first, name[1..] });
         },
+
         // lowercase
         .unit,
         .builtin,
@@ -72,6 +73,7 @@ pub fn renderType(
 
             break :atom tex;
         },
+
         .number => |num| num: {
             if (num.bits) |bits| {
                 break :num try ctx.slap(
@@ -88,9 +90,13 @@ pub fn renderType(
                 .{@tagName(num.layout)},
             );
         },
-        .array => |arr| try ctx.slap(
-            try ctx.print(sty, "[{d}]", .{arr.size}),
-            try arr.of.render(ctx, tw),
+        .array => |arr| try ctx.stack(
+            &.{
+                try ctx.print(.{}, "[", .{}),
+                try ctx.print(sty, "{d}", .{arr.size}),
+                try ctx.print(.{}, "]", .{}),
+                try arr.of.render(ctx, tw),
+            },
             .right,
             .{},
         ),

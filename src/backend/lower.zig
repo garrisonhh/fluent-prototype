@@ -24,7 +24,10 @@ const Builtin = canon.Builtin;
 // TODO read everything in this file again to ensure it's making use of repr
 // properly
 
-pub const Error = Allocator.Error;
+pub const Error =
+    Allocator.Error ||
+    ReprWelt.ConversionError ||
+    ReprWelt.QualError;
 
 fn lowerLoadConst(
     env: *Env,
@@ -63,7 +66,7 @@ fn lowerAlloca(
     block: Label,
     repr: ReprId,
 ) Error!Local {
-    const size = env.rw.sizeOf(repr);
+    const size = try env.rw.sizeOf(repr);
 
     const ptr_repr = try env.rw.intern(env.ally, Repr{ .ptr = repr });
     const ptr = try ref.addLocal(env, ptr_repr);

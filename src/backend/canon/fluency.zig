@@ -17,7 +17,7 @@ const BcRef = @import("../bytecode/bytecode.zig").InstRef;
 
 // crucifixion =================================================================
 
-pub const CrucifyError = Allocator.Error;
+pub const CrucifyError = Allocator.Error || canon.ReprWelt.QualError;
 
 /// fills dst with zeroes and then copies canonical data
 fn writeCanon(dst: []u8, n: u64) void {
@@ -64,7 +64,7 @@ fn rawCrucify(env: Env, buf: []u8, texpr: TExpr) CrucifyError!void {
 pub fn crucify(env: Env, texpr: TExpr) CrucifyError!Value {
     std.debug.assert(texpr.known_const);
 
-    const size = env.sizeOf(texpr.ty);
+    const size = try env.sizeOf(texpr.ty);
     const value = Value.of(try env.ally.alloc(u8, size));
 
     try rawCrucify(env, value.buf, texpr);
@@ -74,7 +74,10 @@ pub fn crucify(env: Env, texpr: TExpr) CrucifyError!Value {
 
 // resurrection ================================================================
 
-pub const ResError = Allocator.Error || error{Unresurrectable};
+pub const ResError =
+    Allocator.Error ||
+    canon.ReprWelt.QualError ||
+    error{Unresurrectable};
 
 fn valueToNumber(value: Value, bits: u8, layout: Number.Layout) Number {
     const concrete: Number.Concrete = switch (layout) {
@@ -147,7 +150,7 @@ pub fn resurrect(
             const children = try ally.alloc(TExpr, arr.size);
 
             // resurrect elements
-            const el_size = env.sizeOf(arr.of);
+            const el_size = try env.sizeOf(arr.of);
             const buf = try ally.alloc(u8, el_size);
             defer ally.free(buf);
             const el_val = Value.of(buf);
@@ -166,7 +169,7 @@ pub fn resurrect(
             .many => return error.Unresurrectable,
             .single => ptr: {
                 // resurrect data being pointed to
-                const size = env.sizeOf(ptr.to);
+                const size = try env.sizeOf(ptr.to);
                 const index = canon.to(value.buf);
 
                 const val = try Value.init(ally, mem[index .. index + size]);
@@ -182,7 +185,7 @@ pub fn resurrect(
                 const len = canon.to(value.buf[8..16]);
 
                 // resurrect each subvalue
-                const el_size = env.sizeOf(ptr.to);
+                const el_size = try env.sizeOf(ptr.to);
                 const slice = try ally.alloc(TExpr, len);
 
                 const el = Value.of(try ally.alloc(u8, el_size));

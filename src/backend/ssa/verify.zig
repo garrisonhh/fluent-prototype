@@ -14,18 +14,26 @@ const canon = @import("../canon.zig");
 const ReprWelt = canon.ReprWelt;
 const ReprId = canon.ReprId;
 const Repr = canon.Repr;
+const TypeId = canon.TypeId;
+const Type = canon.Type;
 
-pub const Error = Allocator.Error || error{
+pub const Error =
+    Allocator.Error ||
+    Repr.AccessError ||
+    ReprWelt.ConversionError ||
+    ReprWelt.QualError ||
+    error{
     LargeLocal,
-    WrongArgLen,
-    MismatchedReprs,
+    InvalidArgLen,
     InvalidOffset,
+    MismatchedReprs,
+    MismatchedAllocaSize,
 };
 
 /// ssa values should all clock in at up to 8 bytes
 fn verifyReprSizes(rw: ReprWelt, func: *const Func) Error!void {
     for (func.locals.items) |local| {
-        const size = rw.sizeOf(local);
+        const size = try rw.sizeOf(local);
         if (size > 8) {
             std.debug.print("local {} is {} bytes\n", .{ local, size });
             return Error.LargeLocal;
@@ -34,7 +42,7 @@ fn verifyReprSizes(rw: ReprWelt, func: *const Func) Error!void {
 }
 
 fn expectArgLen(args: []const Local, n: usize) Error!void {
-    if (args.len != n) return Error.WrongArgLen;
+    if (args.len != n) return Error.InvalidArgLen;
 }
 
 fn expectEql(from: ReprId, to: ReprId) Error!void {
@@ -67,14 +75,29 @@ fn verifyOp(env: *Env, func: *const Func, op: Op) Error!void {
             const const_repr = try env.reprOf(func.getConst(ldc.a).ty);
             try expectEql(func.getLocal(ldc.to), const_repr);
         },
+        .call => |call| {
+            _ = call;
+
+            @panic("TODO verify ssa calls");
+        },
         .ret => |ret| {
-            try expectArgLen(ret.params, 1);
+            const args = ret.params;
+            try expectArgLen(args, 1);
 
             const ret_ty = env.tw.get(func.ty).func.returns;
             const ret_repr = try env.reprOf(ret_ty);
 
-            const arg = func.getLocal(ret.params[0]);
+            const arg = func.getLocal(args[0]);
             try expectEql(arg, ret_repr);
+        },
+        .alloca => |all| {
+            const repr = env.rw.get(func.getLocal(all.to));
+
+            if (repr.* != .ptr) {
+                return Error.MismatchedReprs;
+            } else if (try env.rw.sizeOf(repr.ptr) != all.size) {
+                return Error.MismatchedAllocaSize;
+            }
         },
         .store, .load => |eff| {
             const args = eff.params;
@@ -86,6 +109,31 @@ fn verifyOp(env: *Env, func: *const Func, op: Op) Error!void {
             if (ref.* != .ptr or !ref.ptr.eql(data)) {
                 return Error.MismatchedReprs;
             }
+        },
+        .store_el, .load_el => |access| {
+            const obj = env.rw.get(func.getLocal(access.obj));
+            const field = try obj.access(env.rw, access.index);
+            const data = func.getLocal(access.data);
+
+            try expectEql(field.of, data);
+        },
+        .fn_ty => |pure| {
+            const args = pure.params;
+            try expectArgLen(args, 2);
+            const fn_params = func.getLocal(args[0]);
+            const fn_returns = func.getLocal(args[1]);
+            const to = func.getLocal(pure.to);
+
+            const type_ty = try env.identify(.ty);
+            const type_slice_ty = try env.identify(Type{
+                .ptr = .{ .kind = .slice, .to = type_ty },
+            });
+            const type_repr = try env.reprOf(type_ty);
+            const type_slice_repr = try env.reprOf(type_slice_ty);
+
+            try expectEql(fn_params, type_slice_repr);
+            try expectEql(fn_returns, type_repr);
+            try expectEql(to, type_repr);
         },
 
         // homogenous pure binary ops
@@ -113,7 +161,7 @@ fn verifyOp(env: *Env, func: *const Func, op: Op) Error!void {
             try expectHomogenous(func, pure.to, pure.params);
         },
 
-        else => std.debug.panic("TODO verify ssa op {s}", .{@tagName(op)}),
+        // else => std.debug.panic("TODO verify ssa op {s}", .{@tagName(op)}),
     }
 }
 

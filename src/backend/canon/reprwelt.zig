@@ -63,15 +63,19 @@ pub fn get(self: Self, id: ReprId) *const Repr {
     return &self.map.items[id.index];
 }
 
-pub const ConvertError =
-    Allocator.Error || error{ AnalysisType, UnknownConversion };
+pub const ConversionError = Allocator.Error || error{NoRepr};
 
 pub fn intern(self: *Self, ally: Allocator, repr: Repr) Allocator.Error!ReprId {
-    const id = ReprId{ .index = self.map.items.len };
-    try self.map.append(ally, repr);
-    try self.reprs.put(ally, repr, id);
+    const res = try self.reprs.getOrPut(ally, repr);
+    if (!res.found_existing) {
+        const id = ReprId{ .index = self.map.items.len };
+        try self.map.append(ally, repr);
 
-    return id;
+        res.value_ptr.* = id;
+        res.key_ptr.* = repr;
+    }
+
+    return res.value_ptr.*;
 }
 
 /// get ReprId for any type. may convert or retrieve a cached id
@@ -80,7 +84,7 @@ pub fn reprOf(
     ally: Allocator,
     tw: TypeWelt,
     ty: TypeId,
-) ConvertError!ReprId {
+) ConversionError!ReprId {
     if (self.converts.get(ty)) |id| {
         return id;
     }
@@ -93,10 +97,12 @@ pub fn reprOf(
     return id;
 }
 
-pub fn sizeOf(self: Self, id: ReprId) usize {
-    return self.get(id).sizeOf(self);
+pub const QualError = error{ SizeOfFunc, AlignOfFunc };
+
+pub fn sizeOf(self: Self, id: ReprId) QualError!usize {
+    return try self.get(id).sizeOf(self);
 }
 
-pub fn alignOf(self: Self, id: ReprId) usize {
-    return self.get(id).alignOf(self);
+pub fn alignOf(self: Self, id: ReprId) QualError!usize {
+    return try self.get(id).alignOf(self);
 }

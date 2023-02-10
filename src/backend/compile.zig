@@ -36,7 +36,10 @@ pub const Program = bytecode.Program;
 // - value pointers are stored as indices into the stack, and function pointers
 //   are stored as instruction indices
 
-pub const Error = Allocator.Error || canon.CrucifyError;
+pub const Error =
+    Allocator.Error ||
+    canon.CrucifyError ||
+    canon.ReprWelt.QualError;
 
 fn compileAlloca(
     ally: Allocator,
@@ -113,7 +116,7 @@ fn compileOp(
             const src = rmap.get(eff.params[1]);
             const src_repr = ref.getLocal(env.*, eff.params[1]);
 
-            const size = env.rw.sizeOf(src_repr);
+            const size = try env.rw.sizeOf(src_repr);
             const nbytes = @intCast(u8, size);
 
             try b.addInst(ally, Bc.store(nbytes, src, dst));
@@ -252,7 +255,7 @@ fn compileOp(
                     try b.addInst(ally, con(lhs, rhs, to));
                 },
                 .float => @panic("TODO non-integral arithmetic"),
-                .array, .coll => unreachable,
+                .unit, .array, .coll, .func => unreachable,
             }
         },
         else => |tag| std.debug.panic("TODO compile op {}", .{tag}),

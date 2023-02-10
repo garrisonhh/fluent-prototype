@@ -74,32 +74,23 @@ fn repl(env: *Env, proj: *Project) !void {
             defer ctx.deinit();
 
             const ty = backend.TypeId{ .index = i };
-            switch (env.tw.get(ty).*) {
-                .hole, .namespace, .builtin, .any, .set, .func => {
-                    const tex = try ctx.slap(
-                        try ty.render(&ctx, env.tw),
-                        try ctx.print(.{ .fg = .red }, "no repr", .{}),
-                        .right,
-                        .{ .space = 1 },
-                    );
-                    try ctx.write(tex, stdout);
 
-                    continue;
-                },
-                else => {},
-            }
-
-            if (env.reprOf(ty) catch null) |repr| {
-                const sz = env.rw.get(repr).sizeOf(env.rw);
-                const aln = env.rw.get(repr).alignOf(env.rw);
-
+            if (env.reprOf(ty)) |repr| {
                 const tex = try ctx.stack(
                     &.{
                         try ty.render(&ctx, env.tw),
-                        try ctx.print(.{}, "->", .{}),
+                        try ctx.print(.{}, ":=", .{}),
                         try repr.render(&ctx, env.rw),
-                        try ctx.print(.{}, "(sz {}, aln {})", .{ sz, aln }),
                     },
+                    .right,
+                    .{ .space = 1 },
+                );
+
+                try ctx.write(tex, stdout);
+            } else |_| {
+                const tex = try ctx.slap(
+                    try ty.render(&ctx, env.tw),
+                    try ctx.print(.{ .fg = .red }, "no repr", .{}),
                     .right,
                     .{ .space = 1 },
                 );

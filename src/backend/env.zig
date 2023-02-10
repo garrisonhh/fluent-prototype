@@ -84,27 +84,19 @@ pub fn identify(self: *Self, ty: Type) Allocator.Error!TypeId {
     const id = try self.tw.identify(self.ally, ty);
 
     _ = self.rw.reprOf(self.ally, self.tw, id) catch |e| switch (e) {
-        error.OutOfMemory => return Allocator.Error.OutOfMemory,
-        error.AnalysisType, error.UnknownConversion => {},
+        error.OutOfMemory => return error.OutOfMemory,
+        error.NoRepr => {},
     };
 
     return id;
 }
 
-pub fn reprOf(self: *Self, ty: TypeId) Allocator.Error!ReprId {
-    return self.rw.reprOf(self.ally, self.tw, ty) catch |e| switch (e) {
-        error.OutOfMemory => error.OutOfMemory,
-        // if one of these happens, the compiler has (almost) definitely failed
-        // in verifying some piece of code
-        error.AnalysisType, error.UnknownConversion => std.debug.panic(
-            "reprOf failed with error: {s}",
-            .{@errorName(e)},
-        ),
-    };
+pub fn reprOf(self: *Self, ty: TypeId) ReprWelt.ConversionError!ReprId {
+    return try self.rw.reprOf(self.ally, self.tw, ty);
 }
 
-pub fn sizeOf(self: Self, ty: TypeId) usize {
-    return self.rw.sizeOf(self.rw.converts.get(ty).?);
+pub fn sizeOf(self: Self, ty: TypeId) ReprWelt.QualError!usize {
+    return try self.rw.sizeOf(self.rw.converts.get(ty).?);
 }
 
 // low-level IRs ===============================================================
@@ -125,7 +117,7 @@ pub fn removeFunc(self: *Self, ref: SsaRef) Allocator.Error!void {
 }
 
 /// calls the compile pipeline for an ssa function and then ties them
-pub fn compileSsa(self: *Self, ref: SsaRef) Allocator.Error!BcRef {
+pub fn compileSsa(self: *Self, ref: SsaRef) compile.Error!BcRef {
     std.debug.assert(!self.compiled.contains(ref));
 
     try compile.compile(self, ref);
@@ -136,7 +128,7 @@ pub fn compileSsa(self: *Self, ref: SsaRef) Allocator.Error!BcRef {
 }
 
 /// if function is not compiled, compiles it. otherwise returns previous BcRef.
-pub fn ensureCompiled(self: *Self, ref: SsaRef) Allocator.Error!BcRef {
+pub fn ensureCompiled(self: *Self, ref: SsaRef) compile.Error!BcRef {
     return if (self.compiled.get(ref)) |bc| bc else try self.compileSsa(ref);
 }
 

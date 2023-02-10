@@ -18,9 +18,14 @@ const canon = @import("canon.zig");
 const Value = canon.Value;
 const Type = canon.Type;
 const TypeId = canon.TypeId;
+const ReprWelt = canon.ReprWelt;
 
 pub const Error =
-    std.mem.Allocator.Error || canon.ResError || @TypeOf(stdout).Error;
+    std.mem.Allocator.Error ||
+    canon.ResError ||
+    ReprWelt.ConversionError ||
+    ReprWelt.QualError ||
+    @TypeOf(stdout).Error;
 
 pub const Result = Message.Result(TExpr);
 

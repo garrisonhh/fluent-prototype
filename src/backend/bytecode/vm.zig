@@ -99,7 +99,7 @@ fn makeFnType(
         if (!Cloze.called) {
             Cloze.called = true;
 
-            const tid_size = env.sizeOf(try env.identify(.ty));
+            const tid_size = try env.sizeOf(try env.identify(.ty));
             std.debug.assert(TID_REPR_SIZE == tid_size);
             std.debug.assert(TID_REPR_SIZE == @sizeOf(TypeId));
         }

@@ -24,16 +24,36 @@ pub const Repr = union(enum) {
         of: ReprId,
     };
 
+    pub const Conv = enum { by_value, by_ref };
+
+    /// this encodes the relationship of a function parameter to its type
+    pub const Param = struct {
+        conv: Conv,
+        of: ReprId,
+    };
+
+    pub const Func = struct {
+        ctx: Param,
+        takes: []Param,
+        returns: Param,
+    };
+
     const Self = @This();
 
-    // hold byte width (MUST be 1, 2, 4, or 8)
+    // primitives
+    unit,
+    // hold byte width (MUST be 1, 2, 4, or 8 for int and 4 or 8 for float)
     uint: u4,
     int: u4,
     float: u4,
+
     // structured data
     ptr: ReprId,
     array: Array,
     coll: []Field,
+
+    // else
+    func: Func,
 
     /// dupes input
     pub fn initColl(
@@ -43,11 +63,39 @@ pub const Repr = union(enum) {
         return Self{ .coll = try ally.dupe(Field, coll) };
     }
 
+    /// dupes input
+    pub fn initFunc(
+        ally: Allocator,
+        ctx: Param,
+        takes: []const Param,
+        returns: Param,
+    ) Allocator.Error!Self {
+        return Self{ .func = Func{
+            .ctx = ctx,
+            .takes = try ally.dupe(Param, takes),
+            .returns = returns,
+        } };
+    }
+
     pub fn deinit(self: Self, ally: Allocator) void {
         switch (self) {
-            .uint, .int, .float, .ptr, .array => {},
+            .unit, .uint, .int, .float, .ptr, .array => {},
             .coll => |coll| ally.free(coll),
+            .func => |func| ally.free(func.takes),
         }
+    }
+
+    fn paramOfType(
+        ally: Allocator,
+        rw: *ReprWelt,
+        tw: TypeWelt,
+        id: TypeId,
+    ) ReprWelt.ConversionError!Param {
+        const repr = try Self.ofType(ally, rw, tw, id);
+        return Param{
+            .conv = repr.getConv(),
+            .of = try rw.intern(ally, repr),
+        };
     }
 
     pub fn ofType(
@@ -55,22 +103,17 @@ pub const Repr = union(enum) {
         rw: *ReprWelt,
         tw: TypeWelt,
         id: TypeId,
-    ) ReprWelt.ConvertError!Self {
+    ) ReprWelt.ConversionError!Self {
         const ty = tw.get(id);
-
-        // analysis types have no repr
-        if (ty.classifyRuntime(tw) == .analysis) {
-            return ReprWelt.ConvertError.AnalysisType;
-        }
-
         return switch (ty.*) {
+            // no repr
             .hole,
             .namespace,
             .any,
             .set,
-            => return ReprWelt.ConvertError.AnalysisType,
-            .func => return ReprWelt.ConvertError.UnknownConversion,
-            .unit => Self{ .coll = &.{} },
+            => return error.NoRepr,
+
+            .unit => .unit,
             .@"bool" => Self{ .uint = 1 },
             .atom, .ty, .builtin => Self{ .uint = 8 },
             .array => |arr| Self{ .array = .{
@@ -106,7 +149,44 @@ pub const Repr = union(enum) {
                     break :slice try Self.initColl(ally, &fields);
                 },
             },
+            .func => |func| func: {
+                // NOTE this implements the base truth for the fluent callconv
+                const takes = try ally.alloc(Param, func.takes.len);
+                for (func.takes) |param, i| {
+                    takes[i] = try paramOfType(ally, rw, tw, param);
+                }
+
+                const unit = try rw.intern(ally, .unit);
+                const ctx = Param{
+                    .conv = rw.get(unit).getConv(),
+                    .of = unit,
+                };
+
+                const returns = try paramOfType(ally, rw, tw, func.returns);
+
+                break :func Self{ .func = .{
+                    .ctx = ctx,
+                    .takes = takes,
+                    .returns = returns,
+                } };
+            },
             else => |tag| std.debug.panic("TODO convert repr of {}", .{tag}),
+        };
+    }
+
+    /// whether this repr is a collection with accessible fields
+    pub fn isStructured(self: Self) bool {
+        return switch (self) {
+            .unit, .uint, .int, .float, .ptr, .func => false,
+            .array, .coll => true,
+        };
+    }
+
+    /// how a value of this repr is conventionally represented in memory
+    pub fn getConv(self: Self) Conv {
+        return switch (self) {
+            .unit, .uint, .int, .float, .ptr => .by_value,
+            .func, .array, .coll => .by_ref,
         };
     }
 
@@ -115,10 +195,17 @@ pub const Repr = union(enum) {
     /// get the repr of a field (assuming this is a collection of some kind)
     pub fn access(self: Self, rw: ReprWelt, index: usize) AccessError!Field {
         return switch (self) {
-            .uint, .int, .float, .ptr => AccessError.NotCollection,
+            .unit,
+            .uint,
+            .int,
+            .float,
+            .ptr,
+            .func,
+            => AccessError.NotCollection,
+
             .array => |arr| arr: {
                 if (index >= arr.size) {
-                    break :arr AccessError.NotCollection;
+                    break :arr AccessError.OutOfBounds;
                 }
 
                 _ = rw;
@@ -135,16 +222,18 @@ pub const Repr = union(enum) {
         };
     }
 
-    /// TODO cache this
-    pub fn alignOf(self: Self, rw: ReprWelt) usize {
+    // TODO cache this
+    pub fn alignOf(self: Self, rw: ReprWelt) ReprWelt.QualError!usize {
         return switch (self) {
-            .uint, .int, .float => |nbytes| nbytes,
+            .func => error.AlignOfFunc,
+            .unit => 1,
             .ptr => 8,
-            .array => |arr| rw.get(arr.of).alignOf(rw),
+            .uint, .int, .float => |nbytes| nbytes,
+            .array => |arr| try rw.get(arr.of).alignOf(rw),
             .coll => |coll| coll: {
                 var max_aln: usize = 1;
                 for (coll) |field| {
-                    const child_aln = rw.get(field.of).alignOf(rw);
+                    const child_aln = try rw.get(field.of).alignOf(rw);
                     max_aln = @max(max_aln, child_aln);
                 }
 
@@ -153,12 +242,14 @@ pub const Repr = union(enum) {
         };
     }
 
-    /// TODO cache this
-    pub fn sizeOf(self: Self, rw: ReprWelt) usize {
+    // TODO cache this
+    pub fn sizeOf(self: Self, rw: ReprWelt) ReprWelt.QualError!usize {
         return switch (self) {
-            .uint, .int, .float => |nbytes| nbytes,
+            .func => error.SizeOfFunc,
+            .unit => 0,
             .ptr => 8,
-            .array => |arr| arr.size * rw.get(arr.of).sizeOf(rw),
+            .uint, .int, .float => |nbytes| nbytes,
+            .array => |arr| arr.size * try rw.get(arr.of).sizeOf(rw),
             .coll => |coll| coll: {
                 if (coll.len == 0) break :coll 0;
 
@@ -167,13 +258,13 @@ pub const Repr = union(enum) {
                     const repr = rw.get(field.of);
 
                     // ensure field is on an aligned boundary
-                    const aln = repr.alignOf(rw);
+                    const aln = try repr.alignOf(rw);
                     const aln_diff = size % aln;
                     if (aln_diff > 0) {
                         size += aln - aln_diff;
                     }
 
-                    size += repr.sizeOf(rw);
+                    size += try repr.sizeOf(rw);
                 }
 
                 break :coll size;
@@ -187,6 +278,7 @@ pub const Repr = union(enum) {
         wyhash.update(b(&@as(Tag, self)));
 
         switch (self) {
+            .unit => {},
             .int, .uint, .float => |nbytes| wyhash.update(b(&nbytes)),
             .ptr => |to| wyhash.update(b(&to)),
             .array => |arr| {
@@ -199,48 +291,40 @@ pub const Repr = union(enum) {
                     wyhash.update(b(&field.of));
                 }
             },
+            .func => |func| {
+                wyhash.update(b(&func.takes));
+                wyhash.update(b(&func.returns));
+            },
         }
     }
 
     pub fn eql(self: Self, other: Self) bool {
-        return @as(Tag, self) == @as(Tag, other) and switch (self) {
-            inline .int,
-            .uint,
-            .float,
-            => |nbytes, tag| nbytes == @field(other, @tagName(tag)),
-            .ptr => |id| id.eql(other.ptr),
-            .array => |arr| arr.size == other.array.size and
-                arr.of.eql(other.array.of),
-            .coll => |coll| coll: {
-                if (coll.len != other.coll.len) {
-                    break :coll false;
-                }
-
-                for (coll) |field, i| {
-                    const other_field = other.coll[i];
-                    if (field.offset != other_field.offset or
-                        !field.of.eql(other_field.of))
-                    {
-                        break :coll false;
-                    }
-                }
-
-                break :coll true;
-            },
-        };
+        return std.meta.eql(self, other);
     }
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch (self) {
-            .uint, .int, .float, .ptr, .array => self,
+            .unit, .uint, .int, .float, .ptr, .array => self,
             .coll => |coll| try initColl(ally, coll),
+            .func => |func| try initFunc(ally, func.takes, func.returns),
         };
     }
 
-    pub fn isStructured(self: Self) bool {
-        return switch (self) {
-            .uint, .int, .float, .ptr => false,
-            .array, .coll => true,
+    fn renderParam(
+        param: Param,
+        ctx: *kz.Context,
+        rw: ReprWelt,
+    ) Allocator.Error!kz.Ref {
+        const repr = try param.of.render(ctx, rw);
+
+        return switch (param.conv) {
+            .by_value => repr,
+            .by_ref => try ctx.slap(
+                try ctx.print(.{}, "&", .{}),
+                repr,
+                .right,
+                .{},
+            ),
         };
     }
 
@@ -253,6 +337,7 @@ pub const Repr = union(enum) {
         const offset_sty = kz.Style{ .fg = .yellow };
 
         return switch (self) {
+            .unit => try ctx.print(sty, "unit", .{}),
             .uint, .int, .float => |bytes| try ctx.print(
                 sty,
                 "{c}{}",
@@ -283,16 +368,46 @@ pub const Repr = union(enum) {
                     );
                 }
 
-                break :coll try ctx.stack(&.{
-                    try ctx.print(.{}, "(", .{}),
-                    try ctx.sep(
-                        try ctx.print(.{}, ", ", .{}),
-                        list,
-                        .right,
-                        .{},
-                    ),
-                    try ctx.print(.{}, ")", .{}),
-                }, .right, .{});
+                break :coll try ctx.stack(
+                    &.{
+                        try ctx.print(.{}, "(", .{}),
+                        try ctx.sep(
+                            try ctx.print(.{}, ", ", .{}),
+                            list,
+                            .right,
+                            .{},
+                        ),
+                        try ctx.print(.{}, ")", .{}),
+                    },
+                    .right,
+                    .{},
+                );
+            },
+            .func => |func| func: {
+                const takes = try ctx.ally.alloc(kz.Ref, func.takes.len);
+                defer ctx.ally.free(takes);
+
+                for (func.takes) |param, i| {
+                    takes[i] = try renderParam(param, ctx, rw);
+                }
+
+                break :func try ctx.stack(
+                    &.{
+                        try ctx.print(.{}, "with ", .{}),
+                        try renderParam(func.ctx, ctx, rw),
+                        try ctx.print(.{}, " {{", .{}),
+                        try ctx.sep(
+                            try ctx.print(.{}, ", ", .{}),
+                            takes,
+                            .right,
+                            .{},
+                        ),
+                        try ctx.print(.{}, "}} -> ", .{}),
+                        try renderParam(func.returns, ctx, rw),
+                    },
+                    .right,
+                    .{},
+                );
             },
         };
     }
