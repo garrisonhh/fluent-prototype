@@ -42,6 +42,7 @@ fn execPrint(
             try kz.display(env.ally, env.*, value, stdout);
         },
         .err => |msg| {
+            defer msg.deinit(env.ally);
             try kz.display(env.ally, proj, msg, stderr);
         },
     }

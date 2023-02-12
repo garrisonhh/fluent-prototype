@@ -102,17 +102,21 @@ fn lexNumber(lexer: *Lexer, loc: Loc) Token {
     return Token.of(.number, lengthen(loc, lexer.index - start));
 }
 
-fn tokenOfLexical(lexer: *const Lexer, loc: Loc) Error!Token {
-    const str = lexer.tokens[loc.start..loc.stop];
-    std.debug.assert(str.len > 0);
+fn tryLexSymbol(lexer: *Lexer, loc: Loc) Error!?Token {
+    var len = auto.MAX_SYMBOL_LEN;
+    return while (len > 0) : (len -= 1) {
+        const slice = lexer.npeek(len) orelse continue;
+        if (auto.SYMBOLS.has(slice)) {
+            lexer.neat(len);
+            break Token.of(.word, lengthen(loc, len));
+        }
+    } else null;
+}
 
-    // zig fmt: off
-    const tag: Token.Tag =
-        if ((try classify(str[0])) == .digit) .number
-        else if (auto.SYMBOLS.has(str) or auto.KEYWORDS.has(str)) .word
-        else .ident;
-    // zig fmt: on
-
+/// makes a token of a word, checking whether this is a keyword
+fn lexicalToken(lexer: *const Lexer, loc: Loc) Token {
+    const text = lexer.tokens[loc.start..loc.stop];
+    const tag: Token.Tag = if (auto.KEYWORDS.has(text)) .word else .ident;
     return Token.of(tag, loc);
 }
 
@@ -121,66 +125,35 @@ fn lexWords(
     tokens: *std.ArrayList(Token),
     loc: Loc,
 ) Error!void {
-    const start = lexer.index;
+    // check for symbols
+    if (try tryLexSymbol(lexer, loc)) |token| {
+        try tokens.append(token);
+        return;
+    }
 
+    // parse a word
+    var length: usize = 0;
     while (lexer.peek()) |ch| {
         switch (try classify(ch)) {
-            .digit, .lexical => lexer.eat(),
+            .digit, .lexical => {},
             else => break,
         }
-    }
 
-    // split up token into symbols and keywords
-    const slice = lexer.tokens[start..lexer.index];
+        lexer.eat();
+        length += 1;
 
-    var i: usize = 0;
-    var word_start: usize = 0;
-    while (i < slice.len) {
-        // find the longest symbol possible
-        const found: ?usize = sym: {
-            var j: usize = @min(auto.MAX_SYMBOL_LEN, slice.len - i);
-            while (j > 0) : (j -= 1) {
-                if (auto.SYMBOLS.has(slice[i .. i + j])) {
-                    break :sym j;
-                }
-            }
+        const sym_index = loc.start + length;
+        const sym_loc = Loc.of(loc.file, sym_index, sym_index);
 
-            break :sym null;
-        };
-
-        if (found) |sym_len| {
-            const word_len = i - word_start;
-            if (word_len > 0) {
-                const word_loc = Loc{
-                    .file = loc.file,
-                    .start = start + word_start,
-                    .stop = start + i,
-                };
-                try tokens.append(try tokenOfLexical(lexer, word_loc));
-            }
-
-            const sym_loc = Loc{
-                .file = loc.file,
-                .start = start + i,
-                .stop = start + i + sym_len,
-            };
-            try tokens.append(try tokenOfLexical(lexer, sym_loc));
-
-            i += sym_len;
-            word_start = i;
-        } else {
-            i += 1;
+        if (try tryLexSymbol(lexer, sym_loc)) |sym| {
+            // hit a symbol, stop parsing
+            try tokens.append(lexicalToken(lexer, lengthen(loc, length)));
+            try tokens.append(sym);
+            return;
         }
     }
 
-    if (start + word_start < lexer.index) {
-        const word_loc = Loc{
-            .file = loc.file,
-            .start = start + word_start,
-            .stop = lexer.index,
-        };
-        try tokens.append(try tokenOfLexical(lexer, word_loc));
-    }
+    try tokens.append(lexicalToken(lexer, lengthen(loc, length)));
 }
 
 fn lex(
@@ -192,7 +165,8 @@ fn lex(
         const loc = here(lexer.*, file, 1);
         switch (try classify(ch)) {
             .whitespace => lexer.eat(),
-            .digit, .lexical => try lexWords(lexer, tokens, loc),
+            .digit => try tokens.append(lexNumber(lexer, loc)),
+            .lexical => try lexWords(lexer, tokens, loc),
             .newline => {
                 // insert a separator on a newline followed by an unindented
                 // character

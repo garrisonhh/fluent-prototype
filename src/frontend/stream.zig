@@ -27,9 +27,21 @@ pub fn Stream(comptime T: type) type {
             return self.get(0);
         }
 
+        pub fn npeek(self: Self, n: usize) ?[]const T {
+            if (self.index + n <= self.tokens.len) {
+                return self.tokens[self.index .. self.index + n];
+            }
+
+            return null;
+        }
+
         pub fn eat(self: *Self) void {
-            std.debug.assert(self.index < self.tokens.len);
-            self.index += 1;
+            self.neat(1);
+        }
+
+        pub fn neat(self: *Self, n: usize) void {
+            std.debug.assert(self.index + n <= self.tokens.len);
+            self.index += n;
         }
 
         pub fn prev(self: Self) T {
