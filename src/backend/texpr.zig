@@ -280,11 +280,15 @@ pub fn render(
     };
 
     // header
-    const ty_tex = try ctx.stack(&.{
-        try ctx.print(.{}, "<", .{}),
-        try self.ty.render(ctx, env.tw),
-        try ctx.print(.{}, ">", .{}),
-    }, .right, .{});
+    const ty_tex = try ctx.stack(
+        &.{
+            try ctx.print(.{}, "<", .{}),
+            try self.ty.render(ctx, env.tw),
+            try ctx.print(.{}, ">", .{}),
+        },
+        .right,
+        .{},
+    );
 
     const header = try ctx.slap(ty_tex, data, .right, .{ .space = 1 });
 
