@@ -17,8 +17,6 @@ const frontend = @import("frontend.zig");
 const ParseType = frontend.ParseType;
 
 const ZEN =
-    \\(wip)
-    \\
     \\programs should be:
     \\- easy to reason about.
     \\- well-understood by your tools.
@@ -112,6 +110,7 @@ fn repl(env: *Env, proj: *Project) !void {
     defer ln.deinit();
 
     while (try ln.linenoise("> ")) |line| {
+        defer ln.allocator.free(line);
         try ln.history.add(line);
 
         const input = try proj.register(ally, "repl", line);
@@ -161,12 +160,12 @@ var PROJ: Project = undefined;
 
 pub fn main() !void {
     // allocator boilerplate
-    // var gpa = std.heap.GeneralPurposeAllocator(.{
-    // .stack_trace_frames = 1000,
-    // }){};
-    // defer _ = gpa.deinit();
-    // const ally = gpa.allocator();
-    const ally = std.heap.page_allocator;
+    var gpa = std.heap.GeneralPurposeAllocator(.{
+        .stack_trace_frames = 1000,
+    }){};
+    defer _ = gpa.deinit();
+    const ally = gpa.allocator();
+    // const ally = std.heap.page_allocator;
 
     // cli input
     var parser = try cli.Parser.init(
@@ -193,7 +192,7 @@ pub fn main() !void {
     try addLogFlags(run_cmd);
     try run_cmd.addPositional("file", "the file to run", .string);
 
-    _ = try parser.addSubcommand("zen", "display the fluent zen", null);
+    _ = try parser.addSubcommand("zen", "display the fluent zen", zenHook);
 
     // fluent globals
     try frontend.init(ally);

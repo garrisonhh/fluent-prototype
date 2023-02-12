@@ -73,7 +73,11 @@ pub fn get(self: Self, id: ReprId) *const Repr {
 
 pub fn intern(self: *Self, ally: Allocator, repr: Repr) Allocator.Error!ReprId {
     const res = try self.reprs.getOrPut(ally, repr);
-    if (!res.found_existing) {
+    if (res.found_existing) {
+        // repr is known
+        repr.deinit(ally);
+    } else {
+        // repr is unknown, store it
         const id = ReprId{ .index = self.map.len };
         try self.map.append(ally, Slot{ .repr = repr });
 

@@ -245,15 +245,13 @@ fn analyzeArray(
     errdefer ally.free(texprs);
 
     // determine type expectations
-    const any = try env.identify(Type{ .any = {} });
+    const any = try env.identify(.any);
     const expected = env.tw.get(outward);
     const elem_outward = if (expected.* == .array) expected.array.of else any;
 
     // analyze each element
     for (exprs) |elem, i| {
-        errdefer for (texprs[0..i]) |texpr| {
-            texpr.deinit(ally);
-        };
+        errdefer for (texprs[0..i]) |texpr| texpr.deinit(ally);
         const res = try analyzeExpr(env, scope, elem, elem_outward);
         texprs[i] = res.get() orelse return res;
     }
@@ -278,12 +276,10 @@ fn filterDefError(
 ) SemaError!Result {
     return switch (from_err) {
         error.NameNoRedef => unreachable,
-        error.NameTooLong => err: {
-            break :err try err(ally, loc, "name is nested too deeply", .{});
-        },
-        error.NameRedef, error.RenamedType => err: {
-            break :err try err(ally, loc, "this name already exists", .{});
-        },
+        error.NameTooLong => try err(ally, loc, "name is too long", .{}),
+        error.NameRedef,
+        error.RenamedType,
+        => try err(ally, loc, "this name already exists", .{}),
         else => |e| @errSetCast(SemaError, e),
     };
 }
@@ -475,8 +471,7 @@ fn analyzeBuiltinCall(
         .cast => try analyzeAs(env, scope, expr, outward),
         .addr_of => try analyzeAddrOf(env, scope, expr, outward),
         .def => def: {
-            const fmt =
-                "`def` declarations can only exist inside of a namespace.";
+            const fmt = "declarations can only exist inside of a namespace.";
             break :def try err(env.ally, expr.loc, fmt, .{});
         },
         .do => try analyzeDo(env, scope, expr, outward),
@@ -523,15 +518,15 @@ fn analyzeLambda(
         return try err(env.ally, loc, fmt, .{});
     }
 
-    const params = params_expr.data.array;
+    const params = params_expr.data.call[1..];
     if (params.len != func.takes.len) {
-        return try Message.err(
+        return Result.err(try Message.print(
             env.ally,
-            TExpr,
+            .@"error",
             params_expr.loc,
             "found {d} parameters, expected {d}",
             .{ params.len, func.takes.len },
-        );
+        ));
     }
 
     // define function as a namespace
