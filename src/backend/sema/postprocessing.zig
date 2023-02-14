@@ -4,6 +4,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const Env = @import("../env.zig");
+const Id = Env.Id;
 const TExpr = @import("../texpr.zig");
 const com = @import("common");
 const Loc = com.Loc;
@@ -21,25 +22,29 @@ fn err(
 }
 
 /// flattens `do` blocks with one expression into the expression
-fn pruneDoBlocks(env: Env, texpr: *TExpr) void {
-    for (texpr.getChildren()) |*child| {
+fn pruneDoBlocks(env: *Env, id: Id) void {
+    const texpr = env.get(id);
+    for (texpr.getChildren()) |child| {
         pruneDoBlocks(env, child);
     }
 
-    if (texpr.data == .call and texpr.data.call[0].isBuiltin(.do)) {
-        const xs = texpr.data.call;
-        if (xs.len == 2) {
-            const child = xs[1];
-            env.ally.free(xs);
+    // look for trivial do blocks
+    if (texpr.data != .call) return;
 
-            texpr.* = child;
-        }
+    const xs = texpr.data.call;
+    const head = env.get(xs[0]);
+    if (!head.isBuiltin(.do)) return;
+
+    if (xs.len == 2) {
+        env.squash(id, xs[1]);
     }
 }
 
 /// after analysis, it's possible that types that fluent can't actually lower
 /// are produced (e.g. Any and com type sets like Int).
-fn verifyDynamic(env: Env, texpr: TExpr) Allocator.Error!Result {
+fn verifyDynamic(env: Env, id: Id) Allocator.Error!Result {
+    const texpr = env.get(id);
+
     // check that the class isn't analysis
     const class = env.tw.get(texpr.ty).classifyRuntime(env.tw);
 
@@ -65,7 +70,12 @@ fn verifyDynamic(env: Env, texpr: TExpr) Allocator.Error!Result {
 
 /// when you cast a number literal immediately, there's no reason to execute
 /// the cast on a vm to get the output
-fn removeTrivialCasts(env: Env, texpr: *TExpr) void {
+fn removeTrivialCasts(env: *Env, id: Id) Allocator.Error!void {
+    const texpr = env.get(id);
+    for (texpr.getChildren()) |child| {
+        try removeTrivialCasts(env, child);
+    }
+
     blk: {
         // must be a call
         if (texpr.data != .call) break :blk;
@@ -74,13 +84,13 @@ fn removeTrivialCasts(env: Env, texpr: *TExpr) void {
         if (exprs.len == 0) break :blk;
 
         // must be a call to cast
-        const head = exprs[0];
+        const head = env.get(exprs[0]);
         if (head.data != .builtin or head.data.builtin != .cast) {
             break :blk;
         }
 
         // must be a call to cast of a number to another number
-        const body = &exprs[1];
+        const body = env.get(exprs[1]);
         if (body.data != .number) break :blk;
 
         const ty = env.tw.get(texpr.ty);
@@ -90,51 +100,48 @@ fn removeTrivialCasts(env: Env, texpr: *TExpr) void {
         const num = ty.number;
         const casted = body.data.number.cast(num.bits, num.layout);
 
-        const original = texpr.*;
-        defer original.deinit(env.ally);
-
-        texpr.* = TExpr.init(
-            original.loc,
-            false,
-            original.ty,
-            .{ .number = casted },
-        );
-    }
-
-    for (texpr.getChildren()) |*child| {
-        removeTrivialCasts(env, child);
+        const final = try env.new(texpr.loc, texpr.ty, .{ .number = casted });
+        env.squash(id, final);
     }
 }
 
-fn identifyLeftovers(ally: Allocator, texpr: TExpr) Allocator.Error!Result {
+fn identifyLeftovers(env: Env, id: Id) Allocator.Error!Result {
+    const texpr = env.get(id);
+
     if (texpr.isBuiltin(.pie_stone)) {
-        return try err(
-            ally,
-            texpr.loc,
-            "found pie stone in expr after sema.",
-            .{},
-        );
+        const msg = "found pie stone in expr after sema.";
+        return try err(env.ally, texpr.loc, msg, .{});
     }
 
     for (texpr.getChildren()) |child| {
-        const res = try identifyLeftovers(ally, child);
+        const res = try identifyLeftovers(env, child);
         res.get() orelse return res;
     }
 
     return Result.ok({});
 }
 
-pub fn postprocess(env: *Env, texpr: *TExpr) Allocator.Error!Result {
-    pruneDoBlocks(env.*, texpr);
+pub fn postprocess(env: *Env, id: Id) Allocator.Error!Result {
+    // TODO remove
+    {
+        const kz = @import("kritzler");
+        const stdout = std.io.getStdOut().writer();
 
-    const vd_res = try verifyDynamic(env.*, texpr.*);
+        stdout.writeAll("[before postprocessing]\n") catch {};
+        kz.display(env.ally, env.*, env.get(id), stdout) catch {};
+        stdout.writeAll("\n") catch {};
+    }
+
+    pruneDoBlocks(env, id);
+
+    const vd_res = try verifyDynamic(env.*, id);
     vd_res.get() orelse return vd_res;
 
-    removeTrivialCasts(env.*, texpr);
+    try removeTrivialCasts(env, id);
 
     // compiler self-diagnostics
     if (builtin.mode == .Debug) {
-        const il_res = try identifyLeftovers(env.ally, texpr.*);
+        const il_res = try identifyLeftovers(env.*, id);
         il_res.get() orelse return il_res;
     }
 

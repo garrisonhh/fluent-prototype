@@ -37,9 +37,9 @@ fn execPrint(
     what: ParseType,
 ) !void {
     switch (try plumbing.exec(proj, env, ref, what)) {
-        .ok => |value| {
-            defer value.deinit(env.ally);
-            try kz.display(env.ally, env.*, value, stdout);
+        .ok => |id| {
+            defer env.del(id);
+            try kz.display(env.ally, env.*, env.get(id), stdout);
         },
         .err => |msg| {
             defer msg.deinit(env.ally);

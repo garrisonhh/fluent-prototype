@@ -12,6 +12,7 @@ const Label = ssa.Label;
 const Func = ssa.Func;
 const FuncRef = ssa.FuncRef;
 const Env = @import("env.zig");
+const Id = Env.Id;
 const TExpr = @import("texpr.zig");
 const canon = @import("canon.zig");
 const TypeId = canon.TypeId;
@@ -56,11 +57,12 @@ fn lowerLoadConst(
     env: *Env,
     ref: FuncRef,
     block: Label,
-    expr: TExpr,
+    id: Id,
 ) Error!Var {
-    std.debug.assert(expr.known_const);
+    const expr = env.get(id);
+    std.debug.assert(env.get(id).known_const);
 
-    const @"const" = try ref.addConst(env, expr);
+    const @"const" = try ref.addConst(env, id);
     const out = try ref.addLocal(env, try env.reprOf(expr.ty));
     try ref.addOp(env, block, Op{ .ldc = .{ .a = @"const", .to = out } });
 
@@ -73,7 +75,7 @@ fn lowerU64(env: *Env, ref: FuncRef, block: Label, n: u64) Error!Var {
     const @"u64" = try env.identify(Type{
         .number = .{ .bits = 64, .layout = .uint },
     });
-    const expr = TExpr.init(null, true, @"u64", .{
+    const expr = try env.new(null, @"u64", .{
         .number = TExpr.Number{
             .bits = 64,
             .data = .{ .uint = n },
@@ -106,8 +108,9 @@ fn stackAlloc(
     return ptr;
 }
 
-fn lowerArray(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Var {
+fn lowerArray(env: *Env, ref: FuncRef, block: *Label, id: Id) Error!Var {
     const ally = env.ally;
+    const expr = env.get(id);
     const exprs = expr.data.array;
 
     // lower all elements
@@ -153,14 +156,9 @@ fn lowerArray(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Var {
 }
 
 /// lowers the operation of taking the address of a subexpr
-fn lowerAddrOf(
-    env: *Env,
-    ref: FuncRef,
-    block: *Label,
-    expr: TExpr,
-) Error!Var {
-    const subexpr = expr.data.ptr.*;
-    const ptr = switch (try lowerExpr(env, ref, block, subexpr)) {
+fn lowerAddrOf(env: *Env, ref: FuncRef, block: *Label, id: Id) Error!Var {
+    const expr = env.get(id);
+    const ptr = switch (try lowerExpr(env, ref, block, expr.data.ptr)) {
         .by_ref => |ptr| ptr,
         .by_value => |val| val: {
             const repr = ref.getLocal(env.*, val);
@@ -178,27 +176,25 @@ fn lowerAddrOf(
 
 /// functions get lowered as their own Func and then stored in the env. for
 /// the current block, their FuncRef can then get lowered in.
-fn lowerLambda(
-    env: *Env,
-    ref: FuncRef,
-    block: *Label,
-    expr: TExpr,
-) Error!Var {
+fn lowerLambda(env: *Env, ref: FuncRef, block: *Label, id: Id) Error!Var {
+    const expr = env.get(id);
+
     // lower function expr
     std.debug.assert(env.tw.get(expr.ty).* == .func);
 
     const name = expr.data.func.name;
     const body = expr.data.func.body;
-    const lambda = try lowerFunction(env, name, expr.ty, body.*);
+    const lambda = try lowerFunction(env, name, expr.ty, body);
 
     // load func ref as callable constant
-    const final = TExpr.init(expr.loc, true, expr.ty, .{ .func_ref = lambda });
+    const final = try env.new(expr.loc, expr.ty, .{ .func_ref = lambda });
     return byRef((try lowerLoadConst(env, ref, block.*, final)).get());
 }
 
 /// if exprs get lowered into two branching blocks
-fn lowerIf(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Var {
+fn lowerIf(env: *Env, ref: FuncRef, block: *Label, id: Id) Error!Var {
     const ally = env.ally;
+    const expr = env.get(id);
     const exprs = expr.data.call;
 
     // lower branch op
@@ -238,13 +234,14 @@ fn lowerArrayPtrToSlice(
     env: *Env,
     ref: FuncRef,
     block: *Label,
-    expr: TExpr,
+    id: Id,
 ) Error!Var {
     const ally = env.ally;
+    const expr = env.get(id);
     const child = expr.data.call[1];
 
     // get length and ptr
-    const array_ptr_ty = env.tw.get(child.ty);
+    const array_ptr_ty = env.tw.get(env.get(child).ty);
     const array_ty = env.tw.get(array_ptr_ty.ptr.to);
     const array_len = array_ty.array.size;
 
@@ -300,15 +297,16 @@ fn lowerBuiltin(
     ref: FuncRef,
     block: *Label,
     b: Builtin,
-    expr: TExpr,
+    id: Id,
 ) Error!Var {
     return switch (b) {
         .recur => unreachable,
-        .lambda => try lowerLambda(env, ref, block, expr),
-        .@"if" => try lowerIf(env, ref, block, expr),
-        .array_ptr_to_slice => try lowerArrayPtrToSlice(env, ref, block, expr),
+        .lambda => try lowerLambda(env, ref, block, id),
+        .@"if" => try lowerIf(env, ref, block, id),
+        .array_ptr_to_slice => try lowerArrayPtrToSlice(env, ref, block, id),
         .cast => cast: {
             const ally = env.ally;
+            const expr = env.get(id);
             const child_expr = expr.data.call[1];
 
             const child = (try lowerExpr(env, ref, block, child_expr)).by_value;
@@ -325,6 +323,7 @@ fn lowerBuiltin(
         // zig fmt: on
         => |tag| op: {
             // builtins that directly map to ssa ops
+            const expr = env.get(id);
             const args = expr.data.call[1..];
             const locals = try env.ally.alloc(Local, args.len);
             for (args) |arg, i| {
@@ -354,28 +353,35 @@ fn lowerBuiltin(
     };
 }
 
-fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Var {
+fn lowerCall(env: *Env, ref: FuncRef, block: *Label, id: Id) Error!Var {
     const ally = env.ally;
+    const expr = env.get(id);
     const exprs = expr.data.call;
     std.debug.assert(exprs.len > 0);
 
     // get true head
     const raw_head = exprs[0];
-    const head = switch (raw_head.data) {
-        .name => |name| env.get(name),
+    const raw_head_expr = env.get(raw_head);
+    const head: Id = switch (raw_head_expr.data) {
+        .name => |name| env.getId(name),
         .builtin => |b| b: {
             if (b == .recur) {
-                break :b TExpr.initFuncRef(raw_head.loc, raw_head.ty, ref);
+                break :b try env.new(
+                    raw_head_expr.loc,
+                    raw_head_expr.ty,
+                    .{ .func_ref = ref },
+                );
             } else {
                 break :b raw_head;
             }
         },
         else => raw_head,
     };
+    const head_expr = env.get(head);
 
     // dispatch on builtins (except for recur)
-    if (head.data == .builtin) {
-        return try lowerBuiltin(env, ref, block, head.data.builtin, expr);
+    if (head_expr.data == .builtin) {
+        return try lowerBuiltin(env, ref, block, head_expr.data.builtin, id);
     }
 
     // lower all expr children
@@ -389,7 +395,7 @@ fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Var {
     }
 
     // lower return value, respecting callconv
-    const ret_ty = env.tw.get(head.ty).func.returns;
+    const ret_ty = env.tw.get(head_expr.ty).func.returns;
     const ret_repr = try env.reprOf(ret_ty);
     const ret_conv = env.rw.getConv(ret_repr);
     const ret = switch (ret_conv) {
@@ -408,9 +414,10 @@ fn lowerCall(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Var {
     return Var.of(ret_conv, ret);
 }
 
-fn lowerExpr(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Var {
+fn lowerExpr(env: *Env, ref: FuncRef, block: *Label, id: Id) Error!Var {
+    const expr = env.get(id);
     if (expr.known_const) {
-        return try lowerLoadConst(env, ref, block.*, expr);
+        return try lowerLoadConst(env, ref, block.*, id);
     }
 
     return switch (expr.data) {
@@ -419,13 +426,13 @@ fn lowerExpr(env: *Env, ref: FuncRef, block: *Label, expr: TExpr) Error!Var {
         // has separate functionality
         .builtin => unreachable,
         // TODO named values should be cacheable and lowered only once, really.
-        // afaik this will currently place the same named value multiple times
-        // in the code.
-        .name => |name| try lowerExpr(env, ref, block, env.get(name)),
-        .array => try lowerArray(env, ref, block, expr),
-        .call => try lowerCall(env, ref, block, expr),
-        .ptr => try lowerAddrOf(env, ref, block, expr),
-        .func => try lowerLambda(env, ref, block, expr),
+        // this will currently place the same named value multiple times in the
+        // code.
+        .name => |name| try lowerExpr(env, ref, block, env.getId(name)),
+        .array => try lowerArray(env, ref, block, id),
+        .call => try lowerCall(env, ref, block, id),
+        .ptr => try lowerAddrOf(env, ref, block, id),
+        .func => try lowerLambda(env, ref, block, id),
         .param => |p| param: {
             // TODO analyze parameter references to ensure no closures are
             // created
@@ -445,7 +452,7 @@ fn lowerFunction(
     env: *Env,
     name: Name,
     ty: TypeId,
-    body: TExpr,
+    body: Id,
 ) Error!FuncRef {
     const ally = env.ally;
 
@@ -473,13 +480,14 @@ fn lowerFunction(
 }
 
 /// lowers expression as if it is the body of a function with no args
-pub fn lower(env: *Env, scope: Name, expr: TExpr) Error!FuncRef {
+pub fn lower(env: *Env, scope: Name, id: Id) Error!FuncRef {
+    const expr = env.get(id);
     const ty = try env.identify(Type{ .func = .{
         .takes = &.{},
         .returns = expr.ty,
     } });
 
-    const ref = try lowerFunction(env, scope, ty, expr);
+    const ref = try lowerFunction(env, scope, ty, id);
 
     if (builtin.mode == .Debug) {
         const verify = @import("ssa/verify.zig").verify;

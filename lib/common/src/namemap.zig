@@ -100,7 +100,7 @@ pub const Name = struct {
         writer: anytype,
     ) @TypeOf(writer).Error!void {
         for (self.syms) |sym, i| {
-            if (i > 0) try writer.writeAll("::");
+            if (i > 0) try writer.writeAll(".");
             try writer.writeAll(sym.str);
         }
     }

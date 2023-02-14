@@ -12,6 +12,7 @@ const Name = com.Name;
 const Loc = com.Loc;
 const kz = @import("kritzler");
 const Env = @import("env.zig");
+const Id = Env.Id;
 const canon = @import("canon.zig");
 const TypeId = canon.TypeId;
 const Builtin = canon.Builtin;
@@ -24,11 +25,7 @@ pub const Number = canon.Number;
 
 pub const Func = struct {
     name: Name,
-    body: *Self,
-
-    fn eql(self: Func, other: Func) bool {
-        return self.name.eql(other.name) and self.body.eql(other.body.*);
-    }
+    body: Id,
 };
 
 pub const Param = struct {
@@ -48,12 +45,12 @@ pub const Data = union(enum) {
     string: Symbol,
     ty: TypeId,
     name: Name,
-    // TODO this is broken. I think I need a handle model for this (ExprIds)
-    ptr: *Self,
-    array: []Self,
+    alias: Id,
+    ptr: Id,
+    array: []Id,
     // TODO this should probably be expressed differently
-    slice: []Self,
-    call: []Self,
+    slice: []Id,
+    call: []Id,
 
     // function/functor stuff
     func: Func,
@@ -69,11 +66,11 @@ pub const Data = union(enum) {
     // functional lambda.
     builtin: Builtin,
 
-    fn getChildren(data: Data) []Self {
+    fn getChildren(data: Data) []const Id {
         return switch (data) {
             .call, .array, .slice => |xs| xs,
-            .ptr => |child| @ptrCast(*[1]Self, child),
-            .func => |func| @ptrCast(*[1]Self, func.body),
+            .ptr => |*child| @ptrCast(*const [1]Id, &child),
+            .func => |*func| @ptrCast(*const [1]Id, &func.body),
             else => &.{},
         };
     }
@@ -81,11 +78,13 @@ pub const Data = union(enum) {
     fn eql(data: Data, other: Data) bool {
         return @as(Tag, data) != @as(Tag, other) and switch (data) {
             .unit => true,
-            .ptr => |to| to.eql(other.ptr.*),
+            .alias, .ptr => |to| to.eql(other.ptr.*),
+
             // primitives
             inline .@"bool",
             .builtin,
             => |x, tag| x == @field(other, @tagName(tag)),
+
             // types with .eql
             inline .number,
             .string,
@@ -114,10 +113,10 @@ pub const Data = union(enum) {
     }
 
     /// computation for cached `known_const`
-    fn isConst(data: Data) bool {
+    fn isConst(data: Data, env: Env) bool {
         // children must be const
         for (data.getChildren()) |child| {
-            if (!child.known_const) {
+            if (!env.get(child).known_const) {
                 return false;
             }
         }
@@ -126,7 +125,7 @@ pub const Data = union(enum) {
         return switch (data) {
             // zig fmt: off
             .unit, .ty, .@"bool", .number, .string, .builtin, .func_ref, .array,
-            .slice,
+            .slice, .alias
             // zig fmt: on
             => true,
             // TODO const ptrs + func ptrs?
@@ -141,78 +140,52 @@ loc: ?Loc,
 // if I know for sure this TExpr is a value, I can mark it
 known_const: bool,
 
-pub fn init(loc: ?Loc, known_const: bool, ty: TypeId, data: Data) Self {
+pub fn init(env: Env, loc: ?Loc, ty: TypeId, data: Data) Self {
     return Self{
         .data = data,
         .loc = loc,
         .ty = ty,
-        .known_const = known_const or data.isConst(),
+        .known_const = data.isConst(env),
     };
-}
-
-pub fn initBuiltin(loc: ?Loc, ty: TypeId, b: Builtin) Self {
-    return Self.init(loc, true, ty, Data{ .builtin = b });
 }
 
 /// clones exprs and creates call
 pub fn initCall(
-    ally: Allocator,
+    env: Env,
     loc: ?Loc,
     ty: TypeId,
-    exprs: []const Self,
+    exprs: []const Id,
 ) Allocator.Error!Self {
-    const cloned = try ally.alloc(Self, exprs.len);
-    for (exprs) |expr, i| {
-        cloned[i] = try expr.clone(ally);
-    }
-
-    return Self.init(loc, false, ty, .{ .call = cloned });
+    return Self.init(env, loc, ty, .{ .call = try env.ally.dupe(Id, exprs) });
 }
 
-pub fn initFuncRef(loc: ?Loc, ty: TypeId, ref: FuncRef) Self {
-    return Self.init(loc, true, ty, .{ .func_ref = ref });
-}
-
-pub fn deinit(self: Self, ally: Allocator) void {
+// TODO deinitializing owned children??
+pub fn deinit(self: *Self, ally: Allocator) void {
     switch (self.data) {
-        .unit, .ty, .@"bool", .number, .name, .builtin, .param, .func_ref => {},
-        .ptr => |child| {
-            child.deinit(ally);
-            ally.destroy(child);
-        },
-        .func => |func| {
-            func.body.deinit(ally);
-            ally.destroy(func.body);
-        },
         .string => |str| ally.free(str.str),
-        .call, .array, .slice => |children| {
-            for (children) |child| child.deinit(ally);
-            ally.free(children);
-        },
+        .call, .array, .slice => |children| ally.free(children),
+        else => {},
     }
 }
 
-pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
+pub fn clone(self: Self, env: *Env) Allocator.Error!Self {
+    const ally = env.ally;
     const data = switch (self.data) {
         // zig fmt: off
         .unit, .ty, .@"bool", .number, .name, .builtin, .param, .func_ref
         // zig fmt: on
         => self.data,
-        .ptr => |child| Data{
-            .ptr = try com.placeOn(ally, try child.clone(ally)),
-        },
+        inline .alias, .ptr => |dst, tag| @unionInit(Data, @tagName(tag), dst),
         .func => |func| Data{
             .func = .{
                 .name = func.name,
-                .body = try com.placeOn(ally, try func.body.clone(ally)),
+                .body = try env.clone(func.body),
             },
         },
         .string => |sym| Data{ .string = try sym.clone(ally) },
         inline .call, .array, .slice => |exprs, tag| coll: {
-            const cloned = try ally.alloc(Self, exprs.len);
-            for (exprs) |child, i| {
-                cloned[i] = try child.clone(ally);
-            }
+            const cloned = try ally.alloc(Id, exprs.len);
+            for (exprs) |id, i| cloned[i] = try env.clone(id);
 
             break :coll @unionInit(Data, @tagName(tag), cloned);
         },
@@ -233,7 +206,7 @@ pub fn eql(self: Self, other: Self) bool {
 /// gets children of any TExpr if they exist.
 ///
 /// useful for recursive operations on TExprs.
-pub fn getChildren(self: Self) []Self {
+pub fn getChildren(self: Self) []const Id {
     return self.data.getChildren();
 }
 
@@ -258,6 +231,7 @@ pub fn render(
         .slice,
         .ptr,
         .func,
+        .alias,
         => try ctx.print(.{}, "{s}", .{@tagName(self.data)}),
         .unit => try ctx.print(.{}, "()", .{}),
         .func_ref => |fr| try ctx.slap(
@@ -295,7 +269,7 @@ pub fn render(
     // any children
     var children = try ctx.stub();
     for (self.getChildren()) |child| {
-        const tex = try child.render(ctx, env);
+        const tex = try env.get(child).render(ctx, env);
         children = try ctx.slap(children, tex, .bottom, .{});
     }
 

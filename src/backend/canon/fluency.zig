@@ -9,6 +9,7 @@ const com = @import("common");
 const Loc = com.Loc;
 const TExpr = @import("../texpr.zig");
 const Env = @import("../env.zig");
+const Id = Env.Id;
 const canon = @import("../canon.zig");
 const TypeId = canon.TypeId;
 const Number = canon.Number;
@@ -41,8 +42,9 @@ fn rawCrucify(env: Env, buf: []u8, texpr: TExpr) CrucifyError!void {
         },
         .array => |children| {
             const seg = @divExact(buf.len, children.len);
-            for (children) |child, i| {
+            for (children) |id, i| {
                 const index = i * seg;
+                const child = env.get(id).*;
                 try rawCrucify(env, buf[index .. index + seg], child);
             }
         },
@@ -61,13 +63,13 @@ fn rawCrucify(env: Env, buf: []u8, texpr: TExpr) CrucifyError!void {
 }
 
 /// takes a texpr and converts it to bits allocated on the Env ally
-pub fn crucify(env: Env, texpr: TExpr) CrucifyError!Value {
+pub fn crucify(env: Env, id: Id) CrucifyError!Value {
+    const texpr = env.get(id);
     std.debug.assert(texpr.known_const);
 
     const size = try env.sizeOf(texpr.ty);
     const value = Value.of(try env.ally.alloc(u8, size));
-
-    try rawCrucify(env, value.buf, texpr);
+    try rawCrucify(env, value.buf, texpr.*);
 
     return value;
 }
@@ -124,12 +126,12 @@ fn valueToNumber(value: Value, bits: u8, layout: Number.Layout) Number {
 /// this is probably the most important function in the entire codebase, as it
 /// is the thing that enables the most interesting features in fluent
 pub fn resurrect(
-    env: Env,
+    env: *Env,
     value: Value,
     mem: []const u8,
     loc: ?Loc,
     tid: TypeId,
-) ResError!TExpr {
+) ResError!Id {
     const ally = env.ally;
     const ty = env.tw.get(tid);
     const data: TExpr.Data = switch (ty.*) {
@@ -147,7 +149,7 @@ pub fn resurrect(
             break :b TExpr.Data{ .builtin = b };
         },
         .array => |arr| arr: {
-            const children = try ally.alloc(TExpr, arr.size);
+            const children = try ally.alloc(Id, arr.size);
 
             // resurrect elements
             const el_size = try env.sizeOf(arr.of);
@@ -177,7 +179,7 @@ pub fn resurrect(
 
                 // resurrect self from the child data
                 const child = try resurrect(env, val, mem, loc, ptr.to);
-                break :ptr TExpr.Data{ .ptr = try com.placeOn(ally, child) };
+                break :ptr TExpr.Data{ .ptr = child };
             },
             .slice => slice: {
                 // get ptr + len
@@ -186,7 +188,7 @@ pub fn resurrect(
 
                 // resurrect each subvalue
                 const el_size = try env.sizeOf(ptr.to);
-                const slice = try ally.alloc(TExpr, len);
+                const slice = try ally.alloc(Id, len);
 
                 const el = Value.of(try ally.alloc(u8, el_size));
                 defer el.deinit(ally);
@@ -214,5 +216,8 @@ pub fn resurrect(
         },
     };
 
-    return TExpr.init(loc, true, tid, data);
+    var expr = TExpr.init(env.*, loc, tid, data);
+    expr.known_const = true;
+
+    return env.from(expr);
 }

@@ -19,6 +19,7 @@ const ReprWelt = canon.ReprWelt;
 const ReprId = canon.ReprId;
 const Repr = canon.Repr;
 const Env = @import("../env.zig");
+const Id = Env.Id;
 const TExpr = @import("../texpr.zig");
 const rendering = @import("render_ssa.zig");
 
@@ -456,7 +457,7 @@ pub const FuncRef = packed struct {
         return self.index == other.index;
     }
 
-    pub fn getConst(self: Self, env: Env, c: Const) TExpr {
+    pub fn getConst(self: Self, env: Env, c: Const) Id {
         return env.getFuncConst(self).getConst(c);
     }
 
@@ -465,12 +466,12 @@ pub const FuncRef = packed struct {
     }
 
     /// clones expr and stores in func
-    pub fn addConst(self: Self, env: *Env, expr: TExpr) Allocator.Error!Const {
-        std.debug.assert(expr.known_const);
+    pub fn addConst(self: Self, env: *Env, id: Id) Allocator.Error!Const {
+        std.debug.assert(env.get(id).known_const);
 
         const func = env.getFunc(self);
         const @"const" = Const.of(func.consts.items.len);
-        try func.consts.append(env.ally, try expr.clone(env.ally));
+        try func.consts.append(env.ally, id);
 
         return @"const";
     }
@@ -517,19 +518,18 @@ pub const Func = struct {
     /// func id (TODO I really shouldn't have to store this here)
     ref: FuncRef,
 
-    consts: std.ArrayListUnmanaged(TExpr) = .{},
+    consts: std.ArrayListUnmanaged(Id) = .{},
     locals: std.ArrayListUnmanaged(ReprId) = .{},
     blocks: std.ArrayListUnmanaged(Block) = .{},
 
     fn deinit(self: *Self, ally: Allocator) void {
-        for (self.consts.items) |*value| value.deinit(ally);
         self.consts.deinit(ally);
         self.locals.deinit(ally);
         for (self.blocks.items) |*block| block.deinit(ally);
         self.blocks.deinit(ally);
     }
 
-    pub fn getConst(self: Self, @"const": Const) TExpr {
+    pub fn getConst(self: Self, @"const": Const) Id {
         return self.consts.items[@"const".index];
     }
 

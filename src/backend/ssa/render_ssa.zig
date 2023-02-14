@@ -174,7 +174,7 @@ fn renderFuncOp(self: Func, ctx: *kz.Context, env: Env, op: Op) !kz.Ref {
     const class = op.classify();
     switch (class) {
         .ldc => |ldc| {
-            const expr = self.consts.items[ldc.a.index];
+            const expr = env.get(self.getConst(ldc.a));
             try line.appendSlice(&.{
                 try renderFuncLocal(self, ctx, env, ldc.to),
                 try ctx.print(.{}, " = ", .{}),

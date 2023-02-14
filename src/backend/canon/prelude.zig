@@ -8,6 +8,7 @@ const TypeWelt = @import("typewelt.zig");
 const TypeId = TypeWelt.TypeId;
 const Type = @import("type.zig").Type;
 const Env = @import("../env.zig");
+const Id = Env.Id;
 const TExpr = @import("../texpr.zig");
 const Builtin = @import("../canon.zig").Builtin;
 
@@ -28,10 +29,11 @@ fn filterDefError(e: Env.DefError, comptime str: []const u8) Allocator.Error {
 fn def(
     env: *Env,
     comptime str: []const u8,
-    value: TExpr,
+    ty: TypeId,
+    data: TExpr.Data,
 ) Allocator.Error!void {
-    const cloned = try value.clone(env.ally);
-    _ = env.def(Env.ROOT, comptime Symbol.init(str), cloned) catch |e| {
+    const id = try env.new(null, ty, data);
+    _ = env.def(Env.ROOT, comptime Symbol.init(str), id) catch |e| {
         return filterDefError(e, str);
     };
 }
@@ -66,7 +68,7 @@ fn defBuiltin(
     ty: TypeId,
     b: Builtin,
 ) Allocator.Error!void {
-    try def(env, str, TExpr.initBuiltin(null, ty, b));
+    try def(env, str, ty, .{ .builtin = b });
 }
 
 fn fnType(
@@ -144,10 +146,8 @@ pub fn generatePrelude(ally: Allocator) Allocator.Error!Env {
     _ = number;
 
     // the bool consts
-    const true_expr = TExpr.init(null, true, @"bool", .{ .@"bool" = true });
-    const false_expr = TExpr.init(null, true, @"bool", .{ .@"bool" = false });
-    try def(&env, "true", true_expr);
-    try def(&env, "false", false_expr);
+    try def(&env, "true", @"bool", .{ .bool = true });
+    try def(&env, "false", @"bool", .{ .bool = false });
 
     // define builtins
     const bin_cond = try fnType(&env, &.{ @"bool", @"bool" }, @"bool");

@@ -70,7 +70,8 @@ fn verifyOp(env: *Env, func: *const Func, op: Op) Error!void {
 
         // unique ops
         .ldc => |ldc| {
-            const const_repr = try env.reprOf(func.getConst(ldc.a).ty);
+            const expr = env.get(func.getConst(ldc.a));
+            const const_repr = try env.reprOf(expr.ty);
             try expectEql(func.getLocal(ldc.to), const_repr);
         },
         .vcall, .rcall => {

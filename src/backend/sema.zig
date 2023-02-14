@@ -7,6 +7,7 @@ const Name = com.Name;
 const Loc = com.Loc;
 const Message = com.Message;
 const Env = @import("env.zig");
+const Id = Env.Id;
 const SExpr = @import("sexpr.zig");
 const TExpr = @import("texpr.zig");
 const canon = @import("canon.zig");
@@ -19,7 +20,7 @@ const postprocess = @import("sema/postprocessing.zig").postprocess;
 
 pub const SemaError = eval.Error;
 
-const Result = Message.Result(TExpr);
+const Result = Message.Result(Id);
 
 fn err(
     ally: Allocator,
@@ -77,14 +78,13 @@ fn analyzeSymbol(
     }
 
     // normal symbol
-    var name: Name = undefined;
-    const ty = if (env.seek(scope, symbol, &name)) |value| value.ty else {
+    const stored = env.seek(scope, symbol, null) orelse {
         const fmt = "unknown symbol `{}`";
         return try err(env.ally, expr.loc, fmt, .{symbol});
     };
 
-    const inner_expr = TExpr.init(expr.loc, false, ty, .{ .name = name });
-    return try coerce(env, inner_expr, outward);
+    const id = try env.new(expr.loc, env.get(stored).ty, .{ .alias = stored });
+    return try coerce(env, id, outward);
 }
 
 fn analyzeAs(
@@ -107,9 +107,9 @@ fn analyzeAs(
     const tyty = try env.identify(Type{ .ty = {} });
     const type_res = try eval.evalTyped(env, scope, type_expr, tyty);
     const type_val = type_res.get() orelse return type_res;
-    defer type_val.deinit(env.ally);
+    defer env.del(type_val);
 
-    const anno = type_val.data.ty;
+    const anno = env.get(type_val).data.ty;
 
     // generate inner expr and unify
     const res = try analyzeExpr(env, scope, body_expr, anno);
@@ -143,11 +143,9 @@ fn analyzeAddrOf(
     const subexpr = sub_res.get() orelse return sub_res;
 
     // generate this texpr
-    const ptr_ty = try env.identify(Type.initPtr(.single, subexpr.ty));
+    const ptr_ty = try env.identify(Type.initPtr(.single, env.get(subexpr).ty));
 
-    const texpr = TExpr.init(expr.loc, false, ptr_ty, TExpr.Data{
-        .ptr = try com.placeOn(ally, subexpr),
-    });
+    const texpr = try env.new(expr.loc, ptr_ty, .{ .ptr = subexpr });
     return try coerce(env, texpr, outward);
 }
 
@@ -166,36 +164,35 @@ fn analyzeDo(
         return try err(ally, expr.loc, fmt, .{});
     }
 
-    const texprs = try env.ally.alloc(TExpr, exprs.len);
-    errdefer env.ally.free(texprs);
+    const block = try ally.alloc(Id, exprs.len);
+    errdefer ally.free(block);
 
     // do expr
-    const builtin_ty = try env.identify(Type{ .builtin = {} });
-    texprs[0] = TExpr.initBuiltin(exprs[0].loc, builtin_ty, .do);
+    const builtin_ty = try env.identify(.builtin);
+    block[0] = try env.new(exprs[0].loc, builtin_ty, .{ .builtin = .do });
 
     // analyze statements
-    const unit = try env.identify(Type{ .unit = {} });
+    const unit = try env.identify(.unit);
 
     const stmts = exprs[1 .. exprs.len - 1];
     for (stmts) |stmt, i| {
-        errdefer for (texprs[1 .. i + 1]) |texpr| texpr.deinit(ally);
+        errdefer for (block[1 .. i + 1]) |id| env.del(id);
         const res = try analyzeExpr(env, scope, stmt, unit);
-        texprs[i + 1] = res.get() orelse return res;
+        block[i + 1] = res.get() orelse return res;
     }
 
-    errdefer for (texprs[0..stmts.len]) |texpr| {
-        texpr.deinit(ally);
-    };
+    errdefer for (block[0..stmts.len]) |id| env.del(id);
 
     // analyze return expr
-    const final = exprs[exprs.len - 1];
-    const ret_expr = &texprs[texprs.len - 1];
-    const ret_res = try analyzeExpr(env, scope, final, outward);
-    ret_expr.* = ret_res.get() orelse return ret_res;
+    const ret_sexpr = exprs[exprs.len - 1];
+    const ret_res = try analyzeExpr(env, scope, ret_sexpr, outward);
+    const ret_expr = ret_res.get() orelse return ret_res;
+    block[block.len - 1] = ret_expr;
 
     // create TExpr
-    const texpr = TExpr.init(expr.loc, false, ret_expr.ty, .{ .call = texprs });
-    return try coerce(env, texpr, outward);
+    const ty = env.get(ret_expr).ty;
+    const final = try env.new(expr.loc, ty, .{ .call = block });
+    return try coerce(env, final, outward);
 }
 
 fn analyzeIf(
@@ -217,19 +214,22 @@ fn analyzeIf(
     const builtin_ty = try env.identify(Type{ .builtin = {} });
     const @"bool" = try env.identify(Type{ .@"bool" = {} });
 
-    var texprs: [4]TExpr = undefined;
-    texprs[0] = TExpr.initBuiltin(exprs[0].loc, builtin_ty, .@"if");
+    var form: [4]Id = undefined;
+    form[0] = try env.new(exprs[0].loc, builtin_ty, .{ .builtin = .@"if" });
 
     const expects = [_]TypeId{ @"bool", outward, outward };
     var i: usize = 0;
     while (i < 3) : (i += 1) {
+        errdefer for (form[1 .. i + 1]) |id| env.del(id);
         const res = try analyzeExpr(env, scope, exprs[i + 1], expects[i]);
-        texprs[i + 1] = res.get() orelse return res;
+        form[i + 1] = res.get() orelse return res;
     }
 
     // TODO peer resolve branches, could also use peer type resolution in arrays
 
-    return Result.ok(try TExpr.initCall(ally, expr.loc, outward, &texprs));
+    const texpr = try TExpr.initCall(env.*, expr.loc, outward, &form);
+    const final = try env.from(texpr);
+    return Result.ok(final);
 }
 
 fn analyzeArray(
@@ -241,8 +241,8 @@ fn analyzeArray(
     const ally = env.ally;
 
     const exprs = expr.data.call[1..];
-    const texprs = try ally.alloc(TExpr, exprs.len);
-    errdefer ally.free(texprs);
+    const array = try ally.alloc(Id, exprs.len);
+    errdefer ally.free(array);
 
     // determine type expectations
     const any = try env.identify(.any);
@@ -251,22 +251,24 @@ fn analyzeArray(
 
     // analyze each element
     for (exprs) |elem, i| {
-        errdefer for (texprs[0..i]) |texpr| texpr.deinit(ally);
+        errdefer for (array[0..i]) |texpr| env.del(texpr);
         const res = try analyzeExpr(env, scope, elem, elem_outward);
-        texprs[i] = res.get() orelse return res;
+        array[i] = res.get() orelse return res;
     }
 
-    // TODO array elements must be retyped again either here or as a
-    // verification step to ensure consistency across the array
+    // TODO array element types must be peer resolved
 
     // create TExpr
-    const final_subty = if (texprs.len > 0) texprs[0].ty else elem_outward;
+    const final_subty = if (array.len > 0) fst: {
+        break :fst env.get(array[0]).ty;
+    } else elem_outward;
+
     const ty = try env.identify(Type{ .array = Type.Array{
-        .size = texprs.len,
+        .size = array.len,
         .of = final_subty,
     } });
-    const texpr = TExpr.init(expr.loc, false, ty, .{ .array = texprs });
-    return try coerce(env, texpr, outward);
+    const final = try env.new(expr.loc, ty, .{ .array = array });
+    return try coerce(env, final, outward);
 }
 
 fn filterDefError(
@@ -284,129 +286,18 @@ fn filterDefError(
     };
 }
 
-const DeferredDef = struct {
-    name: Name,
-    ty: TypeId,
-    body: SExpr,
-
-    const Result = Message.Result(@This());
-};
-
-/// the first pass over a `def` declaration. evaluates type info and stores
-/// a pie stone.
-fn firstDefPass(
-    env: *Env,
-    scope: Name,
-    expr: SExpr,
-) SemaError!DeferredDef.Result {
-    const args = expr.data.call[1..];
-
-    // check syntax form
-    if (args.len != 3) {
-        const fmt = "`def` expression requires a name, a type, and a body";
-        return (try err(env.ally, expr.loc, fmt, .{})).cast(DeferredDef);
-    }
-
-    const name_expr = args[0];
-    const type_expr = args[1];
-    const body_expr = args[2];
-
-    if (name_expr.data != .symbol) {
-        const fmt = "expected identifier";
-        return (try err(env.ally, name_expr.loc, fmt, .{})).cast(DeferredDef);
-    }
-
-    const symbol = name_expr.data.symbol;
-
-    // eval type expr
-    const tyty = try env.identify(Type{ .ty = {} });
-    const type_res = try eval.evalTyped(env, scope, type_expr, tyty);
-    const type_value = type_res.get() orelse return type_res.cast(DeferredDef);
-
-    // store first pass info for the def
-    const ty = type_value.data.ty;
-    const pie_stone = TExpr.initBuiltin(expr.loc, ty, .pie_stone);
-    const name = env.def(scope, symbol, pie_stone) catch |e| {
-        return (try filterDefError(env.ally, expr.loc, e)).cast(DeferredDef);
-    };
-
-    return DeferredDef.Result.ok(DeferredDef{
-        .name = name,
-        .ty = ty,
-        .body = body_expr,
-    });
-}
-
 fn analyzeNamespace(
     env: *Env,
     scope: Name,
     expr: SExpr,
     outward: TypeId,
 ) SemaError!Result {
-    const ally = env.ally;
-    const args = expr.data.call[1..];
+    _ = env;
+    _ = scope;
+    _ = expr;
+    _ = outward;
 
-    // check syntax form
-    if (args.len < 1) {
-        const fmt = "`ns` expression requires a name";
-        return try err(ally, expr.loc, fmt, .{});
-    }
-
-    const name_expr = args[0];
-    const defs = args[1..];
-
-    if (name_expr.data != .symbol) {
-        const fmt = "expected identifier";
-        return try err(ally, name_expr.loc, fmt, .{});
-    }
-
-    // create ns
-    const symbol = name_expr.data.symbol;
-    const ns = env.defNamespace(scope, symbol) catch |e| {
-        return filterDefError(ally, name_expr.loc, e);
-    };
-
-    // first pass, collect all decls, eval types, and def pie stones
-    const deferred = try ally.alloc(DeferredDef, defs.len);
-    defer ally.free(deferred);
-
-    for (defs) |def_expr, i| {
-        // verify that this is a def
-        if (def_expr.data != .call or def_expr.data.call.len == 0) {
-            const fmt = "expected def";
-            return try err(ally, def_expr.loc, fmt, .{});
-        }
-
-        const head = def_expr.data.call[0];
-        const def_sym = comptime Symbol.init("def");
-        if (head.data != .symbol or !head.data.symbol.eql(def_sym)) {
-            const fmt = "expected def";
-            return try err(ally, head.loc, fmt, .{});
-        }
-
-        // do first pass
-        const deferred_res = try firstDefPass(env, ns, def_expr);
-        deferred[i] = deferred_res.get() orelse return deferred_res.cast(TExpr);
-    }
-
-    // second pass, eval and redefine everything
-    for (deferred) |dedef| {
-        const res = try eval.evalTyped(env, dedef.name, dedef.body, dedef.ty);
-        const texpr = res.get() orelse return res;
-
-        if (texpr.isBuiltin(.pie_stone)) {
-            std.debug.panic("pie stone!!!\n", .{});
-        }
-
-        env.redef(dedef.name, texpr) catch |e| {
-            return try filterDefError(ally, dedef.body.loc, e);
-        };
-    }
-
-    // evaluate to unit
-    const unit = try env.identify(Type{ .unit = {} });
-    const texpr = TExpr.init(expr.loc, true, unit, .{ .unit = {} });
-    return try coerce(env, texpr, outward);
+    @panic("TODO analyzeNamespace");
 }
 
 fn analyzeRecur(
@@ -420,8 +311,7 @@ fn analyzeRecur(
     // find innermost function type
     var name = scope;
     const ty = while (true) {
-        const ty = env.get(name).ty;
-
+        const ty = env.get(env.getId(name)).ty;
         if (env.tw.get(ty).* == .func) {
             break ty;
         }
@@ -441,20 +331,17 @@ fn analyzeRecur(
     }
 
     // analyze subexprs
-    const texprs = try ally.alloc(TExpr, sexprs.len);
-    texprs[0] = TExpr.initBuiltin(expr.loc, ty, .recur);
+    const recur = try ally.alloc(Id, sexprs.len);
+    errdefer ally.free(recur);
+    recur[0] = try env.new(expr.loc, ty, .{ .builtin = .recur });
 
     for (sexprs[1..]) |child, i| {
+        errdefer for (recur[0..i]) |id| env.del(id);
         const res = try analyzeExpr(env, scope, child, func.takes[i]);
-        texprs[i + 1] = res.get() orelse return res;
+        recur[i + 1] = res.get() orelse return res;
     }
 
-    const final = TExpr.init(
-        expr.loc,
-        false,
-        func.returns,
-        .{ .call = texprs },
-    );
+    const final = try env.new(expr.loc, func.returns, .{ .call = recur });
     return try coerce(env, final, outward);
 }
 
@@ -575,9 +462,9 @@ fn analyzeCall(
 
     // check for unit expr `()`
     if (exprs.len == 0) {
-        const unit = try env.identify(Type{ .unit = {} });
-        const texpr = TExpr.init(expr.loc, true, unit, .{ .unit = {} });
-        return try coerce(env, texpr, outward);
+        const unit = try env.identify(.unit);
+        const id = try env.new(expr.loc, unit, .unit);
+        return try coerce(env, id, outward);
     }
 
     const head = exprs[0];
@@ -588,32 +475,35 @@ fn analyzeCall(
     const flbuiltin = try env.identify(Type{ .builtin = {} });
 
     const head_res = try analyzeExpr(env, scope, head, any);
-    const head_expr = head_res.get() orelse return head_res;
-    errdefer head_expr.deinit(ally);
+    const head_id = head_res.get() orelse return head_res;
+    const head_expr = env.get(head_id);
+    errdefer env.del(head_id);
 
     // builtins get special logic
     if (head_expr.ty.eql(flbuiltin)) {
-        std.debug.assert(head_expr.data == .name);
+        std.debug.assert(head_expr.data == .alias);
 
-        const bound = env.get(head_expr.data.name);
-        const b = bound.data.builtin;
+        const alias = env.get(head_expr.data.alias);
+        std.debug.assert(alias.data == .builtin);
+
+        const b = alias.data.builtin;
         return try analyzeBuiltinCall(env, scope, expr, b, outward);
     }
 
     // analyze a regular call
-    const texprs = try ally.alloc(TExpr, exprs.len);
-    errdefer ally.free(texprs);
+    const call = try ally.alloc(Id, exprs.len);
+    errdefer ally.free(call);
 
-    texprs[0] = head_expr;
+    call[0] = head_id;
 
     // get called expr type, ensure it is a function
-    const fn_ty = env.tw.get(texprs[0].ty);
+    const fn_ty = env.tw.get(head_expr.ty);
     if (fn_ty.* != .func) {
         const ty_text = try fn_ty.toString(ally, env.tw);
         defer ally.free(ty_text);
 
         const fmt = "expected function, found {s}";
-        return try err(ally, texprs[0].loc, fmt, .{ty_text});
+        return try err(ally, head_expr.loc, fmt, .{ty_text});
     }
 
     // analyze tail with fn param expectations
@@ -624,18 +514,17 @@ fn analyzeCall(
 
     // infer params
     for (takes) |tid, i| {
-        errdefer for (texprs[1 .. i + 1]) |texpr| {
-            texpr.deinit(ally);
-        };
-
+        errdefer for (call[1 .. i + 1]) |id| env.del(id);
         const res = try analyzeExpr(env, scope, tail[i], tid);
-        texprs[i + 1] = res.get() orelse return res;
+        call[i + 1] = res.get() orelse return res;
     }
 
     // create TExpr
     const ty = fn_ty.func.returns;
-    const texpr = TExpr.init(expr.loc, false, ty, .{ .call = texprs });
-    return try coerce(env, texpr, outward);
+    const id = try env.new(expr.loc, ty, .{
+        .call = call,
+    });
+    return try coerce(env, id, outward);
 }
 
 /// given a ensure that it will properly coerce to its expectation
@@ -644,10 +533,12 @@ fn analyzeCall(
 /// a) do nothing (return the same expr)
 /// b) make an implicit cast explicit
 /// c) find that an expectation was violated and produce a nice error message
-fn coerce(env: *Env, texpr: TExpr, outward: TypeId) SemaError!Result {
+fn coerce(env: *Env, id: Id, outward: TypeId) SemaError!Result {
+    const texpr = env.get(id);
+
     // TypeId comparison is fastest
     if (texpr.ty.eql(outward)) {
-        return Result.ok(texpr);
+        return Result.ok(id);
     }
 
     // check for an allowed implicit cast
@@ -662,35 +553,39 @@ fn coerce(env: *Env, texpr: TExpr, outward: TypeId) SemaError!Result {
     return switch (method) {
         .inbounds => in: {
             // nothing needs to be done
-            break :in Result.ok(texpr);
+            break :in Result.ok(id);
         },
         .natural => nat: {
             // cast the expr
             const builtin_ty = try env.identify(.builtin);
-            const cast = TExpr.initBuiltin(texpr.loc, builtin_ty, .cast);
-            const final = try TExpr.initCall(
-                env.ally,
+            const cast = try env.new(
+                texpr.loc,
+                builtin_ty,
+                .{ .builtin = .cast },
+            );
+            const final = try env.from(try TExpr.initCall(
+                env.*,
                 texpr.loc,
                 outward,
-                &[_]TExpr{ cast, texpr },
-            );
+                &.{ cast, id },
+            ));
 
             break :nat Result.ok(final);
         },
         .array_ptr_to_slice => aptr: {
             // create a slice from the expr
             const builtin_ty = try env.identify(.builtin);
-            const convert = TExpr.initBuiltin(
+            const convert = try env.new(
                 texpr.loc,
                 builtin_ty,
-                .array_ptr_to_slice,
+                .{ .builtin = .array_ptr_to_slice },
             );
-            const final = try TExpr.initCall(
-                env.ally,
+            const final = try env.from(try TExpr.initCall(
+                env.*,
                 texpr.loc,
                 outward,
-                &[_]TExpr{ convert, texpr },
-            );
+                &.{ convert, id },
+            ));
 
             break :aptr Result.ok(final);
         },
@@ -732,8 +627,8 @@ fn analyzeExpr(
                 else => unreachable,
             };
 
-            const texpr = TExpr.init(expr.loc, true, ty, typed_data);
-            break :lit coerce(env, texpr, outward);
+            const id = try env.new(expr.loc, ty, typed_data);
+            break :lit coerce(env, id, outward);
         },
     };
 }
@@ -745,10 +640,10 @@ pub fn analyze(
     expects: TypeId,
 ) SemaError!Result {
     const res = try analyzeExpr(env, scope, expr, expects);
-    var texpr = res.get() orelse return res;
+    const id = res.get() orelse return res;
 
-    return switch (try postprocess(env, &texpr)) {
-        .ok => Result.ok(texpr),
+    return switch (try postprocess(env, id)) {
+        .ok => Result.ok(id),
         .err => |msg| Result.err(msg),
     };
 }

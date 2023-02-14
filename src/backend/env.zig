@@ -1,6 +1,8 @@
 //! env manages the state of fluent's dynamic backend runtime.
 //!
 //! fluent's backend runtime consists of several components:
+//! - the TExpr pool
+//!   - a handle table for fluent values
 //! - TypeWelt
 //!   - this is the context for managing fluent types. there are two canonical
 //!     representations a fluent type can take, the Type and the TypeId.
@@ -44,22 +46,28 @@ const ReprWelt = canon.ReprWelt;
 
 const Self = @This();
 
-pub const ROOT = Name.ROOT;
-
 const VM_STACK_SIZE = 32 * 1024;
+
+/// a reference to a TExpr
+pub const Id = com.UniqueId(.env);
+/// root namespace
+pub const ROOT = Name.ROOT;
 
 ally: Allocator,
 tw: TypeWelt = .{},
 rw: ReprWelt = .{},
-// env owns everything in every binding
-nmap: NameMap(TExpr) = .{},
+
+nmap: NameMap(Id) = .{},
+pool: com.IdMap(TExpr, Id) = .{},
+
 // these store the lowered + compiled forms of functions
 prog: SsaProgram = .{},
 bc: BcBuilder = .{},
-vm: Vm,
 // mapping ssa to bytecode and back
 compiled: std.AutoHashMapUnmanaged(SsaRef, BcRef) = .{},
 lowered: std.AutoHashMapUnmanaged(BcRef, SsaRef) = .{},
+
+vm: Vm,
 
 pub fn init(ally: Allocator) Allocator.Error!Self {
     return Self{
@@ -72,6 +80,7 @@ pub fn deinit(self: *Self) void {
     self.tw.deinit(self.ally);
     self.rw.deinit(self.ally);
     self.nmap.deinit(self.ally);
+    self.pool.deinit(self.ally);
     self.prog.deinit(self.ally);
     self.bc.deinit(self.ally);
     self.vm.deinit(self.ally);
@@ -79,17 +88,54 @@ pub fn deinit(self: *Self) void {
     self.lowered.deinit(self.ally);
 }
 
+// texprs ======================================================================
+
+/// convenience function for instantiating TExprs
+pub fn from(self: *Self, expr: TExpr) Allocator.Error!Id {
+    return try self.pool.new(self.ally, expr);
+}
+
+/// convenience function for instantiating TExprs
+pub fn new(
+    self: *Self,
+    loc: ?Loc,
+    ty: TypeId,
+    data: TExpr.Data,
+) Allocator.Error!Id {
+    return self.from(TExpr.init(self.*, loc, ty, data));
+}
+
+pub fn del(self: *Self, id: Id) void {
+    self.pool.del(self.ally, id);
+}
+
+pub fn get(self: Self, id: Id) *TExpr {
+    return self.pool.get(id);
+}
+
+pub fn clone(self: *Self, id: Id) Allocator.Error!Id {
+    return try self.from(try self.get(id).clone(self));
+}
+
+/// deletes dst and moves src into dst. useful for transformations.
+pub fn squash(self: *Self, dst: Id, src: Id) void {
+    self.pool.squash(self.ally, dst, src);
+}
+
+/// searches up through the namespace for a symbol
+pub fn seek(self: *Self, scope: Name, sym: Symbol, out_name: ?*Name) ?Id {
+    return self.nmap.seek(scope, sym, out_name);
+}
+
+/// searches for an exact name
+pub fn getId(self: *Self, name: Name) Id {
+    return self.nmap.get(name);
+}
+
 // types and reprs =============================================================
 
 pub fn identify(self: *Self, ty: Type) Allocator.Error!TypeId {
-    const id = try self.tw.identify(self.ally, ty);
-
-    _ = self.rw.reprOf(self.ally, self.tw, id) catch |e| switch (e) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.NoRepr => {},
-    };
-
-    return id;
+    return try self.tw.identify(self.ally, ty);
 }
 
 pub fn reprOf(self: *Self, ty: TypeId) Repr.ConversionError!ReprId {
@@ -152,7 +198,7 @@ pub fn run(
     prog: Program,
     loc: ?Loc,
     ty: TypeId,
-) RunError!TExpr {
+) RunError!Id {
     // find ret_bytes
     const repr = try self.reprOf(ty);
     const conv = self.rw.getConv(repr);
@@ -173,29 +219,12 @@ pub fn run(
         .by_ref => try self.identify(Type.initPtr(.single, ty)),
     };
 
-    const expr = try canon.resurrect(self.*, value, self.vm.stack, loc, ret_ty);
+    const expr = try canon.resurrect(self, value, self.vm.stack, loc, ret_ty);
 
     return switch (conv) {
         .by_value => expr,
-        .by_ref => deref: {
-            const inner = expr.data.ptr.*;
-            self.ally.destroy(expr.data.ptr);
-
-            break :deref inner;
-        },
+        .by_ref => self.get(expr).data.ptr,
     };
-}
-
-// name accessors ==============================================================
-
-/// searches up through the namespace for a symbol
-pub fn seek(self: *Self, scope: Name, sym: Symbol, out_name: ?*Name) ?TExpr {
-    return self.nmap.seek(scope, sym, out_name);
-}
-
-/// searches for an exact name
-pub fn get(self: *Self, name: Name) TExpr {
-    return self.nmap.get(name);
 }
 
 // definitions =================================================================
@@ -203,13 +232,13 @@ pub fn get(self: *Self, name: Name) TExpr {
 pub const DefError = com.NameError || TypeWelt.RenameError;
 
 /// expects value to be owned
-pub fn def(self: *Self, scope: Name, sym: Symbol, value: TExpr) DefError!Name {
-    return self.nmap.put(self.ally, scope, sym, value);
+pub fn def(self: *Self, scope: Name, sym: Symbol, id: Id) DefError!Name {
+    return self.nmap.put(self.ally, scope, sym, id);
 }
 
 /// expects value to be owned
-pub fn redef(self: *Self, name: Name, value: TExpr) DefError!void {
-    const old = try self.nmap.reput(self.ally, name, value);
+pub fn redef(self: *Self, name: Name, id: Id) DefError!void {
+    const old = try self.nmap.reput(self.ally, name, id);
     old.deinit(self.ally);
 }
 
@@ -227,8 +256,8 @@ pub fn defType(
     value: TypeId,
 ) DefError!Name {
     const tyty = try self.identify(.ty);
-    const expr = TExpr.init(null, true, tyty, .{ .ty = value });
-    const name = try self.def(scope, sym, expr);
+    const id = try self.new(null, tyty, .{ .ty = value });
+    const name = try self.def(scope, sym, id);
     try self.tw.setName(self.ally, value, name);
 
     return name;
@@ -268,7 +297,7 @@ pub fn dump(self: *Self, ally: Allocator, writer: anytype) !void {
             &.{
                 try renderName(&ctx, entry.key.*),
                 try ctx.clone(eq),
-                try entry.value.render(&ctx, self.*),
+                try self.get(entry.value.*).render(&ctx, self.*),
             },
             .right,
             .{ .space = 1 },

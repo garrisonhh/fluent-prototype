@@ -10,6 +10,7 @@ const Message = com.Message;
 const TExpr = @import("texpr.zig");
 const SExpr = @import("sexpr.zig");
 const Env = @import("env.zig");
+const Id = Env.Id;
 const analyze = @import("sema.zig").analyze;
 const lower = @import("lower.zig").lower;
 const compile = @import("compile.zig").compile;
@@ -27,7 +28,7 @@ pub const Error =
     Repr.Error ||
     @TypeOf(stdout).Error;
 
-pub const Result = Message.Result(TExpr);
+pub const Result = Message.Result(Id);
 
 /// evaluate any dynamic value in the provided scope
 pub fn eval(env: *Env, scope: Name, sexpr: SExpr) Error!Result {
@@ -47,8 +48,9 @@ pub fn evalTyped(
 
     // analyze
     const sema_res = try analyze(env, scope, sexpr, expected);
-    const texpr = sema_res.get() orelse return sema_res;
-    defer texpr.deinit(env.ally);
+    const id = sema_res.get() orelse return sema_res;
+    const texpr = env.get(id);
+    defer env.del(id);
 
     if (com.options.log.sema) {
         const t = now();
@@ -71,11 +73,11 @@ pub fn evalTyped(
                 try stdout.writeAll("analyzed a constant.\n");
             }
 
-            break :final try texpr.clone(env.ally);
+            break :final try env.clone(id);
         }
 
         // lower to ssa ir
-        const ssa = try lower(env, scope, texpr);
+        const ssa = try lower(env, scope, id);
 
         if (com.options.log.ssa) {
             const t = now();
@@ -115,7 +117,7 @@ pub fn evalTyped(
         defer render_time += now() - t;
 
         try stdout.writeAll("[Value]\n");
-        try kz.display(env.ally, env.*, final, stdout);
+        try kz.display(env.ally, env.*, env.get(final), stdout);
         try stdout.writeByte('\n');
     }
 

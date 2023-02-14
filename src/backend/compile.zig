@@ -71,9 +71,8 @@ fn compileOp(
         .ldc => |ldc| {
             // crucify and load a constant
             const dst = rmap.get(ldc.to);
-            const texpr = ref.getConst(env.*, ldc.a);
-
-            std.debug.assert(texpr.data != .func);
+            const id = ref.getConst(env.*, ldc.a);
+            const texpr = env.get(id);
 
             if (texpr.data == .func_ref) {
                 const call_ref = texpr.data.func_ref;
@@ -94,7 +93,7 @@ fn compileOp(
                 }
             } else {
                 // add value as an immediate
-                const value = try canon.crucify(env.*, texpr);
+                const value = try canon.crucify(env.*, id);
                 defer value.deinit(env.ally);
 
                 try Bc.imm(b, ally, dst, value.buf);
