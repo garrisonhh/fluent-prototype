@@ -54,7 +54,7 @@ pub fn evalTyped(
         defer render_time += now() - t;
 
         try stdout.writeAll("[Analyzed AST]\n");
-        try kz.display(env.ally, env.*, obj, stdout);
+        try kz.display(env.ally, env, obj, stdout);
         try stdout.writeByte('\n');
     }
 
@@ -67,5 +67,6 @@ pub fn evalTyped(
     }
     try stdout.writeAll(".\n");
 
-    @panic("TODO the rest of the fucking eval");
+    // TODO the rest of the fucking eval
+    return Result.ok(obj);
 }

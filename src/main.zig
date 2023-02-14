@@ -39,7 +39,7 @@ fn execPrint(
     switch (try plumbing.exec(proj, env, ref, what)) {
         .ok => |value| {
             defer value.deinit(env);
-            try kz.display(env.ally, env.*, value, stdout);
+            try kz.display(env.ally, env, value, stdout);
         },
         .err => |msg| {
             defer msg.deinit(env.ally);
@@ -161,12 +161,12 @@ var PROJ: Project = undefined;
 
 pub fn main() !void {
     // allocator boilerplate
-    var gpa = std.heap.GeneralPurposeAllocator(.{
-        .stack_trace_frames = 1000,
-    }){};
-    defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    // const ally = std.heap.page_allocator;
+    // var gpa = std.heap.GeneralPurposeAllocator(.{
+    // .stack_trace_frames = 1000,
+    // }){};
+    // defer _ = gpa.deinit();
+    // const ally = gpa.allocator();
+    const ally = std.heap.page_allocator;
 
     // cli input
     var parser = try cli.Parser.init(

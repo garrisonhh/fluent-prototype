@@ -122,15 +122,12 @@ pub fn identify(
 ) Allocator.Error!TypeId {
     const res = try self.map.getOrPut(ally, &ty);
     if (!res.found_existing) {
-        // find id
-        const id = TypeId{ .index = self.types.items.len };
-
         // allocate for type and clone
         const cloned = try com.placeOn(ally, try ty.clone(ally));
 
         // store in internal data structures
         res.key_ptr.* = cloned;
-        res.value_ptr.* = id;
+        res.value_ptr.* = TypeId{ .index = self.types.items.len };
 
         try self.types.append(ally, cloned);
     }

@@ -13,7 +13,7 @@ const Builtin = @import("../canon.zig").Builtin;
 
 pub const Error = Object.InitError;
 
-fn filterDefError(e: Env.DefError, comptime str: []const u8) Error {
+fn filterDefError(e: Env.DefError, str: []const u8) Error {
     return switch (e) {
         error.NameRedef,
         error.NameNoRedef,
@@ -27,24 +27,15 @@ fn filterDefError(e: Env.DefError, comptime str: []const u8) Error {
     };
 }
 
-fn def(
-    env: *Env,
-    comptime str: []const u8,
-    value: Object,
-) Error!void {
-    const cloned = try value.clone(env.ally);
-    _ = env.def(Env.ROOT, comptime Symbol.init(str), cloned) catch |e| {
+fn def(env: *Env, str: []const u8, value: Object) Error!void {
+    _ = env.def(Env.ROOT, Symbol.init(str), value) catch |e| {
         return filterDefError(e, str);
     };
 }
 
-fn defType(
-    env: *Env,
-    comptime str: []const u8,
-    ty: Type,
-) Error!TypeId {
+fn defType(env: *Env, str: []const u8, ty: Type) Error!TypeId {
     const id = try env.identify(ty);
-    _ = env.defType(Env.ROOT, comptime Symbol.init(str), id) catch |e| {
+    _ = env.defType(Env.ROOT, Symbol.init(str), id) catch |e| {
         return filterDefError(e, str);
     };
 
@@ -53,7 +44,7 @@ fn defType(
 
 fn defNumeric(
     env: *Env,
-    comptime str: []const u8,
+    str: []const u8,
     layout: com.Number.Layout,
     bits: ?u8,
 ) Error!TypeId {
@@ -62,7 +53,7 @@ fn defNumeric(
     });
 }
 
-fn defBuiltin(env: *Env, comptime str: []const u8, b: Builtin) Error!void {
+fn defBuiltin(env: *Env, str: []const u8, b: Builtin) Error!void {
     try def(env, str, try Object.fromBuiltin(env, b));
 }
 

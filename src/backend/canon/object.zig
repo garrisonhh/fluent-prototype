@@ -35,6 +35,8 @@ pub fn deinit(self: Self, env: *Env) void {
     self.val.deinit(env.ally);
 }
 
+pub const render = @import("render_object.zig").render;
+
 pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
     return Self{
         .ty = self.ty,
@@ -43,12 +45,11 @@ pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
     };
 }
 
-pub const render = @import("render_object.zig").render;
-
 /// a lot of types use u64 as repr
 fn fromU64(env: *Env, ty: TypeId, n: u64) InitError!Self {
     const obj = try Self.init(env, ty);
     std.debug.assert(obj.val.buf.len == @sizeOf(u64));
+    std.mem.set(u8, obj.val.buf, 0);
     std.mem.copy(u8, obj.val.buf, canon.from(&n));
 
     return obj;

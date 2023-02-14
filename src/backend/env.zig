@@ -69,6 +69,9 @@ pub fn init(ally: Allocator) Allocator.Error!Self {
 }
 
 pub fn deinit(self: *Self) void {
+    var objects = self.nmap.map.valueIterator();
+    while (objects.next()) |obj| obj.deinit(self);
+
     self.tw.deinit(self.ally);
     self.rw.deinit(self.ally);
     self.nmap.deinit(self.ally);
@@ -255,7 +258,7 @@ pub fn dump(self: *Self, ally: Allocator, writer: anytype) !void {
     var decls = std.ArrayList(kz.Ref).init(ally);
     defer decls.deinit();
 
-    const eq = try ctx.print(.{}, "=", .{});
+    const eq = try ctx.print(.{}, ":=", .{});
     defer ctx.drop(eq);
 
     const entries = try self.nmap.getSortedEntries(ally);
@@ -265,7 +268,7 @@ pub fn dump(self: *Self, ally: Allocator, writer: anytype) !void {
             &.{
                 try renderName(&ctx, entry.key.*),
                 try ctx.clone(eq),
-                try entry.value.render(&ctx, self.*),
+                try entry.value.render(&ctx, self),
             },
             .right,
             .{ .space = 1 },

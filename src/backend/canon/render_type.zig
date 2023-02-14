@@ -66,7 +66,7 @@ pub fn renderType(
 
             break :num try ctx.print(
                 sty,
-                "compiler-{s}",
+                "compiler_{s}",
                 .{@tagName(num.layout)},
             );
         },
