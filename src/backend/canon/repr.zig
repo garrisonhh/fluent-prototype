@@ -111,14 +111,13 @@ pub const Repr = union(enum) {
         return switch (ty.*) {
             // no repr
             .hole,
-            .namespace,
             .any,
             .set,
             => return error.NoRepr,
 
             .unit => .unit,
             .@"bool" => Self{ .uint = 1 },
-            .atom, .ty, .builtin => Self{ .uint = 8 },
+            .ty, .builtin => Self{ .uint = 8 },
             .array => |arr| Self{ .array = .{
                 .size = arr.size,
                 .of = try rw.reprOf(ally, tw, arr.of),
@@ -231,7 +230,6 @@ pub const Repr = union(enum) {
 
     pub const QualError = error{ SizeOfFunc, AlignOfFunc };
 
-    // TODO cache this
     pub fn alignOf(self: Self, rw: ReprWelt) QualError!usize {
         return switch (self) {
             .func => error.AlignOfFunc,
@@ -251,7 +249,6 @@ pub const Repr = union(enum) {
         };
     }
 
-    // TODO cache this
     pub fn sizeOf(self: Self, rw: ReprWelt) QualError!usize {
         return switch (self) {
             .func => error.SizeOfFunc,
@@ -262,6 +259,7 @@ pub const Repr = union(enum) {
             .coll => |coll| coll: {
                 if (coll.len == 0) break :coll 0;
 
+                // find size of elements, respecting alignment
                 var size: usize = 0;
                 for (coll) |field| {
                     const repr = rw.get(field.of);
@@ -274,6 +272,13 @@ pub const Repr = union(enum) {
                     }
 
                     size += try repr.sizeOf(rw);
+                }
+
+                // ensure size is a multiple of alignment
+                const aln = try self.alignOf(rw);
+                const aln_diff = size % aln;
+                if (aln_diff > 0) {
+                    size += aln - aln_diff;
                 }
 
                 break :coll size;

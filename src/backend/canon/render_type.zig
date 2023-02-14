@@ -48,31 +48,11 @@ pub fn renderType(
         // lowercase
         .unit,
         .builtin,
-        .namespace,
         .bool,
         .hole,
-        .symbol,
+        .name,
         => try ctx.print(sty, "{s}", .{@tagName(self)}),
         .ty => try ctx.print(sty, "type", .{}),
-        .atom => |name| atom: {
-            const comma = try ctx.print(.{}, ", ", .{});
-
-            var tex = try ctx.print(sty, "~", .{});
-            for (name.syms) |sym, i| {
-                if (i > 0) {
-                    tex = try ctx.slap(tex, try ctx.clone(comma), .right, .{});
-                }
-
-                tex = try ctx.slap(
-                    tex,
-                    try ctx.print(sty, "{}", .{sym}),
-                    .right,
-                    .{},
-                );
-            }
-
-            break :atom tex;
-        },
 
         .number => |num| num: {
             if (num.bits) |bits| {
@@ -126,16 +106,50 @@ pub fn renderType(
                 try list.append(try id.render(ctx, tw));
             }
 
-            break :tup try ctx.stack(&.{
-                try ctx.print(.{}, "(", .{}),
-                try ctx.sep(
-                    try ctx.print(.{}, ", ", .{}),
-                    list.items,
+            break :tup try ctx.stack(
+                &.{
+                    try ctx.print(.{}, "(", .{}),
+                    try ctx.sep(
+                        try ctx.print(.{}, ", ", .{}),
+                        list.items,
+                        .right,
+                        .{},
+                    ),
+                    try ctx.print(.{}, ")", .{}),
+                },
+                .right,
+                .{},
+            );
+        },
+        .@"struct" => |st| st: {
+            const fields = st.fields;
+            const cnt = fields.len;
+            var list = try std.ArrayList(kz.Ref).initCapacity(ctx.ally, cnt);
+            defer list.deinit();
+
+            for (fields) |field| {
+                try list.append(try ctx.slap(
+                    try ctx.print(.{}, "{}: ", .{field.name}),
+                    try field.of.render(ctx, tw),
                     .right,
                     .{},
-                ),
-                try ctx.print(.{}, ")", .{}),
-            }, .right, .{});
+                ));
+            }
+
+            break :st try ctx.stack(
+                &.{
+                    try ctx.print(.{}, "(", .{}),
+                    try ctx.sep(
+                        try ctx.print(.{}, ", ", .{}),
+                        list.items,
+                        .right,
+                        .{},
+                    ),
+                    try ctx.print(.{}, ")", .{}),
+                },
+                .right,
+                .{},
+            );
         },
         .func => |func| try ctx.stack(&.{
             try renderTypeArray(ctx, tw, func.takes),

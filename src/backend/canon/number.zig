@@ -11,9 +11,9 @@ pub const Layout = com.Number.Layout;
 
 const Self = @This();
 
-const Int = i64;
-const UInt = u64;
-const Float = f64;
+pub const Int = i64;
+pub const UInt = u64;
+pub const Float = f64;
 
 pub const Concrete = union(Layout) {
     int: Int,
@@ -66,10 +66,8 @@ pub fn cast(self: Self, bits: ?u8, layout: com.Number.Layout) Self {
 
 /// returns this as a value on an allocator
 pub fn asValue(self: Self, ally: Allocator) Allocator.Error!Value {
-    const data = switch (self.data) {
-        .int => |n| std.mem.asBytes(&n),
-        .uint => |n| std.mem.asBytes(&n),
-        .float => |n| std.mem.asBytes(&n),
+    const data: []const u8 = switch (self.data) {
+        inline else => |n| std.mem.asBytes(&n),
     };
 
     const bits = self.bits orelse 64;
