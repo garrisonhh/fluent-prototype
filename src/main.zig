@@ -39,7 +39,7 @@ fn execPrint(
     switch (try plumbing.exec(proj, env, ref, what)) {
         .ok => |value| {
             defer value.deinit(env);
-            try kz.display(env.ally, env, value, stdout);
+            try kz.display(env.ally, env.*, value, stdout);
         },
         .err => |msg| {
             defer msg.deinit(env.ally);

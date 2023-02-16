@@ -7,7 +7,7 @@ const Env = @import("../env.zig");
 pub fn render(
     obj: Object,
     ctx: *kz.Context,
-    env: *const Env,
+    env: Env,
 ) Allocator.Error!kz.Ref {
     const lit = kz.Style{ .fg = .magenta };
 
@@ -19,6 +19,7 @@ pub fn render(
     const header = switch (ty.*) {
         .unit => try ctx.print(.{}, "()", .{}),
         .@"bool" => try ctx.print(lit, "{}", .{obj.intoBool()}),
+        .number => try ctx.print(lit, "{}", .{obj.intoNumber(env)}),
         .builtin => try ctx.stack(
             &.{
                 try ctx.print(.{}, "<", .{}),

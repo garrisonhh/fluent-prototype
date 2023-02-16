@@ -122,31 +122,52 @@ pub fn fromNumber(env: *Env, num: Number) InitError!Self {
     return obj;
 }
 
+fn convertNumber(
+    comptime layout: Number.Layout,
+    comptime bits: comptime_int,
+    value: Value,
+) Number {
+    // calculate zig type with comptime info
+    const T = switch (layout) {
+        .int => @Type(.{ .Int = .{ .signedness = .signed, .bits = bits } }),
+        .uint => @Type(.{ .Int = .{ .signedness = .unsigned, .bits = bits } }),
+        .float => @Type(.{ .Float = .{ .bits = bits } }),
+    };
+
+    return Number{
+        .bits = bits,
+        .data = @unionInit(
+            Number.Concrete,
+            @tagName(layout),
+            value.as(T),
+        ),
+    };
+}
+
 pub fn intoNumber(self: Self, env: Env) Number {
     const meta = env.tw.get(self.ty).number;
     const bits = meta.bits orelse 64;
-    std.debug.assert(self.bits == self.val.buf.len * 8);
+    std.debug.assert(bits == self.val.buf.len * 8);
 
-    return switch (bits) {
-        inline 8, 16, 32, 64 => |ct_bits| switch (meta.layout) {
-            inline .int, .uint, .float => |tag| convert: {
-                const T = switch (tag) {
-                    .int => @Type(.{
-                        .Int = .{ .signedness = .signed, .bits = ct_bits },
-                    }),
-                    .uint => @Type(.{
-                        .Int = .{ .signedness = .unsigned, .bits = ct_bits },
-                    }),
-                    .float => @Type(.{ .Float = .{ .bits = ct_bits } }),
-                };
-
-                const n = self.val.as(T);
-                break :convert Number{
-                    .bits = meta.bits,
-                    .data = @unionInit(Number.Concrete, @tagName(tag), n),
-                };
-            },
+    // this switch may look confusing, but it's just manipulating the zig
+    // compiler into understanding all of the possible conversion types at
+    // comptime
+    return switch (meta.layout) {
+        inline .int, .uint => |ct_layout| switch (bits) {
+            inline 8, 16, 32, 64 => |ct_bits| convertNumber(
+                ct_layout,
+                ct_bits,
+                self.val,
+            ),
+            else => unreachable,
         },
-        else => unreachable,
+        inline .float => |ct_layout| switch (bits) {
+            inline 32, 64 => |ct_bits| convertNumber(
+                ct_layout,
+                ct_bits,
+                self.val,
+            ),
+            else => unreachable,
+        },
     };
 }

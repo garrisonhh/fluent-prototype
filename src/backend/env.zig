@@ -268,7 +268,7 @@ pub fn dump(self: *Self, ally: Allocator, writer: anytype) !void {
             &.{
                 try renderName(&ctx, entry.key.*),
                 try ctx.clone(eq),
-                try entry.value.render(&ctx, self),
+                try entry.value.render(&ctx, self.*),
             },
             .right,
             .{ .space = 1 },
