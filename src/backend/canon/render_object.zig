@@ -20,16 +20,7 @@ pub fn render(
         .unit => try ctx.print(.{}, "()", .{}),
         .@"bool" => try ctx.print(lit, "{}", .{obj.intoBool()}),
         .number => try ctx.print(lit, "{}", .{obj.intoNumber(env)}),
-        .builtin => try ctx.stack(
-            &.{
-                try ctx.print(.{}, "<", .{}),
-                try obj.ty.render(ctx, env.tw),
-                try ctx.print(.{}, "> ", .{}),
-                try ctx.print(lit, "{s}", .{@tagName(obj.intoBuiltin())}),
-            },
-            .right,
-            .{},
-        ),
+        .builtin => try ctx.print(lit, "{s}", .{@tagName(obj.intoBuiltin())}),
         .ty => try obj.intoType().render(ctx, env.tw),
         else => |tag| try ctx.print(
             .{},

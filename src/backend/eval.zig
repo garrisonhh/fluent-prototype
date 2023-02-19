@@ -23,7 +23,7 @@ const Object = canon.Object;
 
 pub const Error =
     std.mem.Allocator.Error ||
-    Repr.Error ||
+    ReprWelt.Error ||
     @TypeOf(stdout).Error;
 
 pub const Result = Message.Result(Object);

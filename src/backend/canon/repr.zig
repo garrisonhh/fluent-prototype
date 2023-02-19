@@ -8,12 +8,12 @@ const TypeId = TypeWelt.TypeId;
 const ReprWelt = @import("reprwelt.zig");
 const ReprId = ReprWelt.ReprId;
 
-/// encodes fluent data representation
+/// encodes fluent representational types.
 ///
-/// used alongside ReprWelt
+/// generally this should be interacted with through ReprWelt
 pub const Repr = union(enum) {
     pub const Tag = std.meta.Tag(Self);
-    pub const Error = ConversionError || AccessError || QualError;
+    const Error = ReprWelt.Error;
 
     const Self = @This();
 
@@ -33,11 +33,24 @@ pub const Repr = union(enum) {
     pub const Param = struct {
         conv: Conv,
         of: ReprId,
+
+        pub fn ofType(
+            ally: Allocator,
+            rw: *ReprWelt,
+            tw: TypeWelt,
+            id: TypeId,
+        ) Error!Param {
+            const repr = try rw.ofType(ally, tw, id);
+            return Param{
+                .conv = rw.get(repr).getConv(),
+                .of = repr,
+            };
+        }
     };
 
     pub const Func = struct {
         ctx: Param,
-        takes: []Param,
+        takes: []const Param,
         returns: Param,
     };
 
@@ -51,32 +64,10 @@ pub const Repr = union(enum) {
     // structured data
     ptr: ReprId,
     array: Array,
-    coll: []Field,
+    coll: []const Field,
 
     // else
     func: Func,
-
-    /// dupes input
-    pub fn initColl(
-        ally: Allocator,
-        coll: []const Field,
-    ) Allocator.Error!Self {
-        return Self{ .coll = try ally.dupe(Field, coll) };
-    }
-
-    /// dupes input
-    pub fn initFunc(
-        ally: Allocator,
-        ctx: Param,
-        takes: []const Param,
-        returns: Param,
-    ) Allocator.Error!Self {
-        return Self{ .func = Func{
-            .ctx = ctx,
-            .takes = try ally.dupe(Param, takes),
-            .returns = returns,
-        } };
-    }
 
     pub fn deinit(self: Self, ally: Allocator) void {
         switch (self) {
@@ -84,96 +75,6 @@ pub const Repr = union(enum) {
             .coll => |coll| ally.free(coll),
             .func => |func| ally.free(func.takes),
         }
-    }
-
-    fn paramOfType(
-        ally: Allocator,
-        rw: *ReprWelt,
-        tw: TypeWelt,
-        id: TypeId,
-    ) ConversionError!Param {
-        const repr = try Self.ofType(ally, rw, tw, id);
-        return Param{
-            .conv = repr.getConv(),
-            .of = try rw.intern(ally, repr),
-        };
-    }
-
-    pub const ConversionError = Allocator.Error || error{NoRepr};
-
-    pub fn ofType(
-        ally: Allocator,
-        rw: *ReprWelt,
-        tw: TypeWelt,
-        id: TypeId,
-    ) ConversionError!Self {
-        const ty = tw.get(id);
-        return switch (ty.*) {
-            // no repr
-            .hole,
-            .any,
-            .set,
-            => return error.NoRepr,
-
-            .unit => .unit,
-            .@"bool" => Self{ .uint = 1 },
-            .ty, .builtin => Self{ .uint = 8 },
-            .array => |arr| Self{ .array = .{
-                .size = arr.size,
-                .of = try rw.reprOf(ally, tw, arr.of),
-            } },
-            .number => |num| num: {
-                const nbytes = if (num.bits) |bits| @divExact(bits, 8) else 8;
-                break :num switch (num.layout) {
-                    inline else => |tag| @unionInit(
-                        Self,
-                        @tagName(tag),
-                        @intCast(u4, nbytes),
-                    ),
-                };
-            },
-            .ptr => |ptr| switch (ptr.kind) {
-                .single, .many => Self{
-                    .ptr = try rw.reprOf(ally, tw, ptr.to),
-                },
-                .slice => slice: {
-                    // TODO this should be const
-                    const u64_repr = rw.reprs.get(.{ .uint = 8 }).?;
-                    const ptr_repr = try rw.intern(ally, Self{
-                        .ptr = try rw.reprOf(ally, tw, ptr.to),
-                    });
-
-                    const fields = [_]Field{
-                        Field{ .offset = 0, .of = ptr_repr },
-                        Field{ .offset = 8, .of = u64_repr },
-                    };
-
-                    break :slice try Self.initColl(ally, &fields);
-                },
-            },
-            .func => |func| func: {
-                // NOTE this implements the base truth for the fluent callconv
-                const takes = try ally.alloc(Param, func.takes.len);
-                for (func.takes) |param, i| {
-                    takes[i] = try paramOfType(ally, rw, tw, param);
-                }
-
-                const unit = try rw.intern(ally, .unit);
-                const ctx = Param{
-                    .conv = rw.get(unit).getConv(),
-                    .of = unit,
-                };
-
-                const returns = try paramOfType(ally, rw, tw, func.returns);
-
-                break :func Self{ .func = .{
-                    .ctx = ctx,
-                    .takes = takes,
-                    .returns = returns,
-                } };
-            },
-            else => |tag| std.debug.panic("TODO convert repr of {}", .{tag}),
-        };
     }
 
     /// whether this repr is a collection with accessible fields
@@ -256,45 +157,16 @@ pub const Repr = union(enum) {
             .ptr => 8,
             .uint, .int, .float => |nbytes| nbytes,
             .array => |arr| arr.size * try rw.get(arr.of).sizeOf(rw),
-            .coll => |coll| coll: {
-                if (coll.len == 0) break :coll 0;
-
-                // find size of elements, respecting alignment
-                var size: usize = 0;
-                for (coll) |field| {
-                    const repr = rw.get(field.of);
-
-                    // ensure field is on an aligned boundary
-                    const aln = try repr.alignOf(rw);
-                    const aln_diff = size % aln;
-                    if (aln_diff > 0) {
-                        size += aln - aln_diff;
-                    }
-
-                    size += try repr.sizeOf(rw);
+            .coll => |fields| coll: {
+                var sz: usize = 0;
+                for (fields) |field| {
+                    const field_sz = try rw.sizeOf(field.of);
+                    sz = @max(sz, field.offset + field_sz);
                 }
 
-                // ensure size is a multiple of alignment
-                const aln = try self.alignOf(rw);
-                const aln_diff = size % aln;
-                if (aln_diff > 0) {
-                    size += aln - aln_diff;
-                }
-
-                break :coll size;
+                break :coll com.padAlignment(sz, try self.alignOf(rw));
             },
         };
-    }
-
-    pub fn sizeOfAligned(self: Self, rw: ReprWelt, aln: usize) QualError!usize {
-        const size = try self.sizeOf(rw);
-
-        const aln_diff = size % aln;
-        if (aln_diff > 0) {
-            return size + (aln - aln_diff);
-        }
-
-        return size;
     }
 
     pub fn hash(self: Self, wyhash: *Wyhash) void {
@@ -326,8 +198,14 @@ pub const Repr = union(enum) {
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch (self) {
             .unit, .uint, .int, .float, .ptr, .array => self,
-            .coll => |coll| try initColl(ally, coll),
-            .func => |func| try initFunc(ally, func.takes, func.returns),
+            .coll => |coll| Self{ .coll = try ally.dupe(Field, coll) },
+            .func => |func| Self{
+                .func = Func{
+                    .ctx = func.ctx,
+                    .takes = try ally.dupe(Param, func.takes),
+                    .returns = func.returns,
+                },
+            },
         };
     }
 

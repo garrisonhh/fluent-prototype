@@ -101,17 +101,17 @@ pub fn identify(self: *Self, ty: Type) Allocator.Error!TypeId {
 
     _ = self.rw.reprOf(self.ally, self.tw, id) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.NoRepr => {},
+        else => {},
     };
 
     return id;
 }
 
-pub fn reprOf(self: *Self, ty: TypeId) Repr.ConversionError!ReprId {
+pub fn reprOf(self: *Self, ty: TypeId) ReprWelt.Error!ReprId {
     return try self.rw.reprOf(self.ally, self.tw, ty);
 }
 
-pub fn sizeOf(self: Self, ty: TypeId) Repr.QualError!usize {
+pub fn sizeOf(self: Self, ty: TypeId) ReprWelt.QualError!usize {
     return try self.rw.sizeOf(self.rw.converts.get(ty).?);
 }
 
@@ -159,8 +159,6 @@ pub fn sizeOf(self: Self, ty: TypeId) Repr.QualError!usize {
 // }
 
 // execution ===================================================================
-
-pub const RunError = canon.ResError;
 
 // pub fn run(
 // self: *Self,

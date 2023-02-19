@@ -101,7 +101,17 @@ fn repl(env: *Env, proj: *Project) !void {
 
         try stdout.writeAll("[Reprs]\n");
         for (env.rw.map.items(.repr)) |repr| {
-            const tex = try repr.render(&ctx, env.rw);
+            const id = try env.rw.intern(env.ally, repr);
+
+            const tex = try ctx.slap(
+                try repr.render(&ctx, env.rw),
+                try ctx.print(.{}, "sz: {} aln: {}", .{
+                    try env.rw.sizeOf(id),
+                    try env.rw.alignOf(id),
+                }),
+                .right,
+                .{ .space = 1 },
+            );
             try ctx.write(tex, stdout);
         }
         try stdout.writeByte('\n');
@@ -200,8 +210,10 @@ pub fn main() !void {
     defer frontend.deinit(ally);
 
     // fluent env
-    ENV = try backend.generatePrelude(ally);
+    ENV = try Env.init(ally);
     defer ENV.deinit();
+
+    try backend.generatePrelude(&ENV);
 
     PROJ = com.Project.init();
     defer PROJ.deinit(ENV.ally);

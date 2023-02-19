@@ -4,10 +4,10 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Env = @import("../env.zig");
 const canon = @import("../canon.zig");
-const ReprId = canon.ReprId;
 const Repr = canon.Repr;
-const TypeId = canon.TypeId;
+const ReprId = canon.ReprId;
 const Type = canon.Type;
+const TypeId = canon.TypeId;
 const Value = canon.Value;
 const Number = canon.Number;
 const Builtin = canon.Builtin;
@@ -18,7 +18,7 @@ ty: TypeId,
 repr: ReprId,
 val: Value,
 
-pub const InitError = Repr.Error;
+pub const InitError = canon.ReprWelt.Error;
 
 pub fn init(env: *Env, ty: TypeId) InitError!Self {
     const repr = try env.reprOf(ty);
@@ -116,7 +116,7 @@ pub fn fromNumber(env: *Env, num: Number) InitError!Self {
     const ty = try env.identify(Type{
         .number = .{ .bits = num.bits, .layout = num.data },
     });
-    const obj = Self.init(env, ty);
+    const obj = try Self.init(env, ty);
     std.mem.copy(u8, obj.val.buf, num_val.buf);
 
     return obj;
