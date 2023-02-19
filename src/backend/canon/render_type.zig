@@ -121,8 +121,7 @@ pub fn renderType(
                 .{},
             );
         },
-        .@"struct" => |st| st: {
-            const fields = st.fields;
+        .@"struct", .variant  => |fields| coll: {
             const cnt = fields.len;
             var list = try std.ArrayList(kz.Ref).initCapacity(ctx.ally, cnt);
             defer list.deinit();
@@ -136,7 +135,7 @@ pub fn renderType(
                 ));
             }
 
-            break :st try ctx.stack(
+            break :coll try ctx.stack(
                 &.{
                     try ctx.print(.{}, "(", .{}),
                     try ctx.sep(

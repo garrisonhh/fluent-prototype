@@ -4,6 +4,7 @@ const Wyhash = std.hash.Wyhash;
 const kz = @import("kritzler");
 const com = @import("common");
 const Name = com.Name;
+const Symbol = com.Symbol;
 const TypeWelt = @import("typewelt.zig");
 const TypeId = TypeWelt.TypeId;
 const Repr = @import("repr.zig").Repr;
@@ -15,7 +16,7 @@ pub const Type = union(enum) {
     pub const Set = std.AutoHashMapUnmanaged(TypeId, void);
 
     pub const Field = struct {
-        name: Name,
+        name: Symbol,
         of: TypeId,
     };
 
@@ -41,13 +42,9 @@ pub const Type = union(enum) {
     };
 
     pub const Func = struct {
-        // TODO add fields
-        takes: []TypeId,
+        // TODO add context
+        takes: []const TypeId,
         returns: TypeId,
-    };
-
-    pub const Struct = struct {
-        fields: []Field,
     };
 
     // unique
@@ -70,8 +67,9 @@ pub const Type = union(enum) {
     // structured
     array: Array,
     ptr: Pointer,
-    tuple: []TypeId,
-    @"struct": Struct,
+    tuple: []const TypeId,
+    @"struct": []const Field,
+    variant: []const Field,
 
     func: Func,
 
@@ -106,7 +104,7 @@ pub const Type = union(enum) {
             => {},
             .set => |*set| set.deinit(ally),
             .tuple => |tup| ally.free(tup),
-            .@"struct" => |st| ally.free(st.fields),
+            .@"struct", .variant => |fields| ally.free(fields),
             .func => |func| ally.free(func.takes),
         }
     }
@@ -154,11 +152,9 @@ pub const Type = union(enum) {
                 wyhash.update(asBytes(&ptr.to));
             },
             .tuple => |tup| wyhash.update(asBytes(&tup)),
-            .@"struct" => |st| {
-                for (st.fields) |field| {
-                    wyhash.update(asBytes(&field.name.hash));
-                    wyhash.update(asBytes(&field.of));
-                }
+            .@"struct", .variant => |fields| for (fields) |field| {
+                wyhash.update(asBytes(&field.name.hash));
+                wyhash.update(asBytes(&field.of));
             },
             .func => |func| {
                 wyhash.update(asBytes(&func.takes));
@@ -199,21 +195,24 @@ pub const Type = union(enum) {
             },
             .ptr => |ptr| ptr.kind == ty.ptr.kind and ptr.to.eql(ty.ptr.to),
             .tuple => |tup| idsEql(tup, ty.tuple),
-            .@"struct" => |st| st: {
-                if (st.fields.len != ty.@"struct".fields.len) {
-                    break :st false;
+            inline .@"struct", .variant => |fields, tag| coll: {
+                const ty_fields = @field(ty, @tagName(tag));
+
+                if (fields.len != ty_fields.len) {
+                    break :coll false;
                 }
 
-                for (st.fields) |field, i| {
-                    const other = ty.@"struct".fields[i];
+                for (fields) |field, i| {
+                    const other = ty_fields[i];
+
                     if (!field.name.eql(other.name) or
                         !field.of.eql(other.of))
                     {
-                        break :st false;
+                        break :coll false;
                     }
                 }
 
-                break :st true;
+                break :coll true;
             },
             .number => |num| num.layout == ty.number.layout and
                 num.bits == ty.number.bits,
@@ -237,12 +236,19 @@ pub const Type = union(enum) {
             .@"bool",
             .ptr,
             => self,
+
             .set => |set| Self{ .set = try set.clone(ally) },
             .tuple => |tup| Self{ .tuple = try ally.dupe(TypeId, tup) },
-            .@"struct" => |st| Self{
-                .@"struct" = Struct{
-                    .fields = try ally.dupe(Field, st.fields),
-                },
+            inline .@"struct", .variant => |fields, tag| coll: {
+                const cloned = try ally.alloc(Field, fields.len);
+                for (fields) |field, i| {
+                    cloned[i] = Field{
+                        .name = try field.name.clone(ally),
+                        .of = field.of,
+                    };
+                }
+
+                break :coll @unionInit(Self, @tagName(tag), cloned);
             },
             .func => |func| Self{
                 .func = Func{
