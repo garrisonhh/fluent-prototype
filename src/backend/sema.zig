@@ -7,10 +7,13 @@ const Env = @import("env.zig");
 const canon = @import("canon.zig");
 const Object = canon.Object;
 const TypeId = canon.TypeId;
+const Type = canon.Type;
+const Expr = canon.Expr;
+const Basic = canon.Basic;
 const SExpr = @import("sexpr.zig");
 
 const Error = Object.InitError;
-const Result = com.Message.Result(Object);
+const Result = com.Message.Result(Expr);
 
 const ok = Result.ok;
 
@@ -19,7 +22,7 @@ fn err(
     loc: ?Loc,
     comptime fmt: []const u8,
     args: anytype,
-) Result {
+) Allocator.Error!Result {
     return Result.err(try com.Message.print(ally, .@"error", loc, fmt, args));
 }
 
@@ -51,18 +54,23 @@ fn expectError(
 
 fn analyzeNumber(
     env: *Env,
-    scope: Name,
     sexpr: SExpr,
     outward: TypeId,
 ) Error!Result {
-    _ = scope;
-    _ = outward;
+    const number = sexpr.data.number;
 
-    const number = try Object.fromNumber(env, sexpr.data.number);
+    const ty = try env.identify(Type{
+        .number = .{ .bits = number.bits, .layout = number.data },
+    });
+    const data: Expr.Data = switch (number.data) {
+        .uint => Expr.Data{
+            .int = number.cast(null, .int).data.int,
+        },
+        inline .int, .float => |n, tag| @unionInit(Expr.Data, @tagName(tag), n),
+    };
+    const expr = try Expr.init(env, ty, data);
 
-    _ = number;
-
-    @panic("TODO");
+    return try coerce(env, expr, outward);
 }
 
 fn analyzeExpr(
@@ -71,8 +79,10 @@ fn analyzeExpr(
     sexpr: SExpr,
     outward: TypeId,
 ) Error!Result {
+    _ = scope;
+
     return switch (sexpr.data) {
-        .number => analyzeNumber(env, scope, sexpr, outward),
+        .number => analyzeNumber(env, sexpr, outward),
         else => |tag| std.debug.panic("TODO analyze {}", .{tag}),
     };
 }
@@ -83,25 +93,25 @@ fn analyzeExpr(
 /// a) do nothing (return the same expr)
 /// b) make an implicit cast explicit
 /// c) find that an expectation was violated and produce a nice error message
-fn coerce(env: *Env, obj: Object, outward: TypeId) Error!Result {
+fn coerce(env: *Env, expr: Expr, outward: TypeId) Error!Result {
     // TypeId comparison is fastest
-    if (obj.ty.eql(outward)) {
-        return Result.ok(obj);
+    if (expr.obj.ty.eql(outward)) {
+        return Result.ok(expr);
     }
 
     // check for an allowed implicit cast
-    const inner = env.tw.get(obj.ty);
+    const inner = env.tw.get(expr.obj.ty);
     const outer = env.tw.get(outward);
 
     const method = (try inner.coercesTo(env.ally, &env.tw, outer.*)) orelse {
         // no coercion :(
-        return expectError(env.*, null, outward, obj.ty);
+        return expectError(env.*, null, outward, expr.obj.ty);
     };
 
     return switch (method) {
         .inbounds => in: {
             // nothing needs to be done
-            break :in Result.ok(obj);
+            break :in Result.ok(expr);
         },
         .natural => {
             // cast the expr

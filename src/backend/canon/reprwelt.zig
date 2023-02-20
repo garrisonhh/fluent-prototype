@@ -203,6 +203,20 @@ pub fn ofType(
                 .ptr = try self.reprOf(ally, tw, ptr.to),
             }),
         },
+        inline .@"struct", .variant => |fields, tag| st: {
+            const field_reprs = try ally.alloc(ReprId, fields.len);
+            defer ally.free(field_reprs);
+
+            for (fields) |field, i| {
+                field_reprs[i] = try self.reprOf(ally, tw, field.of);
+            }
+
+            break :st switch (comptime tag) {
+                .@"struct" => try self.makeStruct(ally, field_reprs),
+                .variant => try self.makeVariant(ally, field_reprs),
+                else => unreachable,
+            };
+        },
         .func => |func| func: {
             // NOTE this implements the base truth for the fluent callconv
             const takes = try ally.alloc(Param, func.takes.len);

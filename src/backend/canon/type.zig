@@ -104,7 +104,10 @@ pub const Type = union(enum) {
             => {},
             .set => |*set| set.deinit(ally),
             .tuple => |tup| ally.free(tup),
-            .@"struct", .variant => |fields| ally.free(fields),
+            .@"struct", .variant => |fields| {
+                for (fields) |field| ally.free(field.name.str);
+                ally.free(fields);
+            },
             .func => |func| ally.free(func.takes),
         }
     }

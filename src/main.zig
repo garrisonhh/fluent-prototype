@@ -36,14 +36,15 @@ fn execPrint(
     ref: FileRef,
     what: ParseType,
 ) !void {
+    const ally = env.ally;
     switch (try plumbing.exec(proj, env, ref, what)) {
         .ok => |value| {
             defer value.deinit(env);
-            try kz.display(env.ally, env.*, value, stdout);
+            try kz.display(ally, env, value.obj, stdout);
         },
         .err => |msg| {
-            defer msg.deinit(env.ally);
-            try kz.display(env.ally, proj, msg, stderr);
+            defer msg.deinit(ally);
+            try kz.display(ally, proj, msg, stderr);
         },
     }
 }
@@ -213,7 +214,7 @@ pub fn main() !void {
     ENV = try Env.init(ally);
     defer ENV.deinit();
 
-    try backend.generatePrelude(&ENV);
+    try backend.initPrelude(&ENV);
 
     PROJ = com.Project.init();
     defer PROJ.deinit(ENV.ally);

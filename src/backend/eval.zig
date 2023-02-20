@@ -20,13 +20,14 @@ const TypeId = canon.TypeId;
 const Repr = canon.Repr;
 const ReprWelt = canon.ReprWelt;
 const Object = canon.Object;
+const Expr = canon.Expr;
 
 pub const Error =
     std.mem.Allocator.Error ||
     ReprWelt.Error ||
     @TypeOf(stdout).Error;
 
-pub const Result = Message.Result(Object);
+pub const Result = Message.Result(Expr);
 
 /// evaluate any dynamic value in the provided scope
 pub fn eval(env: *Env, scope: Name, sexpr: SExpr) Error!Result {
@@ -46,15 +47,15 @@ pub fn evalTyped(
 
     // analyze
     const sema_res = try analyze(env, scope, sexpr, expected);
-    const obj = sema_res.get() orelse return sema_res;
-    defer obj.deinit(env);
+    const expr = sema_res.get() orelse return sema_res;
+    defer expr.deinit(env);
 
     if (com.options.log.sema) {
         const t = now();
         defer render_time += now() - t;
 
         try stdout.writeAll("[Analyzed AST]\n");
-        try kz.display(env.ally, env.*, obj, stdout);
+        try kz.display(env.ally, env, expr.obj, stdout);
         try stdout.writeByte('\n');
     }
 
@@ -68,5 +69,5 @@ pub fn evalTyped(
     try stdout.writeAll(".\n");
 
     // TODO the rest of the fucking eval
-    return Result.ok(obj);
+    return Result.ok(try expr.clone(env.ally));
 }

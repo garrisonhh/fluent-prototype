@@ -21,16 +21,14 @@ const Type = @import("type.zig").Type;
 
 const Self = @This();
 
-pub const TypeId = packed struct {
+pub const TypeId = packed struct(u64) {
     index: usize,
 
     pub fn eql(self: @This(), id: @This()) bool {
         return self.index == id.index;
     }
 
-    pub fn render(self: @This(), ctx: *kz.Context, tw: Self) !kz.Ref {
-        return try tw.get(self).render(ctx, tw);
-    }
+    pub const render = @import("render_type.zig").renderTypeId;
 
     pub fn toString(
         self: @This(),

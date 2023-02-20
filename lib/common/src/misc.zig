@@ -20,5 +20,5 @@ pub fn placeOn(
 /// pads a size so that it fits an alignment
 pub fn padAlignment(sz: usize, aln: usize) usize {
     const aln_diff = sz % aln;
-    return if (aln_diff == 0) sz else sz + aln - aln_diff;
+    return if (aln_diff > 0) sz + (aln - aln_diff) else sz;
 }

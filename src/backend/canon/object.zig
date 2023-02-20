@@ -11,8 +11,12 @@ const TypeId = canon.TypeId;
 const Value = canon.Value;
 const Number = canon.Number;
 const Builtin = canon.Builtin;
+const Basic = canon.Basic;
+const interface = @import("object_interface.zig");
 
 const Self = @This();
+
+pub const Interface = interface.Interface;
 
 ty: TypeId,
 repr: ReprId,
@@ -27,7 +31,7 @@ pub fn init(env: *Env, ty: TypeId) InitError!Self {
     return Self{
         .ty = ty,
         .repr = repr,
-        .val = Value.of(try env.ally.alloc(u8, size)),
+        .val = try Value.alloc(env.ally, size),
     };
 }
 
@@ -41,14 +45,19 @@ pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
     return Self{
         .ty = self.ty,
         .repr = self.repr,
-        .val = .{ .buf = try ally.dupe(u8, self.val.buf) },
+        .val = try Value.init(ally, self.val.buf),
     };
+}
+
+/// for interacting with Interfaces
+pub fn basePtr(self: Self) *anyopaque {
+    return self.val.buf.ptr;
 }
 
 /// a lot of types use u64 as repr
 fn fromU64(env: *Env, ty: TypeId, n: u64) InitError!Self {
     const obj = try Self.init(env, ty);
-    std.debug.assert(obj.val.buf.len == @sizeOf(u64));
+    @ptrCast(*u64, obj.val.buf).* = n;
     std.mem.set(u8, obj.val.buf, 0);
     std.mem.copy(u8, obj.val.buf, canon.from(&n));
 
@@ -63,8 +72,7 @@ fn intoU64(self: Self) u64 {
 // unit ========================================================================
 
 pub fn fromUnit(env: *Env) InitError!Self {
-    const ty = try env.identify(.unit);
-    const obj = try Self.init(env, ty);
+    const obj = try Self.init(env, Basic.unit.get());
     std.debug.assert(obj.val.buf.len == 0);
 
     return obj;
