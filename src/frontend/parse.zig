@@ -116,7 +116,9 @@ fn syntaxErrorAt(ally: Allocator, loc: Loc) Allocator.Error!Result {
 
 /// generic error at current parsing location
 fn syntaxError(p: *const Parser) Allocator.Error!Result {
-    const max_loc = if (p.max_parsed == p.strm.tokens.len) eos: {
+    const max_loc = if (p.strm.tokens.len == 0) {
+        return streamError(p, "empty input stream", .{});
+    } else if (p.max_parsed == p.strm.tokens.len) eos: {
         const last = p.strm.tokens[p.max_parsed - 1].loc;
         break :eos Loc.of(last.file, last.stop, last.stop);
     } else p.strm.tokens[p.max_parsed].loc;

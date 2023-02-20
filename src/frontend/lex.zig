@@ -82,6 +82,11 @@ fn isNumeric(ch: u8) bool {
 fn lexNumber(lexer: *Lexer, loc: Loc) Token {
     const start = lexer.index;
 
+    // minus sign
+    if (lexer.peek() == @as(u8, '-')) {
+        lexer.eat();
+    }
+
     // integral section
     while (lexer.peek()) |ch| : (lexer.eat()) {
         if (!isNumeric(ch)) break;
@@ -125,6 +130,16 @@ fn lexWords(
     tokens: *std.ArrayList(Token),
     loc: Loc,
 ) Error!void {
+    // special case for '-'
+    if (lexer.peek() == @as(u8, '-')) {
+        if (lexer.get(1)) |ch| {
+            if (try classify(ch) == .digit) {
+                try tokens.append(lexNumber(lexer, loc));
+                return;
+            }
+        }
+    }
+
     // check for symbols
     if (try tryLexSymbol(lexer, loc)) |token| {
         try tokens.append(token);
