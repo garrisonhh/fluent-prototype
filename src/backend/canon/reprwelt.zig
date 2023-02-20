@@ -324,7 +324,7 @@ pub fn makeStruct(
 
         // calc field offset and find struct sz
         const field_offset = com.padAlignment(offset, aln);
-        offset += field_offset + slot.sz;
+        offset = field_offset + slot.sz;
 
         fields[slot.index] = Repr.Field{
             .offset = field_offset,
