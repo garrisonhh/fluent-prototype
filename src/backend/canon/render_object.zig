@@ -103,5 +103,9 @@ pub fn render(
     const body = try ctx.stack(children.items, .bottom, .{});
 
     // put it together
-    return try ctx.unify(header, body, .{ INDENT, 1 });
+    if (ctx.getSize(body)[1] > 1) {
+        return try ctx.unify(header, body, .{ INDENT, 1 });
+    }
+
+    return try ctx.slap(header, body, .right, .{ .space = 1 });
 }
