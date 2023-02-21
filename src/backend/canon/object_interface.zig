@@ -245,6 +245,8 @@ pub fn Wrapper(comptime Template: type) type {
             return self.getPtr(tag).*;
         }
 
+        // TODO this is broken for variants which contain nested structs or
+        // variants
         /// get the value of a variant
         pub fn into(self: Self) Template {
             const tag = self.getTagPtr().*;
