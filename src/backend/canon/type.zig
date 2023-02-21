@@ -129,39 +129,33 @@ pub const Type = union(enum) {
     }
 
     pub fn hash(self: Self, wyhash: *Wyhash) void {
-        const asBytes = std.mem.asBytes;
-        wyhash.update(asBytes(&std.meta.activeTag(self)));
+        const b = std.mem.asBytes;
+        wyhash.update(b(&@as(Tag, self)));
 
         switch (self) {
-            .unit, .name, .hole, .any, .ty, .@"bool", .builtin => {},
-            .set => {
-                // NOTE if there is a serious issue here, figure out if there is
-                // a way to hash this in constant space. for now I'm just
-                // throwing my hands up and allowing .eql() to handle the work
-                // of figuring out if two sets match.
-                // NOTE after some thought I think the easiest solution is just
-                // using an ordered set
-            },
-            .number => |num| {
-                wyhash.update(asBytes(&num.layout));
-                wyhash.update(asBytes(&num.bits));
-            },
-            .array => |arr| {
-                wyhash.update(asBytes(&arr.size));
-                wyhash.update(asBytes(&arr.of));
-            },
-            .ptr => |ptr| {
-                wyhash.update(asBytes(&ptr.kind));
-                wyhash.update(asBytes(&ptr.to));
-            },
-            .tuple => |tup| wyhash.update(asBytes(&tup)),
-            .@"struct", .variant => |fields| for (fields) |field| {
-                wyhash.update(asBytes(&field.name.hash));
-                wyhash.update(asBytes(&field.of));
-            },
-            .func => |func| {
-                wyhash.update(asBytes(&func.takes));
-                wyhash.update(asBytes(&func.returns));
+            // NOTE using an sorted ordered set datatype of some kind would
+            // allow hasing here, but idk if it's worth it at this moment
+            .set => {},
+
+            inline .unit,
+            .hole,
+            .builtin,
+            .name,
+            .any,
+            .@"bool",
+            .ty,
+            .number,
+            .array,
+            .ptr,
+            .tuple,
+            .func,
+            => |data| std.hash.autoHashStrat(wyhash, data, .DeepRecursive),
+
+            .@"struct", .variant => |fields| {
+                for (fields) |field| {
+                    wyhash.update(b(&field.name.hash));
+                    wyhash.update(b(&field.of));
+                }
             },
         }
     }
