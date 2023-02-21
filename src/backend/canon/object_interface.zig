@@ -160,7 +160,8 @@ pub fn Wrapper(comptime Template: type) type {
         fields: []const Repr.Field,
 
         /// create an object and wrap it
-        pub fn init(env: *Env, ty: TypeId) Object.InitError!Self {
+        pub fn init(env: *Env) Object.InitError!Self {
+            const ty = try env.tw.convertZigType(env.ally, Template);
             return Self.wrap(env, try Object.init(env, ty));
         }
 
@@ -173,11 +174,11 @@ pub fn Wrapper(comptime Template: type) type {
         pub fn wrap(env: *Env, obj: Object) Self {
             if (builtin.mode == .Debug) {
                 // ensure template type maps to the object type
-                const templated_ty = env.tw.convertZigType(Template) catch |e| {
+                const ty = env.tw.convertZigType(env.ally, Template) catch |e| {
                     std.debug.panic("{} while checking wrapped type", .{e});
                 };
 
-                std.debug.assert(templated_ty.eql(obj.ty));
+                std.debug.assert(ty.eql(obj.ty));
             }
 
             return Self{
@@ -306,14 +307,12 @@ pub fn Wrapper(comptime Template: type) type {
 }
 
 test "interface-struct" {
-    const ally = std.heap.page_allocator;
-    const writer = std.io.getStdErr().writer();
-
     const prelude = @import("prelude.zig");
 
+    const writer = std.io.getStdErr().writer();
     try writer.writeByte('\n');
 
-    var env = try Env.init(ally);
+    var env = try Env.init(std.heap.page_allocator);
     defer env.deinit();
 
     try prelude.initPrelude(&env);
@@ -324,16 +323,7 @@ test "interface-struct" {
         z: u32,
     });
 
-    const fl_u32 = prelude.Basic.u32.get();
-    const fl_obj = try env.identify(.{
-        .@"struct" = &.{
-            .{ .name = comptime com.Symbol.init("x"), .of = fl_u32 },
-            .{ .name = comptime com.Symbol.init("y"), .of = fl_u32 },
-            .{ .name = comptime com.Symbol.init("z"), .of = fl_u32 },
-        },
-    });
-
-    const wrapped = try Vec3.init(&env, fl_obj);
+    const wrapped = try Vec3.init(&env);
     defer wrapped.deinit(&env);
 
     wrapped.set(.x, 11);
@@ -344,18 +334,16 @@ test "interface-struct" {
     try expect(22 == wrapped.get(.y));
     try expect(33 == wrapped.get(.z));
 
-    try kz.display(ally, &env, wrapped, writer);
+    try kz.display(env.ally, &env, wrapped, writer);
 }
 
 test "interface-nested-struct" {
-    const ally = std.heap.page_allocator;
-    const writer = std.io.getStdErr().writer();
-
     const prelude = @import("prelude.zig");
 
+    const writer = std.io.getStdErr().writer();
     try writer.writeByte('\n');
 
-    var env = try Env.init(ally);
+    var env = try Env.init(std.heap.page_allocator);
     defer env.deinit();
 
     try prelude.initPrelude(&env);
@@ -364,22 +352,7 @@ test "interface-nested-struct" {
     const ZRay = struct { pos: Vec3, dir: Vec3 };
     const Ray = Wrapper(ZRay);
 
-    const u32_ty = prelude.Basic.u32.get();
-    const vec3_ty = try env.identify(.{
-        .@"struct" = &.{
-            .{ .name = comptime com.Symbol.init("x"), .of = u32_ty },
-            .{ .name = comptime com.Symbol.init("y"), .of = u32_ty },
-            .{ .name = comptime com.Symbol.init("z"), .of = u32_ty },
-        },
-    });
-    const ray_ty = try env.identify(.{
-        .@"struct" = &.{
-            .{ .name = comptime com.Symbol.init("pos"), .of = vec3_ty },
-            .{ .name = comptime com.Symbol.init("dir"), .of = vec3_ty },
-        },
-    });
-
-    const wrapped = try Ray.init(&env, ray_ty);
+    const wrapped = try Ray.init(&env);
     defer wrapped.deinit(&env);
 
     wrapped.getW(&env, .pos).set(.x, 11);
@@ -396,48 +369,33 @@ test "interface-nested-struct" {
     try expect(55 == wrapped.getW(&env, .dir).get(.y));
     try expect(66 == wrapped.getW(&env, .dir).get(.z));
 
-    try kz.display(ally, &env, wrapped, writer);
+    try kz.display(env.ally, &env, wrapped, writer);
 }
 
 test "interface-variant" {
-    const ally = std.heap.page_allocator;
-    const writer = std.io.getStdErr().writer();
-
     const prelude = @import("prelude.zig");
 
+    const writer = std.io.getStdErr().writer();
     try writer.writeByte('\n');
 
-    var env = try Env.init(ally);
+    var env = try Env.init(std.heap.page_allocator);
     defer env.deinit();
 
     try prelude.initPrelude(&env);
 
-    const TestVariant = union(enum) {
+    const V = Wrapper(union(enum) {
         a: u32,
         b: i32,
         c: f32,
-    };
-
-    const V = Wrapper(TestVariant);
-
-    const fl_u32 = prelude.Basic.u32.get();
-    const fl_i32 = prelude.Basic.i32.get();
-    const fl_f32 = prelude.Basic.f32.get();
-    const fl_obj = try env.identify(.{
-        .variant = &.{
-            .{ .name = comptime com.Symbol.init("a"), .of = fl_u32 },
-            .{ .name = comptime com.Symbol.init("b"), .of = fl_i32 },
-            .{ .name = comptime com.Symbol.init("c"), .of = fl_f32 },
-        },
     });
 
-    const wrapped = try V.init(&env, fl_obj);
+    const wrapped = try V.init(&env);
     defer wrapped.deinit(&env);
 
     // a
     wrapped.set(.a, 11);
 
-    try kz.display(ally, &env, wrapped, writer);
+    try kz.display(env.ally, &env, wrapped, writer);
 
     const val_a = wrapped.into();
     try expect(val_a == .a and val_a.a == 11);
@@ -448,7 +406,7 @@ test "interface-variant" {
     const val_b = wrapped.into();
     try expect(val_b == .b and val_b.b == -22);
 
-    try kz.display(ally, &env, wrapped, writer);
+    try kz.display(env.ally, &env, wrapped, writer);
 
     // c
     wrapped.set(.c, 1.5);
@@ -456,5 +414,5 @@ test "interface-variant" {
     const val_c = wrapped.into();
     try expect(val_c == .c and val_c.c == 1.5);
 
-    try kz.display(ally, &env, wrapped, writer);
+    try kz.display(env.ally, &env, wrapped, writer);
 }
