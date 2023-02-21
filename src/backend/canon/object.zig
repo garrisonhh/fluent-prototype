@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const builtin = @import("builtin");
 const Env = @import("../env.zig");
 const canon = @import("../canon.zig");
 const Repr = canon.Repr;
@@ -112,6 +113,28 @@ pub fn fromType(env: *Env, val: TypeId) InitError!Self {
 
 pub fn intoType(self: Self) TypeId {
     return TypeId{ .index = self.intoU64() };
+}
+
+// ptr =========================================================================
+
+fn verifyPtrType(comptime P: type) void {
+    comptime {
+        if (builtin.mode == .Debug) {
+            const info = @typeInfo(P);
+            std.debug.assert(info == .Pointer);
+            std.debug.assert(info.Pointer.size != .Slice);
+        }
+    }
+}
+
+pub fn fromPtr(env: *Env, comptime P: type, val: P) InitError!Self {
+    verifyPtrType(P);
+    return Self.fromU64(env, try env.identifyZigType(P), @ptrToInt(val));
+}
+
+pub fn intoPtr(self: Self, comptime P: type) P {
+    verifyPtrType(P);
+    return @intToPtr(P, self.intoU64());
 }
 
 // number ======================================================================

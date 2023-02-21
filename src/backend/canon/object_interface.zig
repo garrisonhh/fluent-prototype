@@ -425,12 +425,10 @@ pub fn Wrapper(comptime Template: type) type {
             }
         }
 
-        // NOTE for some reason zig doesn't like me defining 'val' with I.Value
-        /// set a field. for variants, also changes the tag.
         pub fn set(
             self: Self,
             comptime tag: I.Tag,
-            val: I.fields[@enumToInt(tag)].value,
+            val: I.Value(tag),
         ) void {
             // tag must be set for variants
             if (I.itype == .variant) {
