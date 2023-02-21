@@ -33,6 +33,12 @@ fn numericType(
     });
 }
 
+fn sliceType(env: *Env, of: TypeId) Error!TypeId {
+    return try env.identify(Type{
+        .ptr = .{ .kind = .slice, .to = of },
+    });
+}
+
 fn fnType(
     env: *Env,
     takes: []const TypeId,
@@ -98,7 +104,6 @@ pub const Basic = enum {
     f64,
 
     // collections
-    expr_data,
     expr,
 
     var types: [std.enums.values(Self).len]TypeId = undefined;
@@ -141,9 +146,6 @@ pub const Basic = enum {
             .f32,
             .f64,
             => @tagName(self),
-
-            // unnamed
-            .expr_data => null,
         };
     }
 
@@ -185,17 +187,20 @@ pub const Basic = enum {
                 break :num try numericType(env, layout, bits);
             },
 
-            .expr_data => try collType(env, .variant, &.{
-                .{ "unit", Self.unit.get() },
-                .{ "bool", Self.bool.get() },
-                .{ "type", Self.type.get() },
-                .{ "int", Self.compiler_int.get() },
-                .{ "float", Self.compiler_float.get() },
-            }),
-            .expr => try collType(env, .@"struct", &.{
-                .{ "type", Self.type.get() },
-                .{ "data", Self.expr_data.get() },
-            }),
+            .expr => ex: {
+                const data = try collType(env, .variant, &.{
+                    .{ "unit", Self.unit.get() },
+                    .{ "bool", Self.bool.get() },
+                    .{ "type", Self.type.get() },
+                    .{ "int", Self.compiler_int.get() },
+                    .{ "float", Self.compiler_float.get() },
+                });
+
+                break :ex try collType(env, .@"struct", &.{
+                    .{ "type", Self.type.get() },
+                    .{ "data", data },
+                });
+            },
         };
     }
 
@@ -211,19 +216,8 @@ pub const Basic = enum {
     }
 };
 
-/// once the Expr type is generated, this can be defined. this allows Exprs
-/// to understand their fields.
-pub var EXPR_REPR_FIELDS: []const Repr.Field = undefined;
-pub var EXPR_DATA_REPR_FIELDS: []const Repr.Field = undefined;
-
 pub fn initPrelude(env: *Env) !void {
     try Basic.defineAll(env);
-
-    // access and store expr repr fields
-    const expr_repr = try env.reprOf(Basic.expr.get());
-    EXPR_REPR_FIELDS = env.rw.get(expr_repr).coll;
-    const expr_data_repr = try env.reprOf(Basic.expr_data.get());
-    EXPR_DATA_REPR_FIELDS = env.rw.get(expr_data_repr).coll;
 
     // define builtin consts
     try def(env, "true", try Object.fromBool(env, true));

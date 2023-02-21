@@ -4,13 +4,13 @@ const com = @import("common");
 const Name = com.Name;
 const Loc = com.Loc;
 const Env = @import("env.zig");
+const SExpr = @import("sexpr.zig");
 const canon = @import("canon.zig");
 const Object = canon.Object;
 const TypeId = canon.TypeId;
 const Type = canon.Type;
 const Expr = canon.Expr;
 const Basic = canon.Basic;
-const SExpr = @import("sexpr.zig");
 
 const Error = Object.InitError;
 const Result = com.Message.Result(Expr);
@@ -62,15 +62,13 @@ fn analyzeNumber(
     const ty = try env.identify(Type{
         .number = .{ .bits = number.bits, .layout = number.data },
     });
-    const data: Expr.Data = switch (number.data) {
-        .uint => Expr.Data{
-            .int = number.cast(null, .int).data.int,
-        },
-        inline .int, .float => |n, tag| @unionInit(Expr.Data, @tagName(tag), n),
-    };
-    const expr = try Expr.init(env, ty, data);
 
-    return try coerce(env, expr, outward);
+    _ = ty;
+    _ = outward;
+
+    @panic("TODO");
+
+    // return try coerce(env, expr, outward);
 }
 
 fn analyzeExpr(

@@ -1,22 +1,85 @@
 const std = @import("std");
-const assert = std.debug.assert;
+const expect = std.testing.expect;
 const Allocator = std.mem.Allocator;
 const ZType = std.builtin.Type;
-const Object = @import("object.zig");
-const Repr = @import("repr.zig").Repr;
-const ReprWelt = @import("reprwelt.zig");
 const builtin = @import("builtin");
+const com = @import("common");
+const kz = @import("kritzler");
+const Env = @import("../env.zig");
+const canon = @import("../canon.zig");
+const Repr = canon.Repr;
+const ReprId = canon.ReprId;
+const TypeId = canon.TypeId;
+const Object = canon.Object;
+const Value = canon.Value;
 
-const InterfaceField = struct {
-    @"0": @TypeOf(.EnumLiteral),
-    @"1": type,
+const IField = union(enum) {
+    value: type,
+    interface: type,
 };
 
-fn InterfaceEnum(comptime fields: []const InterfaceField) type {
-    var tag_fields: [fields.len]ZType.EnumField = undefined;
-    for (fields) |field, i| {
-        tag_fields[i] = ZType.EnumField{
-            .name = @tagName(field.@"0"),
+const IType = enum {
+    @"struct",
+    variant,
+};
+
+fn Interface(
+    comptime in_itype: IType,
+    comptime in_Tag: type,
+    comptime in_fields: []const IField,
+) type {
+    return struct {
+        pub const itype = in_itype;
+        pub const Tag = in_Tag;
+        pub const fields = in_fields;
+
+        pub fn Value(comptime tag: Tag) type {
+            return fields[@enumToInt(tag)].value;
+        }
+
+        pub fn Nested(comptime tag: Tag) type {
+            return fields[@enumToInt(tag)].interface;
+        }
+
+        fn dumpR(writer: anytype, level: usize) @TypeOf(writer).Error!void {
+            const INDENT = 2;
+
+            try writer.print("{s} interface {{\n", .{@tagName(itype)});
+            inline for (fields) |field, i| {
+                try writer.writeByteNTimes(' ', (level + 1) * INDENT);
+
+                const name = @tagName(@intToEnum(Tag, i));
+                try writer.print("{s}: ", .{name});
+
+                switch (field) {
+                    .value => |T| try writer.print("{}\n", .{T}),
+                    .interface => |T| try T.dumpR(writer, level + 1),
+                }
+            }
+            try writer.writeByteNTimes(' ', level * INDENT);
+            try writer.writeAll("}\n");
+        }
+
+        pub fn dump(writer: anytype) @TypeOf(writer).Error!void {
+            try dumpR(writer, 0);
+        }
+    };
+}
+
+/// create an interface tag enum
+fn genTag(comptime Template: type) type {
+    const field_names = std.meta.fieldNames(Template);
+    if (field_names.len == 0) {
+        @compileError(std.fmt.comptimePrint(
+            "type {} does not have any fields",
+            .{Template},
+        ));
+    }
+
+    var fields: [field_names.len]ZType.EnumField = undefined;
+    for (field_names) |name, i| {
+        fields[i] = ZType.EnumField{
+            .name = name,
             .value = i,
         };
     }
@@ -25,101 +88,369 @@ fn InterfaceEnum(comptime fields: []const InterfaceField) type {
         .Enum = ZType.Enum{
             .layout = .Auto,
             .tag_type = usize,
-            .fields = &tag_fields,
+            .fields = &fields,
             .decls = &.{},
             .is_exhaustive = true,
         },
     });
 }
 
-/// for constructing Variant views
-fn InterfaceVariant(comptime fields: []const InterfaceField) type {
-    const ZEnum = InterfaceEnum(fields[1..]);
+fn genField(comptime field_type: type) IField {
+    return switch (field_type) {
+        void,
+        bool,
+        u8,
+        u16,
+        u32,
+        u64,
+        i8,
+        i16,
+        i32,
+        i64,
+        f32,
+        f64,
+        TypeId,
+        ReprId,
+        => IField{ .value = field_type },
 
-    // variant fields
-    var vfields: [fields.len - 1]ZType.UnionField = undefined;
-    for (fields[1..]) |field, i| {
-        vfields[i] = ZType.UnionField{
-            .name = @tagName(field.@"0"),
-            .field_type = field.@"1",
-            .alignment = @alignOf(field.@"1"),
-        };
-    }
+        else => switch (@typeInfo(field_type)) {
+            .Struct => IField{ .interface = field_type },
+            .Union => |meta| u: {
+                if (meta.tag_type == null) {
+                    @compileError("variant templates must have a tag");
+                }
 
-    return @Type(ZType{
-        .Union = ZType.Union{
-            .layout = .Auto,
-            .tag_type = ZEnum,
-            .fields = &vfields,
-            .decls = &.{},
+                break :u IField{ .interface = field_type };
+            },
+            else => @compileError(std.fmt.comptimePrint(
+                "type {} is not allowed in an object interface",
+                .{field_type},
+            )),
         },
-    });
+    };
 }
 
-/// constructs a thin wrapper interface over Object collections
-pub fn Interface(comptime fields: []const InterfaceField) type {
+fn genInterface(comptime Template: type) type {
+    comptime {
+        const fields = std.meta.fields(Template);
+
+        var ifields: [fields.len]IField = undefined;
+        for (fields) |field, i| {
+            ifields[i] = genField(field.field_type);
+        }
+
+        const itype: IType = switch (@typeInfo(Template)) {
+            .Struct => .@"struct",
+            .Union => .variant,
+            else => unreachable,
+        };
+
+        return Interface(itype, genTag(Template), &ifields);
+    }
+}
+
+pub fn Wrapper(comptime Template: type) type {
     return struct {
         const Self = @This();
 
-        pub const Tag = InterfaceEnum(fields);
-        pub fn Field(comptime tag: Tag) type {
-            return fields[@enumToInt(tag)].@"1";
+        pub const I = genInterface(Template);
+
+        base: *anyopaque,
+        ty: TypeId,
+        fields: []const Repr.Field,
+
+        /// create an object and wrap it
+        pub fn init(env: *Env, ty: TypeId) Object.InitError!Self {
+            return Self.wrap(env, try Object.init(env, ty));
         }
 
-        pub fn getPtr(
-            base: *anyopaque,
-            repr_fields: []const Repr.Field,
-            comptime tag: Tag,
-        ) *Field(tag) {
-            const index = @enumToInt(tag);
-            const offset = repr_fields[index].offset;
-            const raw_addr = @ptrToInt(base) + offset;
-
-            return @intToPtr(*Field(tag), raw_addr);
+        /// free the wrapped object
+        pub fn deinit(self: Self, env: *Env) void {
+            self.unwrap(env).deinit(env);
         }
 
-        pub fn get(
-            base: *anyopaque,
-            repr_fields: []const Repr.Field,
-            comptime tag: Tag,
-        ) Field(tag) {
-            return getPtr(base, repr_fields, tag).*;
-        }
-
-        pub fn set(
-            base: *anyopaque,
-            repr_fields: []const Repr.Field,
-            comptime tag: Tag,
-            to: Field(tag),
-        ) void {
-            getPtr(base, repr_fields, tag).* = to;
-        }
-
-        pub const Variant = InterfaceVariant(fields);
-
-        /// interpret this object as a variant
-        pub fn asVariant(
-            base: [*]anyopaque,
-            repr_fields: []const Repr.Field,
-        ) Variant {
-            const tag_index: usize = get(base, repr_fields, @intToEnum(Tag, 0));
-
-            inline for (fields) |_, i| {
-                if (i == tag_index) {
-                    const tag = @intToEnum(Tag, tag_index + 1);
-                    const tagname = @tagName(tag);
-                    return @unionInit(
-                        Variant,
-                        tagname,
-                        get(base, repr_fields, tag),
-                    );
-                }
-            } else {
-                std.debug.panic(
-                    "attempted to nonexistant variant field {}",
-                    .{tag_index},
-                );
+        /// wrap an instantiated object
+        pub fn wrap(env: *Env, obj: Object) Self {
+            if (builtin.mode == .Debug) {
+                const sz = env.rw.sizeOf(obj.repr) catch unreachable;
+                std.debug.assert(sz == obj.val.buf.len);
             }
+
+            return Self{
+                .base = obj.val.buf.ptr,
+                .ty = obj.ty,
+                .fields = env.rw.get(obj.repr).coll,
+            };
+        }
+
+        /// unwrap an instantiated object
+        pub fn unwrap(self: Self, env: *Env) Object {
+            // since finding the size and creating the object were already done
+            // when instantiating the wrapper, they should never fail
+            const ptr = @ptrCast([*]u8, self.base);
+            const aligned_ptr = @alignCast(Value.Alignment, ptr);
+
+            const sz = env.sizeOf(self.ty) catch unreachable;
+            const val = Value.of(aligned_ptr[0..sz]);
+
+            return Object.from(env, self.ty, val) catch unreachable;
+        }
+
+        pub fn clone(self: Self, env: *Env) Allocator.Error!Self {
+            const obj = try self.unwrap(env).clone(env.ally);
+            return self.wrap(obj);
+        }
+
+        fn getFieldPtrIndexed(self: Self, tag_index: usize) *anyopaque {
+            const offset = self.fields[tag_index].offset;
+            return @intToPtr(*anyopaque, @ptrToInt(self.base) + offset);
+        }
+
+        fn getFieldPtr(self: Self, comptime tag: I.Tag) *anyopaque {
+            const tag_index = @enumToInt(tag) + switch (I.itype) {
+                .@"struct" => 0,
+                // variant must skip 'tag' field
+                .variant => 1,
+            };
+
+            return self.getFieldPtrIndexed(tag_index);
+        }
+
+        fn getTagPtr(self: Self) *I.Tag {
+            const raw_ptr = self.getFieldPtrIndexed(0);
+            const aligned_ptr = @alignCast(@alignOf(I.Tag), raw_ptr);
+            return @ptrCast(*I.Tag, aligned_ptr);
+        }
+
+        /// get a pointer to a field value
+        pub fn getPtr(self: Self, comptime tag: I.Tag) *I.Value(tag) {
+            const V = I.Value(tag);
+
+            const raw_ptr = self.getFieldPtr(tag);
+            const aligned = @alignCast(@alignOf(V), raw_ptr);
+            return @ptrCast(*V, aligned);
+        }
+
+        /// get a field value
+        pub fn get(self: Self, comptime tag: I.Tag) I.Value(tag) {
+            if (I.itype == .variant) {
+                @compileError("use into() to observe a variant");
+            }
+
+            return self.getPtr(tag).*;
+        }
+
+        /// get the value of a variant
+        pub fn into(self: Self) Template {
+            const tag = self.getTagPtr().*;
+            return switch (tag) {
+                inline else => |ct_tag| @unionInit(
+                    Template,
+                    @tagName(ct_tag),
+                    self.getPtr(ct_tag).*,
+                ),
+            };
+        }
+
+        // NOTE for some reason zig doesn't like me defining 'val' with I.Value
+        /// set a field. for variants, also changes the tag.
+        pub fn set(
+            self: Self,
+            comptime tag: I.Tag,
+            val: I.fields[@enumToInt(tag)].value,
+        ) void {
+            // tag must be set for variants
+            if (I.itype == .variant) {
+                self.getTagPtr().* = tag;
+            }
+
+            self.getPtr(tag).* = val;
+        }
+
+        pub fn getW(
+            self: Self,
+            env: *Env,
+            comptime tag: I.Tag,
+        ) Wrapper(I.Nested(tag)) {
+            const tag_index = @enumToInt(tag);
+
+            const ptr = self.getFieldPtr(tag);
+            const repr_fields = env.rw.get(self.fields[tag_index].of).coll;
+            const parent_ty = env.tw.get(self.ty);
+
+            return switch (I.itype) {
+                .@"struct" => st: {
+                    const ty = parent_ty.@"struct"[tag_index].of;
+                    break :st Wrapper(I.Nested(tag)){
+                        .base = ptr,
+                        .ty = ty,
+                        .fields = repr_fields,
+                    };
+                },
+                .variant => @compileError("TODO"),
+            };
+        }
+
+        pub fn render(
+            self: Self,
+            ctx: *kz.Context,
+            env: *Env,
+        ) Object.InitError!kz.Ref {
+            return self.unwrap(env).render(ctx, env);
         }
     };
+}
+
+test "interface-struct" {
+    const ally = std.heap.page_allocator;
+    const writer = std.io.getStdErr().writer();
+
+    const prelude = @import("prelude.zig");
+
+    try writer.writeByte('\n');
+
+    var env = try Env.init(ally);
+    defer env.deinit();
+
+    try prelude.initPrelude(&env);
+
+    const Vec3 = Wrapper(struct {
+        x: u32,
+        y: u32,
+        z: u32,
+    });
+
+    const fl_u32 = prelude.Basic.u32.get();
+    const fl_obj = try env.identify(.{
+        .@"struct" = &.{
+            .{ .name = comptime com.Symbol.init("x"), .of = fl_u32 },
+            .{ .name = comptime com.Symbol.init("y"), .of = fl_u32 },
+            .{ .name = comptime com.Symbol.init("z"), .of = fl_u32 },
+        },
+    });
+
+    const wrapped = try Vec3.init(&env, fl_obj);
+    defer wrapped.deinit(&env);
+
+    wrapped.set(.x, 11);
+    wrapped.set(.y, 22);
+    wrapped.set(.z, 33);
+
+    try expect(11 == wrapped.get(.x));
+    try expect(22 == wrapped.get(.y));
+    try expect(33 == wrapped.get(.z));
+
+    try kz.display(ally, &env, wrapped, writer);
+}
+
+test "interface-nested-struct" {
+    const ally = std.heap.page_allocator;
+    const writer = std.io.getStdErr().writer();
+
+    const prelude = @import("prelude.zig");
+
+    try writer.writeByte('\n');
+
+    var env = try Env.init(ally);
+    defer env.deinit();
+
+    try prelude.initPrelude(&env);
+
+    const Vec3 = struct { x: u32, y: u32, z: u32 };
+    const ZRay = struct { pos: Vec3, dir: Vec3 };
+    const Ray = Wrapper(ZRay);
+
+    const u32_ty = prelude.Basic.u32.get();
+    const vec3_ty = try env.identify(.{
+        .@"struct" = &.{
+            .{ .name = comptime com.Symbol.init("x"), .of = u32_ty },
+            .{ .name = comptime com.Symbol.init("y"), .of = u32_ty },
+            .{ .name = comptime com.Symbol.init("z"), .of = u32_ty },
+        },
+    });
+    const ray_ty = try env.identify(.{
+        .@"struct" = &.{
+            .{ .name = comptime com.Symbol.init("pos"), .of = vec3_ty },
+            .{ .name = comptime com.Symbol.init("dir"), .of = vec3_ty },
+        },
+    });
+
+    const wrapped = try Ray.init(&env, ray_ty);
+    defer wrapped.deinit(&env);
+
+    wrapped.getW(&env, .pos).set(.x, 11);
+    wrapped.getW(&env, .pos).set(.y, 22);
+    wrapped.getW(&env, .pos).set(.z, 33);
+    wrapped.getW(&env, .dir).set(.x, 44);
+    wrapped.getW(&env, .dir).set(.y, 55);
+    wrapped.getW(&env, .dir).set(.z, 66);
+
+    try expect(11 == wrapped.getW(&env, .pos).get(.x));
+    try expect(22 == wrapped.getW(&env, .pos).get(.y));
+    try expect(33 == wrapped.getW(&env, .pos).get(.z));
+    try expect(44 == wrapped.getW(&env, .dir).get(.x));
+    try expect(55 == wrapped.getW(&env, .dir).get(.y));
+    try expect(66 == wrapped.getW(&env, .dir).get(.z));
+
+    try kz.display(ally, &env, wrapped, writer);
+}
+
+test "interface-variant" {
+    const ally = std.heap.page_allocator;
+    const writer = std.io.getStdErr().writer();
+
+    const prelude = @import("prelude.zig");
+
+    try writer.writeByte('\n');
+
+    var env = try Env.init(ally);
+    defer env.deinit();
+
+    try prelude.initPrelude(&env);
+
+    const TestVariant = union(enum) {
+        a: u32,
+        b: i32,
+        c: f32,
+    };
+
+    const V = Wrapper(TestVariant);
+
+    const fl_u32 = prelude.Basic.u32.get();
+    const fl_i32 = prelude.Basic.i32.get();
+    const fl_f32 = prelude.Basic.f32.get();
+    const fl_obj = try env.identify(.{
+        .variant = &.{
+            .{ .name = comptime com.Symbol.init("a"), .of = fl_u32 },
+            .{ .name = comptime com.Symbol.init("b"), .of = fl_i32 },
+            .{ .name = comptime com.Symbol.init("c"), .of = fl_f32 },
+        },
+    });
+
+    const wrapped = try V.init(&env, fl_obj);
+    defer wrapped.deinit(&env);
+
+    // a
+    wrapped.set(.a, 11);
+
+    try kz.display(ally, &env, wrapped, writer);
+
+    const val_a = wrapped.into();
+    try expect(val_a == .a and val_a.a == 11);
+
+    // b
+    wrapped.set(.b, -22);
+
+    const val_b = wrapped.into();
+    try expect(val_b == .b and val_b.b == -22);
+
+    try kz.display(ally, &env, wrapped, writer);
+
+    // c
+    wrapped.set(.c, 1.5);
+
+    const val_c = wrapped.into();
+    try expect(val_c == .c and val_c.c == 1.5);
+
+    try kz.display(ally, &env, wrapped, writer);
 }

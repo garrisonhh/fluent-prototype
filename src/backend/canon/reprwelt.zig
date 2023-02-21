@@ -17,7 +17,7 @@ pub const ConversionError = Allocator.Error || error{NoRepr};
 pub const QualError = Repr.QualError;
 pub const Error = ConversionError || Repr.AccessError;
 
-pub const ReprId = packed struct {
+pub const ReprId = packed struct(u64) {
     index: usize,
 
     pub fn eql(self: @This(), id: @This()) bool {

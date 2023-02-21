@@ -16,7 +16,7 @@ const interface = @import("object_interface.zig");
 
 const Self = @This();
 
-pub const Interface = interface.Interface;
+pub const Wrapper = interface.Wrapper;
 
 ty: TypeId,
 repr: ReprId,
@@ -24,15 +24,19 @@ val: Value,
 
 pub const InitError = canon.ReprWelt.Error;
 
-pub fn init(env: *Env, ty: TypeId) InitError!Self {
+pub fn from(env: *Env, ty: TypeId, val: Value) InitError!Self {
     const repr = try env.reprOf(ty);
-    const size = try env.rw.sizeOf(repr);
-
     return Self{
         .ty = ty,
         .repr = repr,
-        .val = try Value.alloc(env.ally, size),
+        .val = val,
     };
+}
+
+pub fn init(env: *Env, ty: TypeId) InitError!Self {
+    const size = try env.sizeOf(ty);
+    const val = try Value.alloc(env.ally, size);
+    return Self.from(env, ty, val);
 }
 
 pub fn deinit(self: Self, env: *Env) void {
@@ -47,11 +51,6 @@ pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         .repr = self.repr,
         .val = try Value.init(ally, self.val.buf),
     };
-}
-
-/// for interacting with Interfaces
-pub fn basePtr(self: Self) *anyopaque {
-    return self.val.buf.ptr;
 }
 
 /// a lot of types use u64 as repr

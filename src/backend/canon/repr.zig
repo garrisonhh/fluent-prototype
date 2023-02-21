@@ -54,12 +54,14 @@ pub const Repr = union(enum) {
         returns: Param,
     };
 
+    // for opaque pointers
+    opaq,
+
     // primitives
     unit,
-    // hold byte width (MUST be 1, 2, 4, or 8 for int and 4 or 8 for float)
-    uint: u4,
-    int: u4,
-    float: u4,
+    uint: u4, // 1, 2, 4, or 8
+    int: u4, // 1, 2, 4, or 8
+    float: u4, // 4 or 8
 
     // structured data
     ptr: ReprId,
@@ -71,7 +73,7 @@ pub const Repr = union(enum) {
 
     pub fn deinit(self: Self, ally: Allocator) void {
         switch (self) {
-            .unit, .uint, .int, .float, .ptr, .array => {},
+            .opaq, .unit, .uint, .int, .float, .ptr, .array => {},
             .coll => |coll| ally.free(coll),
             .func => |func| ally.free(func.takes),
         }
@@ -80,6 +82,7 @@ pub const Repr = union(enum) {
     /// whether this repr is a collection with accessible fields
     pub fn isStructured(self: Self) bool {
         return switch (self) {
+            .opaq => unreachable,
             .unit, .uint, .int, .float, .ptr, .func => false,
             .array, .coll => true,
         };
@@ -88,6 +91,7 @@ pub const Repr = union(enum) {
     /// how a value of this repr is conventionally represented in memory
     pub fn getConv(self: Self) Conv {
         return switch (self) {
+            .opaq => unreachable,
             .unit, .uint, .int, .float, .ptr => .by_value,
             .func, .array, .coll => .by_ref,
         };
@@ -98,6 +102,7 @@ pub const Repr = union(enum) {
     /// get the repr of a field (assuming this is a collection of some kind)
     pub fn access(self: Self, rw: ReprWelt, index: usize) AccessError!Field {
         return switch (self) {
+            .opaq,
             .unit,
             .uint,
             .int,
@@ -129,10 +134,12 @@ pub const Repr = union(enum) {
         };
     }
 
-    pub const QualError = error{ SizeOfFunc, AlignOfFunc };
+    pub const QualError =
+        error{ SizeOfFunc, AlignOfFunc, SizeOfOpaque, AlignOfOpaque };
 
     pub fn alignOf(self: Self, rw: ReprWelt) QualError!usize {
         return switch (self) {
+            .opaq => error.AlignOfOpaque,
             .func => error.AlignOfFunc,
             .unit => 1,
             .ptr => 8,
@@ -152,6 +159,7 @@ pub const Repr = union(enum) {
 
     pub fn sizeOf(self: Self, rw: ReprWelt) QualError!usize {
         return switch (self) {
+            .opaq => error.SizeOfOpaque,
             .func => error.SizeOfFunc,
             .unit => 0,
             .ptr => 8,
@@ -177,9 +185,7 @@ pub const Repr = union(enum) {
         if (a.len != b.len) return false;
 
         for (a) |el, i| {
-            if (!std.meta.eql(el, b[i])) {
-                return false;
-            }
+            if (!std.meta.eql(el, b[i])) return false;
         }
 
         return true;
@@ -197,7 +203,7 @@ pub const Repr = union(enum) {
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch (self) {
-            .unit, .uint, .int, .float, .ptr, .array => self,
+            .opaq, .unit, .uint, .int, .float, .ptr, .array => self,
             .coll => |coll| Self{ .coll = try ally.dupe(Field, coll) },
             .func => |func| Self{
                 .func = Func{
@@ -236,7 +242,7 @@ pub const Repr = union(enum) {
         const offset_sty = kz.Style{ .fg = .yellow };
 
         return switch (self) {
-            .unit => try ctx.print(sty, "unit", .{}),
+            .opaq, .unit => try ctx.print(sty, "{s}", .{@tagName(self)}),
             .uint, .int, .float => |bytes| try ctx.print(
                 sty,
                 "{c}{}",
