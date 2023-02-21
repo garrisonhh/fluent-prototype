@@ -12,6 +12,7 @@ const Repr = @import("repr.zig").Repr;
 const Env = @import("../env.zig");
 const Object = @import("object.zig");
 const Builtin = @import("../canon.zig").Builtin;
+const ExprTemplate = @import("expr.zig").ExprTemplate;
 
 pub const Error = Object.InitError || Env.DefError;
 
@@ -124,7 +125,7 @@ pub const Basic = enum {
                 const name = comptime @tagName(tag);
                 break :title std.fmt.comptimePrint(
                     "{c}{s}",
-                    .{ name[0], name[1..] },
+                    .{ comptime std.ascii.toUpper(name[0]), name[1..] },
                 );
             },
 
@@ -155,6 +156,7 @@ pub const Basic = enum {
             .type => try env.identify(.ty),
             .compiler_int => try numericType(env, .int, null),
             .compiler_float => try numericType(env, .float, null),
+            .expr => try env.tw.convertZigType(env.ally, ExprTemplate),
 
             inline .any,
             .unit,
@@ -185,21 +187,6 @@ pub const Basic = enum {
                 };
 
                 break :num try numericType(env, layout, bits);
-            },
-
-            .expr => ex: {
-                const data = try collType(env, .variant, &.{
-                    .{ "unit", Self.unit.get() },
-                    .{ "bool", Self.bool.get() },
-                    .{ "type", Self.type.get() },
-                    .{ "int", Self.compiler_int.get() },
-                    .{ "float", Self.compiler_float.get() },
-                });
-
-                break :ex try collType(env, .@"struct", &.{
-                    .{ "type", Self.type.get() },
-                    .{ "data", data },
-                });
             },
         };
     }

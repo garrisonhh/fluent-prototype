@@ -172,8 +172,12 @@ pub fn Wrapper(comptime Template: type) type {
         /// wrap an instantiated object
         pub fn wrap(env: *Env, obj: Object) Self {
             if (builtin.mode == .Debug) {
-                const sz = env.rw.sizeOf(obj.repr) catch unreachable;
-                std.debug.assert(sz == obj.val.buf.len);
+                // ensure template type maps to the object type
+                const templated_ty = env.tw.convertZigType(Template) catch |e| {
+                    std.debug.panic("{} while checking wrapped type", .{e});
+                };
+
+                std.debug.assert(templated_ty.eql(obj.ty));
             }
 
             return Self{
