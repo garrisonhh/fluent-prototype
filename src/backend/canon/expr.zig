@@ -8,6 +8,7 @@ pub const ExprTemplate = struct {
         unit: void,
         bool: bool,
         type: TypeId,
+        uint: u64,
         int: i64,
         float: f64,
     },

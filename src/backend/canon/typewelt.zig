@@ -139,57 +139,56 @@ pub fn convertZigType(
     ally: Allocator,
     comptime T: type,
 ) Allocator.Error!TypeId {
-    var ty: Type = switch (@typeInfo(T)) {
-        .Void => .unit,
-        .Bool => .bool,
-        .ComptimeInt => Type{ .number = .{ .layout = .int, .bits = null } },
-        .ComptimeFloat => Type{ .number = .{ .layout = .float, .bits = null } },
-        .Int => |meta| Type{
-            .number = Type.Number{
-                .layout = switch (meta.signedness) {
-                    .unsigned => .uint,
-                    .signed => .int,
+    var ty: Type = switch (T) {
+        void => .unit,
+        bool => .bool,
+        TypeId => .ty,
+        comptime_int => Type{ .number = .{ .layout = .int, .bits = null } },
+        comptime_float => Type{ .number = .{ .layout = .float, .bits = null } },
+        else => switch (@typeInfo(T)) {
+            .Int => |meta| Type{
+                .number = Type.Number{
+                    .layout = switch (meta.signedness) {
+                        .unsigned => .uint,
+                        .signed => .int,
+                    },
+                    .bits = meta.bits,
                 },
-                .bits = meta.bits,
             },
-        },
-        .Float => |meta| Type{
-            .number = Type.Number{
-                .layout = .float,
-                .bits = meta.bits,
+            .Float => |meta| Type{
+                .number = Type.Number{
+                    .layout = .float,
+                    .bits = meta.bits,
+                },
             },
+            .Struct => |meta| st: {
+                const fields = try ally.alloc(Type.Field, meta.fields.len);
+                inline for (meta.fields) |field, i| {
+                    fields[i] = Type.Field{
+                        .name = com.Symbol.init(try ally.dupe(u8, field.name)),
+                        .of = try self.convertZigType(ally, field.field_type),
+                    };
+                }
+
+                break :st Type{ .@"struct" = fields };
+            },
+            .Union => |meta| u: {
+                const fields = try ally.alloc(Type.Field, meta.fields.len);
+                inline for (meta.fields) |field, i| {
+                    std.debug.assert(!std.mem.eql(u8, field.name, "tag"));
+
+                    fields[i] = Type.Field{
+                        .name = com.Symbol.init(try ally.dupe(u8, field.name)),
+                        .of = try self.convertZigType(ally, field.field_type),
+                    };
+                }
+
+                break :u Type{ .variant = fields };
+            },
+            else => @compileError(
+                std.fmt.comptimePrint("cannot convert {}", .{T}),
+            ),
         },
-        .Struct => |meta| st: {
-            // packed structs
-            if (meta.backing_integer) |backing| {
-                return try self.convertZigType(ally, backing);
-            }
-
-            // normal structs
-            const fields = try ally.alloc(Type.Field, meta.fields.len);
-            inline for (meta.fields) |st_field, i| {
-                fields[i] = Type.Field{
-                    .name = com.Symbol.init(try ally.dupe(u8, st_field.name)),
-                    .of = try self.convertZigType(ally, st_field.field_type),
-                };
-            }
-
-            break :st Type{ .@"struct" = fields };
-        },
-        .Union => |meta| u: {
-            const fields = try ally.alloc(Type.Field, meta.fields.len);
-            inline for (meta.fields) |u_field, i| {
-                std.debug.assert(!std.mem.eql(u8, u_field.name, "tag"));
-
-                fields[i] = Type.Field{
-                    .name = com.Symbol.init(try ally.dupe(u8, u_field.name)),
-                    .of = try self.convertZigType(ally, u_field.field_type),
-                };
-            }
-
-            break :u Type{ .variant = fields };
-        },
-        else => @compileError(std.fmt.comptimePrint("cannot convert {}", .{T})),
     };
     defer ty.deinit(ally);
 

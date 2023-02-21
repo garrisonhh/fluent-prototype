@@ -97,14 +97,7 @@ pub fn get(self: *Self, name: Name) Object {
 // types and reprs =============================================================
 
 pub fn identify(self: *Self, ty: Type) Allocator.Error!TypeId {
-    const id = try self.tw.identify(self.ally, ty);
-
-    _ = self.rw.reprOf(self.ally, self.tw, id) catch |e| switch (e) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => {},
-    };
-
-    return id;
+    return try self.tw.identify(self.ally, ty);
 }
 
 pub fn reprOf(self: *Self, ty: TypeId) ReprWelt.Error!ReprId {

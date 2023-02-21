@@ -63,12 +63,18 @@ fn analyzeNumber(
         .number = .{ .bits = number.bits, .layout = number.data },
     });
 
-    _ = ty;
-    _ = outward;
+    const expr = try Expr.init(env);
+    expr.set(.type, ty);
 
-    @panic("TODO");
+    const data = expr.getW(env, .data);
+    switch (number.data) {
+        inline else => |n, tag| {
+            const field_tag = @field(@TypeOf(data).I.Tag, @tagName(tag));
+            data.set(field_tag, n);
+        },
+    }
 
-    // return try coerce(env, expr, outward);
+    return try coerce(env, expr, outward);
 }
 
 fn analyzeExpr(
@@ -92,18 +98,20 @@ fn analyzeExpr(
 /// b) make an implicit cast explicit
 /// c) find that an expectation was violated and produce a nice error message
 fn coerce(env: *Env, expr: Expr, outward: TypeId) Error!Result {
+    const expr_ty = expr.get(.type);
+
     // TypeId comparison is fastest
-    if (expr.obj.ty.eql(outward)) {
+    if (expr_ty.eql(outward)) {
         return Result.ok(expr);
     }
 
     // check for an allowed implicit cast
-    const inner = env.tw.get(expr.obj.ty);
+    const inner = env.tw.get(expr_ty);
     const outer = env.tw.get(outward);
 
     const method = (try inner.coercesTo(env.ally, &env.tw, outer.*)) orelse {
         // no coercion :(
-        return expectError(env.*, null, outward, expr.obj.ty);
+        return expectError(env.*, null, outward, expr_ty);
     };
 
     return switch (method) {
