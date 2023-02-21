@@ -23,6 +23,7 @@ const IType = enum {
     variant,
 };
 
+/// an interface for structured data
 fn Interface(
     comptime in_itype: IType,
     comptime in_Tag: type,
@@ -33,25 +34,82 @@ fn Interface(
         pub const Tag = in_Tag;
         pub const fields = in_fields;
 
-        pub fn Value(comptime tag: Tag) type {
-            return fields[@enumToInt(tag)].value;
+        /// index fields by tag
+        pub fn field(comptime tag: Tag) IField {
+            return fields[@enumToInt(tag)];
         }
 
-        pub fn Nested(comptime tag: Tag) type {
-            return fields[@enumToInt(tag)].interface;
+        /// the type that this field is accessed with
+        pub fn FieldInto(comptime tag: Tag) type {
+            return switch (field(tag)) {
+                .value => |T| T,
+                .interface => |I| Wrapper(I),
+            };
         }
+
+        pub fn Value(comptime tag: Tag) type {
+            return field(tag).value;
+        }
+
+        /// this interface expressed as a zig type
+        pub const Into = switch (itype) {
+            .@"struct" => st: {
+                var st_fields: [fields.len]ZType.StructField = undefined;
+                for (std.enums.values(Tag)) |tag, i| {
+                    const field_type = FieldInto(tag);
+
+                    st_fields[i] = ZType.StructField{
+                        .name = @tagName(tag),
+                        .field_type = field_type,
+                        .default_value = null,
+                        .is_comptime = false,
+                        .alignment = @alignOf(field_type),
+                    };
+                }
+
+                break :st @Type(ZType{
+                    .Struct = ZType.Struct{
+                        .layout = .Auto,
+                        .fields = &st_fields,
+                        .decls = &.{},
+                        .is_tuple = false,
+                    },
+                });
+            },
+            .variant => v: {
+                var u_fields: [fields.len]ZType.UnionField = undefined;
+                for (std.enums.values(Tag)) |tag, i| {
+                    const field_type = FieldInto(tag);
+
+                    u_fields[i] = ZType.UnionField{
+                        .name = @tagName(tag),
+                        .field_type = field_type,
+                        .alignment = @alignOf(field_type),
+                    };
+                }
+
+                break :v @Type(ZType{
+                    .Union = ZType.Union{
+                        .layout = .Auto,
+                        .tag_type = Tag,
+                        .fields = &u_fields,
+                        .decls = &.{},
+                    },
+                });
+            },
+        };
 
         fn dumpR(writer: anytype, level: usize) @TypeOf(writer).Error!void {
             const INDENT = 2;
 
             try writer.print("{s} interface {{\n", .{@tagName(itype)});
-            inline for (fields) |field, i| {
+            inline for (fields) |ifield, i| {
                 try writer.writeByteNTimes(' ', (level + 1) * INDENT);
 
                 const name = @tagName(@intToEnum(Tag, i));
                 try writer.print("{s}: ", .{name});
 
-                switch (field) {
+                switch (ifield) {
                     .value => |T| try writer.print("{}\n", .{T}),
                     .interface => |T| try T.dumpR(writer, level + 1),
                 }
@@ -156,6 +214,7 @@ pub fn Wrapper(comptime Template: type) type {
         pub const I = genInterface(Template);
 
         base: *anyopaque,
+        env: *Env,
         ty: TypeId,
         fields: []const Repr.Field,
 
@@ -166,8 +225,8 @@ pub fn Wrapper(comptime Template: type) type {
         }
 
         /// free the wrapped object
-        pub fn deinit(self: Self, env: *Env) void {
-            self.unwrap(env).deinit(env);
+        pub fn deinit(self: Self) void {
+            self.unwrap().deinit(self.env);
         }
 
         /// wrap an instantiated object
@@ -183,27 +242,28 @@ pub fn Wrapper(comptime Template: type) type {
 
             return Self{
                 .base = obj.val.buf.ptr,
+                .env = env,
                 .ty = obj.ty,
                 .fields = env.rw.get(obj.repr).coll,
             };
         }
 
         /// unwrap an instantiated object
-        pub fn unwrap(self: Self, env: *Env) Object {
+        pub fn unwrap(self: Self) Object {
             // since finding the size and creating the object were already done
             // when instantiating the wrapper, they should never fail
             const ptr = @ptrCast([*]u8, self.base);
             const aligned_ptr = @alignCast(Value.Alignment, ptr);
 
-            const sz = env.sizeOf(self.ty) catch unreachable;
+            const sz = self.env.sizeOf(self.ty) catch unreachable;
             const val = Value.of(aligned_ptr[0..sz]);
 
-            return Object.from(env, self.ty, val) catch unreachable;
+            return Object.from(self.env, self.ty, val) catch unreachable;
         }
 
-        pub fn clone(self: Self, env: *Env) Allocator.Error!Self {
-            const obj = try self.unwrap(env).clone(env.ally);
-            return self.wrap(obj);
+        pub fn clone(self: Self) Allocator.Error!Self {
+            const obj = try self.unwrap().clone(self.env.ally);
+            return Self.wrap(self.env, obj);
         }
 
         fn getFieldPtrIndexed(self: Self, tag_index: usize) *anyopaque {
@@ -236,27 +296,61 @@ pub fn Wrapper(comptime Template: type) type {
             return @ptrCast(*V, aligned);
         }
 
-        /// get a field value
-        pub fn get(self: Self, comptime tag: I.Tag) I.Value(tag) {
+        /// get a field value or interface
+        pub fn get(self: Self, comptime tag: I.Tag) I.FieldInto(tag) {
             if (I.itype == .variant) {
                 @compileError("use into() to observe a variant");
             }
 
-            return self.getPtr(tag).*;
+            return switch (I.field(tag)) {
+                .value => self.getPtr(tag).*,
+                .interface => |FieldI| wrapped: {
+                    const tag_index = @enumToInt(tag);
+                    const field_repr = self.fields[tag_index].of;
+                    const parent_ty = self.env.tw.get(self.ty);
+
+                    const field_ty = switch (I.itype) {
+                        .@"struct" => parent_ty.@"struct"[tag_index].of,
+                        .variant => parent_ty.variant[tag_index].of,
+                    };
+
+                    const field_ptr = self.getFieldPtr(tag);
+                    const field_fields = self.env.rw.get(field_repr).coll;
+
+                    break :wrapped Wrapper(FieldI){
+                        .base = field_ptr,
+                        .env = self.env,
+                        .ty = field_ty,
+                        .fields = field_fields,
+                    };
+                },
+            };
         }
 
-        // TODO this is broken for variants which contain nested structs or
-        // variants
-        /// get the value of a variant
-        pub fn into(self: Self) Template {
-            const tag = self.getTagPtr().*;
-            return switch (tag) {
-                inline else => |ct_tag| @unionInit(
-                    Template,
-                    @tagName(ct_tag),
-                    self.getPtr(ct_tag).*,
-                ),
-            };
+        /// get all of the fields of a
+        pub fn into(self: Self) I.Into {
+            switch (I.itype) {
+                .@"struct" => {
+                    var st: I.Into = undefined;
+                    inline for (self.enums.values(I.Tag)) |tag| {
+                        @field(st, @tagName(tag)) = self.get(tag);
+                    }
+
+                    return st;
+                },
+                .variant => {
+                    const rt_tag = self.getTagPtr().*;
+                    switch (rt_tag) {
+                        inline else => |tag| {
+                            return @unionInit(
+                                I.Into,
+                                @tagName(tag),
+                                self.getPtr(tag).*,
+                            );
+                        },
+                    }
+                },
+            }
         }
 
         // NOTE for some reason zig doesn't like me defining 'val' with I.Value
@@ -274,36 +368,12 @@ pub fn Wrapper(comptime Template: type) type {
             self.getPtr(tag).* = val;
         }
 
-        pub fn getW(
-            self: Self,
-            env: *Env,
-            comptime tag: I.Tag,
-        ) Wrapper(I.Nested(tag)) {
-            const tag_index = @enumToInt(tag);
-
-            const ptr = self.getFieldPtr(tag);
-            const repr_fields = env.rw.get(self.fields[tag_index].of).coll;
-            const parent_ty = env.tw.get(self.ty);
-
-            return switch (I.itype) {
-                .@"struct" => st: {
-                    const ty = parent_ty.@"struct"[tag_index].of;
-                    break :st Wrapper(I.Nested(tag)){
-                        .base = ptr,
-                        .ty = ty,
-                        .fields = repr_fields,
-                    };
-                },
-                .variant => @compileError("TODO"),
-            };
-        }
-
         pub fn render(
             self: Self,
             ctx: *kz.Context,
-            env: *Env,
+            _: void,
         ) Object.InitError!kz.Ref {
-            return self.unwrap(env).render(ctx, env);
+            return self.unwrap().render(ctx, self.env);
         }
     };
 }
@@ -326,7 +396,7 @@ test "interface-struct" {
     });
 
     const wrapped = try Vec3.init(&env);
-    defer wrapped.deinit(&env);
+    defer wrapped.deinit();
 
     wrapped.set(.x, 11);
     wrapped.set(.y, 22);
@@ -336,7 +406,7 @@ test "interface-struct" {
     try expect(22 == wrapped.get(.y));
     try expect(33 == wrapped.get(.z));
 
-    try kz.display(env.ally, &env, wrapped, writer);
+    try kz.display(env.ally, {}, wrapped, writer);
 }
 
 test "interface-nested-struct" {
@@ -355,23 +425,23 @@ test "interface-nested-struct" {
     const Ray = Wrapper(ZRay);
 
     const wrapped = try Ray.init(&env);
-    defer wrapped.deinit(&env);
+    defer wrapped.deinit();
 
-    wrapped.getW(&env, .pos).set(.x, 11);
-    wrapped.getW(&env, .pos).set(.y, 22);
-    wrapped.getW(&env, .pos).set(.z, 33);
-    wrapped.getW(&env, .dir).set(.x, 44);
-    wrapped.getW(&env, .dir).set(.y, 55);
-    wrapped.getW(&env, .dir).set(.z, 66);
+    wrapped.get(.pos).set(.x, 11);
+    wrapped.get(.pos).set(.y, 22);
+    wrapped.get(.pos).set(.z, 33);
+    wrapped.get(.dir).set(.x, 44);
+    wrapped.get(.dir).set(.y, 55);
+    wrapped.get(.dir).set(.z, 66);
 
-    try expect(11 == wrapped.getW(&env, .pos).get(.x));
-    try expect(22 == wrapped.getW(&env, .pos).get(.y));
-    try expect(33 == wrapped.getW(&env, .pos).get(.z));
-    try expect(44 == wrapped.getW(&env, .dir).get(.x));
-    try expect(55 == wrapped.getW(&env, .dir).get(.y));
-    try expect(66 == wrapped.getW(&env, .dir).get(.z));
+    try expect(11 == wrapped.get(.pos).get(.x));
+    try expect(22 == wrapped.get(.pos).get(.y));
+    try expect(33 == wrapped.get(.pos).get(.z));
+    try expect(44 == wrapped.get(.dir).get(.x));
+    try expect(55 == wrapped.get(.dir).get(.y));
+    try expect(66 == wrapped.get(.dir).get(.z));
 
-    try kz.display(env.ally, &env, wrapped, writer);
+    try kz.display(env.ally, {}, wrapped, writer);
 }
 
 test "interface-variant" {
@@ -392,12 +462,12 @@ test "interface-variant" {
     });
 
     const wrapped = try V.init(&env);
-    defer wrapped.deinit(&env);
+    defer wrapped.deinit();
 
     // a
     wrapped.set(.a, 11);
 
-    try kz.display(env.ally, &env, wrapped, writer);
+    try kz.display(env.ally, {}, wrapped, writer);
 
     const val_a = wrapped.into();
     try expect(val_a == .a and val_a.a == 11);
@@ -408,7 +478,7 @@ test "interface-variant" {
     const val_b = wrapped.into();
     try expect(val_b == .b and val_b.b == -22);
 
-    try kz.display(env.ally, &env, wrapped, writer);
+    try kz.display(env.ally, {}, wrapped, writer);
 
     // c
     wrapped.set(.c, 1.5);
@@ -416,5 +486,5 @@ test "interface-variant" {
     const val_c = wrapped.into();
     try expect(val_c == .c and val_c.c == 1.5);
 
-    try kz.display(env.ally, &env, wrapped, writer);
+    try kz.display(env.ally, {}, wrapped, writer);
 }

@@ -48,13 +48,14 @@ pub fn evalTyped(
     // analyze
     const sema_res = try analyze(env, scope, sexpr, expected);
     const expr = sema_res.get() orelse return sema_res;
+    defer expr.deinit();
 
     if (com.options.log.sema) {
         const t = now();
         defer render_time += now() - t;
 
         try stdout.writeAll("[Analyzed AST]\n");
-        try kz.display(env.ally, env, expr, stdout);
+        try kz.display(env.ally, {}, expr, stdout);
         try stdout.writeByte('\n');
     }
 
@@ -68,5 +69,5 @@ pub fn evalTyped(
     try stdout.writeAll(".\n");
 
     // TODO the rest of the fucking eval
-    return Result.ok(expr);
+    return Result.ok(try expr.clone());
 }

@@ -66,7 +66,7 @@ fn analyzeNumber(
     const expr = try Expr.init(env);
     expr.set(.type, ty);
 
-    const data = expr.getW(env, .data);
+    const data = expr.get(.data);
     switch (number.data) {
         inline else => |n, tag| {
             const field_tag = @field(@TypeOf(data).I.Tag, @tagName(tag));

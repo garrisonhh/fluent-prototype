@@ -39,8 +39,8 @@ fn execPrint(
     const ally = env.ally;
     switch (try plumbing.exec(proj, env, ref, what)) {
         .ok => |expr| {
-            defer expr.deinit(env);
-            try kz.display(ally, env, expr, stdout);
+            defer expr.deinit();
+            try kz.display(ally, {}, expr, stdout);
         },
         .err => |msg| {
             defer msg.deinit(ally);
