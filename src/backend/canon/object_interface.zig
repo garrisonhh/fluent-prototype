@@ -14,18 +14,31 @@ const Object = canon.Object;
 const Value = canon.Value;
 
 const IField = union(enum) {
+    const Self = @This();
+
     value: type,
-    interface: type,
+    /// holds subtype
+    slice: type,
+    /// holds interface type
+    coll: type,
+
+    fn Into(comptime self: Self) type {
+        return switch (self) {
+            .value => |T| T,
+            .slice => |T| SliceWrapper(T),
+            .coll => |I| Wrapper(I),
+        };
+    }
 };
 
-const IType = enum {
+const CollType = enum {
     @"struct",
     variant,
 };
 
 /// an interface for structured data
-fn Interface(
-    comptime in_itype: IType,
+fn CollInterface(
+    comptime in_itype: CollType,
     comptime in_Tag: type,
     comptime in_fields: []const IField,
 ) type {
@@ -39,14 +52,6 @@ fn Interface(
             return fields[@enumToInt(tag)];
         }
 
-        /// the type that this field is accessed with
-        pub fn FieldInto(comptime tag: Tag) type {
-            return switch (field(tag)) {
-                .value => |T| T,
-                .interface => |I| Wrapper(I),
-            };
-        }
-
         pub fn Value(comptime tag: Tag) type {
             return field(tag).value;
         }
@@ -56,7 +61,7 @@ fn Interface(
             .@"struct" => st: {
                 var st_fields: [fields.len]ZType.StructField = undefined;
                 for (std.enums.values(Tag)) |tag, i| {
-                    const field_type = FieldInto(tag);
+                    const field_type = field(tag).Into();
 
                     st_fields[i] = ZType.StructField{
                         .name = @tagName(tag),
@@ -79,7 +84,7 @@ fn Interface(
             .variant => v: {
                 var u_fields: [fields.len]ZType.UnionField = undefined;
                 for (std.enums.values(Tag)) |tag, i| {
-                    const field_type = FieldInto(tag);
+                    const field_type = field(tag).Into();
 
                     u_fields[i] = ZType.UnionField{
                         .name = @tagName(tag),
@@ -111,7 +116,8 @@ fn Interface(
 
                 switch (ifield) {
                     .value => |T| try writer.print("{}\n", .{T}),
-                    .interface => |T| try T.dumpR(writer, level + 1),
+                    .coll => |T| try T.dumpR(writer, level + 1),
+                    .slice => @compileError("TODO dump slice wrapper"),
                 }
             }
             try writer.writeByteNTimes(' ', level * INDENT);
@@ -172,13 +178,17 @@ fn genField(comptime field_type: type) IField {
         => IField{ .value = field_type },
 
         else => switch (@typeInfo(field_type)) {
-            .Struct => IField{ .interface = field_type },
+            .Pointer => |meta| switch (meta.size) {
+                .One, .Many, .C => IField{ .value = field_type },
+                .Slice => IField{ .slice = meta.child },
+            },
+            .Struct => IField{ .coll = field_type },
             .Union => |meta| u: {
                 if (meta.tag_type == null) {
                     @compileError("variant templates must have a tag");
                 }
 
-                break :u IField{ .interface = field_type };
+                break :u IField{ .coll = field_type };
             },
             else => @compileError(std.fmt.comptimePrint(
                 "type {} is not allowed in an object interface",
@@ -197,14 +207,58 @@ fn genInterface(comptime Template: type) type {
             ifields[i] = genField(field.field_type);
         }
 
-        const itype: IType = switch (@typeInfo(Template)) {
+        const itype: CollType = switch (@typeInfo(Template)) {
             .Struct => .@"struct",
             .Union => .variant,
             else => unreachable,
         };
 
-        return Interface(itype, genTag(Template), &ifields);
+        return CollInterface(itype, genTag(Template), &ifields);
     }
+}
+
+fn SliceWrapper(comptime T: type) type {
+    return struct {
+        const Self = @This();
+
+        const Struct = Wrapper(struct {
+            ptr: [*]T,
+            len: u64,
+        });
+
+        const Elem = genField(T).Into();
+
+        slice: Struct,
+
+        fn of(base: *anyopaque, env: *Env) Self {
+            return Self{ .slice = Struct.of(base, env) };
+        }
+
+        pub fn alloc(self: Self, length: usize) Allocator.Error!void {
+            const data = try self.slice.env.ally.alloc(T, length);
+            self.slice.set(.ptr, data.ptr);
+            self.slice.set(.len, data.len);
+        }
+
+        pub fn free(self: Self) void {
+            const slice = self.slice.get(.ptr)[0..self.len()];
+            self.slice.env.ally.free(slice);
+        }
+
+        pub fn len(self: Self) usize {
+            return self.slice.get(.len);
+        }
+
+        /// index into slice
+        pub fn get(self: Self, index: usize) Elem {
+            return self.slice.get(.ptr)[index];
+        }
+
+        /// get index of slice
+        pub fn set(self: Self, index: usize, value: T) void {
+            self.slice.get(.ptr)[index] = value;
+        }
+    };
 }
 
 pub fn Wrapper(comptime Template: type) type {
@@ -217,6 +271,20 @@ pub fn Wrapper(comptime Template: type) type {
         env: *Env,
         ty: TypeId,
         fields: []const Repr.Field,
+
+        /// wrap raw data
+        pub fn of(base: *anyopaque, env: *Env) Self {
+            // CollInterface will verify these
+            const ty = env.identifyZigType(Template) catch unreachable;
+            const repr = env.reprOf(ty) catch unreachable;
+
+            return Self{
+                .base = base,
+                .env = env,
+                .ty = ty,
+                .fields = env.rw.get(repr).coll,
+            };
+        }
 
         /// create an object and wrap it
         pub fn init(env: *Env) Object.InitError!Self {
@@ -297,14 +365,18 @@ pub fn Wrapper(comptime Template: type) type {
         }
 
         /// get a field value or interface
-        pub fn get(self: Self, comptime tag: I.Tag) I.FieldInto(tag) {
+        pub fn get(self: Self, comptime tag: I.Tag) I.field(tag).Into() {
             if (I.itype == .variant) {
                 @compileError("use into() to observe a variant");
             }
 
             return switch (I.field(tag)) {
                 .value => self.getPtr(tag).*,
-                .interface => |FieldI| wrapped: {
+                .slice => |T| SliceWrapper(T).of(
+                    self.getFieldPtr(tag),
+                    self.env,
+                ),
+                .coll => |FieldI| wrapped: {
                     const tag_index = @enumToInt(tag);
                     const field_repr = self.fields[tag_index].of;
                     const parent_ty = self.env.tw.get(self.ty);
@@ -384,7 +456,7 @@ test "interface-struct" {
     const writer = std.io.getStdErr().writer();
     try writer.writeByte('\n');
 
-    var env = try Env.init(std.heap.page_allocator);
+    var env = try Env.init(std.testing.allocator);
     defer env.deinit();
 
     try prelude.initPrelude(&env);
@@ -415,7 +487,7 @@ test "interface-nested-struct" {
     const writer = std.io.getStdErr().writer();
     try writer.writeByte('\n');
 
-    var env = try Env.init(std.heap.page_allocator);
+    var env = try Env.init(std.testing.allocator);
     defer env.deinit();
 
     try prelude.initPrelude(&env);
@@ -450,7 +522,7 @@ test "interface-variant" {
     const writer = std.io.getStdErr().writer();
     try writer.writeByte('\n');
 
-    var env = try Env.init(std.heap.page_allocator);
+    var env = try Env.init(std.testing.allocator);
     defer env.deinit();
 
     try prelude.initPrelude(&env);
@@ -485,6 +557,41 @@ test "interface-variant" {
 
     const val_c = wrapped.into();
     try expect(val_c == .c and val_c.c == 1.5);
+
+    try kz.display(env.ally, {}, wrapped, writer);
+}
+
+test "interface-slice" {
+    const prelude = @import("prelude.zig");
+
+    const writer = std.io.getStdErr().writer();
+    try writer.writeByte('\n');
+
+    var env = try Env.init(std.testing.allocator);
+    defer env.deinit();
+
+    try prelude.initPrelude(&env);
+
+    const S = Wrapper(struct {
+        slice: []u32,
+    });
+
+    const wrapped = try S.init(&env);
+    defer wrapped.deinit();
+
+    const slice = wrapped.get(.slice);
+    try slice.alloc(3);
+    defer slice.free();
+
+    try expect(slice.len() == 3);
+
+    slice.set(0, 11);
+    slice.set(1, 22);
+    slice.set(2, 33);
+
+    try expect(11 == slice.get(0));
+    try expect(22 == slice.get(1));
+    try expect(33 == slice.get(2));
 
     try kz.display(env.ally, {}, wrapped, writer);
 }

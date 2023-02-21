@@ -161,6 +161,17 @@ pub fn identifyZigType(
                     .bits = meta.bits,
                 },
             },
+            .Pointer => |meta| Type{
+                .ptr = Type.Pointer{
+                    .kind = switch (meta.size) {
+                        .One => .single,
+                        .Many => .many,
+                        .Slice => .slice,
+                        .C => @compileError("fluent does not have C pointers"),
+                    },
+                    .to = try self.identifyZigType(ally, meta.child),
+                },
+            },
             .Struct => |meta| st: {
                 const fields = try ally.alloc(Type.Field, meta.fields.len);
                 inline for (meta.fields) |field, i| {
@@ -185,9 +196,10 @@ pub fn identifyZigType(
 
                 break :u Type{ .variant = fields };
             },
-            else => @compileError(
-                std.fmt.comptimePrint("cannot convert {}", .{T}),
-            ),
+            else => @compileError(comptime std.fmt.comptimePrint(
+                "cannot convert {} to fluent type",
+                .{T},
+            )),
         },
     };
     defer ty.deinit(ally);
