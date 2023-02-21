@@ -100,6 +100,10 @@ pub fn identify(self: *Self, ty: Type) Allocator.Error!TypeId {
     return try self.tw.identify(self.ally, ty);
 }
 
+pub fn identifyZigType(self: *Self, comptime T: type) Allocator.Error!TypeId {
+    return try self.tw.identifyZigType(self.ally, T);
+}
+
 pub fn reprOf(self: *Self, ty: TypeId) ReprWelt.Error!ReprId {
     return try self.rw.reprOf(self.ally, self.tw, ty);
 }

@@ -134,7 +134,7 @@ pub fn identify(
 }
 
 /// very useful for syncing object interfaces
-pub fn convertZigType(
+pub fn identifyZigType(
     self: *Self,
     ally: Allocator,
     comptime T: type,
@@ -166,7 +166,7 @@ pub fn convertZigType(
                 inline for (meta.fields) |field, i| {
                     fields[i] = Type.Field{
                         .name = com.Symbol.init(try ally.dupe(u8, field.name)),
-                        .of = try self.convertZigType(ally, field.field_type),
+                        .of = try self.identifyZigType(ally, field.field_type),
                     };
                 }
 
@@ -179,7 +179,7 @@ pub fn convertZigType(
 
                     fields[i] = Type.Field{
                         .name = com.Symbol.init(try ally.dupe(u8, field.name)),
-                        .of = try self.convertZigType(ally, field.field_type),
+                        .of = try self.identifyZigType(ally, field.field_type),
                     };
                 }
 

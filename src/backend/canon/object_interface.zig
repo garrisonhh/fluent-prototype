@@ -161,7 +161,7 @@ pub fn Wrapper(comptime Template: type) type {
 
         /// create an object and wrap it
         pub fn init(env: *Env) Object.InitError!Self {
-            const ty = try env.tw.convertZigType(env.ally, Template);
+            const ty = try env.identifyZigType(Template);
             return Self.wrap(env, try Object.init(env, ty));
         }
 
@@ -174,7 +174,7 @@ pub fn Wrapper(comptime Template: type) type {
         pub fn wrap(env: *Env, obj: Object) Self {
             if (builtin.mode == .Debug) {
                 // ensure template type maps to the object type
-                const ty = env.tw.convertZigType(env.ally, Template) catch |e| {
+                const ty = env.identifyZigType(Template) catch |e| {
                     std.debug.panic("{} while checking wrapped type", .{e});
                 };
 

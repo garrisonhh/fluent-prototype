@@ -72,13 +72,16 @@ pub fn deinit(self: *Self, ally: Allocator) void {
     self.converts.deinit(ally);
 }
 
-/// invalidated on next intern() call
-pub fn get(self: Self, id: ReprId) *const Repr {
-    return &self.map.get(id.index).repr;
+pub fn get(self: Self, id: ReprId) Repr {
+    return self.map.get(id.index).repr;
 }
 
 pub fn intern(self: *Self, ally: Allocator, repr: Repr) Allocator.Error!ReprId {
-    return self.internExtra(ally, repr, null, null);
+    return self.internExtra(ally, Slot{
+        .repr = repr,
+        .sz = null,
+        .aln = null,
+    });
 }
 
 /// when size and alignment are already known (e.g. when creating a collection)
@@ -86,22 +89,20 @@ pub fn intern(self: *Self, ally: Allocator, repr: Repr) Allocator.Error!ReprId {
 pub fn internExtra(
     self: *Self,
     ally: Allocator,
-    repr: Repr,
-    sz: ?usize,
-    aln: ?usize,
+    slot: Slot,
 ) Allocator.Error!ReprId {
-    if (self.reprs.get(repr)) |id| {
+    if (self.reprs.get(slot.repr)) |id| {
         // repr is known
         return id;
     } else {
         // repr is unknown, clone and store it
         const id = ReprId{ .index = self.map.len };
-        const cloned = try repr.clone(ally);
+        const cloned = try slot.repr.clone(ally);
 
         try self.map.append(ally, Slot{
             .repr = cloned,
-            .sz = sz,
-            .aln = aln,
+            .sz = slot.sz,
+            .aln = slot.aln,
         });
 
         try self.reprs.put(ally, cloned, id);
@@ -130,22 +131,22 @@ pub fn reprOf(
 
 /// the necessary alignment of the Repr
 pub fn alignOf(self: Self, id: ReprId) QualError!usize {
-    const aln = &self.map.items(.aln)[id.index];
-    if (aln.* == null) {
-        aln.* = try self.get(id).alignOf(self);
+    const alns = self.map.items(.aln);
+    if (alns[id.index] == null) {
+        alns[id.index] = try self.get(id).alignOf(self);
     }
 
-    return aln.*.?;
+    return alns[id.index].?;
 }
 
 /// the aligned size of the Repr
 pub fn sizeOf(self: Self, id: ReprId) QualError!usize {
-    const sz = &self.map.items(.sz)[id.index];
-    if (sz.* == null) {
-        sz.* = try self.get(id).sizeOf(self);
+    const szs = self.map.items(.sz);
+    if (szs[id.index] == null) {
+        szs[id.index] = try self.get(id).sizeOf(self);
     }
 
-    return sz.*.?;
+    return szs[id.index].?;
 }
 
 /// what size this Repr takes in memory, given an alignment
@@ -336,7 +337,11 @@ pub fn makeStruct(
     const struct_sz = com.padAlignment(offset, struct_aln);
     const repr = Repr{ .coll = fields };
 
-    return try self.internExtra(ally, repr, struct_sz, struct_aln);
+    return try self.internExtra(ally, Slot{
+        .repr = repr,
+        .sz = struct_sz,
+        .aln = struct_aln,
+    });
 }
 
 /// variant == enum or tagged union
@@ -377,5 +382,9 @@ pub fn makeVariant(
     const variant_sz = com.padAlignment(max_aln + fields_sz, max_aln);
     const repr = Repr{ .coll = fields };
 
-    return try self.internExtra(ally, repr, variant_sz, max_aln);
+    return try self.internExtra(ally, Slot{
+        .repr = repr,
+        .sz = variant_sz,
+        .aln = max_aln,
+    });
 }

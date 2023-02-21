@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const builtin = @import("builtin");
 const com = @import("common");
 const Symbol = com.Symbol;
 const TypeWelt = @import("typewelt.zig");
@@ -107,16 +108,21 @@ pub const Basic = enum {
     // collections
     expr,
 
+    var DEFINED: bool = false;
     var types: [std.enums.values(Self).len]TypeId = undefined;
 
     /// after prelude is initialized, this allows constant access for basic
     /// types
     pub fn get(self: Self) TypeId {
+        if (builtin.mode == .Debug) {
+            std.debug.assert(DEFINED);
+        }
+
         return types[@enumToInt(self)];
     }
 
     /// if a name isn't provided, this type won't be defined
-    fn getName(self: Self) ?[]const u8 {
+    fn getName(self: Self) []const u8 {
         return switch (self) {
             // title case
             inline .any,
@@ -151,12 +157,12 @@ pub const Basic = enum {
     }
 
     /// used to define types exhaustively on prelude generation
-    fn identify(self: Self, env: *Env) Error!TypeId {
+    fn getType(self: Self, env: *Env) Error!TypeId {
         return switch (self) {
             .type => try env.identify(.ty),
             .compiler_int => try numericType(env, .int, null),
             .compiler_float => try numericType(env, .float, null),
-            .expr => try env.tw.convertZigType(env.ally, ExprTemplate),
+            .expr => try env.identifyZigType(ExprTemplate),
 
             inline .any,
             .unit,
@@ -193,12 +199,15 @@ pub const Basic = enum {
 
     fn defineAll(env: *Env) Error!void {
         for (std.enums.values(Self)) |val| {
-            const ty = try val.identify(env);
+            const ty = try val.getType(env);
             types[@enumToInt(val)] = ty;
 
-            if (val.getName()) |name| {
-                _ = try env.defType(Env.ROOT, Symbol.init(name), ty);
-            }
+            const name = Symbol.init(val.getName());
+            _ = try env.defType(Env.ROOT, name, ty);
+        }
+
+        if (builtin.mode == .Debug) {
+            Self.DEFINED = true;
         }
     }
 };
