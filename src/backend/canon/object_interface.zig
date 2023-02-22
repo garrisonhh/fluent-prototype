@@ -13,9 +13,12 @@ const TypeId = canon.TypeId;
 const Object = canon.Object;
 const Value = canon.Value;
 
+const INDENT = 2;
+
 const IField = union(enum) {
     const Self = @This();
 
+    unit,
     value: type,
     /// holds subtype
     slice: type,
@@ -24,6 +27,7 @@ const IField = union(enum) {
 
     fn Into(comptime self: Self) type {
         return switch (self) {
+            .unit => void,
             .value => |T| T,
             .slice => |T| SliceWrapper(T),
             .coll => |I| Wrapper(I),
@@ -105,8 +109,6 @@ fn CollInterface(
         };
 
         fn dumpR(writer: anytype, level: usize) @TypeOf(writer).Error!void {
-            const INDENT = 2;
-
             try writer.print("{s} interface {{\n", .{@tagName(itype)});
             inline for (fields) |ifield, i| {
                 try writer.writeByteNTimes(' ', (level + 1) * INDENT);
@@ -115,9 +117,10 @@ fn CollInterface(
                 try writer.print("{s}: ", .{name});
 
                 switch (ifield) {
+                    .unit => try writer.writeAll("unit\n"),
                     .value => |T| try writer.print("{}\n", .{T}),
-                    .coll => |T| try T.dumpR(writer, level + 1),
-                    .slice => @compileError("TODO dump slice wrapper"),
+                    .coll => |T| try genInterface(T).dumpR(writer, level + 1),
+                    .slice => |T| try SliceWrapper(T).dumpR(writer, level + 1),
                 }
             }
             try writer.writeByteNTimes(' ', level * INDENT);
@@ -161,7 +164,8 @@ fn genTag(comptime Template: type) type {
 
 fn genField(comptime field_type: type) IField {
     return switch (field_type) {
-        void,
+        void => .unit,
+
         bool,
         u8,
         u16,
@@ -228,35 +232,54 @@ fn SliceWrapper(comptime T: type) type {
 
         const Elem = genField(T).Into();
 
-        slice: Struct,
+        st: Struct,
 
         fn of(base: *anyopaque, env: *Env) Self {
-            return Self{ .slice = Struct.of(base, env) };
+            return Self{ .st = Struct.of(base, env) };
         }
 
         pub fn alloc(self: Self, length: usize) Allocator.Error!void {
-            const data = try self.slice.env.ally.alloc(T, length);
-            self.slice.set(.ptr, data.ptr);
-            self.slice.set(.len, data.len);
+            const ally = self.st.env.ally;
+            const data = try ally.alloc(T, length);
+            self.st.set(.ptr, data.ptr);
+            self.st.set(.len, data.len);
         }
 
         pub fn free(self: Self) void {
-            const slice = self.slice.get(.ptr)[0..self.len()];
-            self.slice.env.ally.free(slice);
+            const ally = self.st.env.ally;
+            ally.free(self.slice());
+        }
+
+        pub fn slice(self: Self) []T {
+            return self.st.get(.ptr)[0..self.len()];
+        }
+
+        pub fn copy(self: Self, src: []const T) void {
+            std.mem.copy(T, self.slice(), src);
+        }
+
+        pub fn dupe(self: Self, src: []const T) Allocator.Error!void {
+            try self.alloc(src.len);
+            self.copy(src);
         }
 
         pub fn len(self: Self) usize {
-            return self.slice.get(.len);
+            return self.st.get(.len);
         }
 
         /// index into slice
         pub fn get(self: Self, index: usize) Elem {
-            return self.slice.get(.ptr)[index];
+            return self.st.get(.ptr)[index];
         }
 
         /// get index of slice
         pub fn set(self: Self, index: usize, value: T) void {
-            self.slice.get(.ptr)[index] = value;
+            self.st.get(.ptr)[index] = value;
+        }
+
+        fn dumpR(writer: anytype, level: usize) !void {
+            try writer.writeAll("(slice) ");
+            try Struct.I.dumpR(writer, level);
         }
     };
 }
@@ -266,6 +289,16 @@ pub fn Wrapper(comptime Template: type) type {
         const Self = @This();
 
         pub const I = genInterface(Template);
+
+        pub fn TemplateField(comptime tag: I.Tag) type {
+            inline for (std.meta.fields(Template)) |field| {
+                if (std.mem.eql(u8, field.name, @tagName(tag))) {
+                    return field.field_type;
+                }
+            } else {
+                unreachable;
+            }
+        }
 
         base: *anyopaque,
         env: *Env,
@@ -350,6 +383,8 @@ pub fn Wrapper(comptime Template: type) type {
         }
 
         fn getTagPtr(self: Self) *I.Tag {
+            std.debug.assert(I.itype == .variant);
+
             const raw_ptr = self.getFieldPtrIndexed(0);
             const aligned_ptr = @alignCast(@alignOf(I.Tag), raw_ptr);
             return @ptrCast(*I.Tag, aligned_ptr);
@@ -358,19 +393,28 @@ pub fn Wrapper(comptime Template: type) type {
         /// get a pointer to a field value
         pub fn getPtr(self: Self, comptime tag: I.Tag) *I.Value(tag) {
             const V = I.Value(tag);
+            const aln = @alignOf(V);
+
+            if (builtin.mode == .Debug and aln == 0) {
+                @compileError(comptime std.fmt.comptimePrint(
+                    "attempted to get a pointer to {}",
+                    .{V},
+                ));
+            }
 
             const raw_ptr = self.getFieldPtr(tag);
-            const aligned = @alignCast(@alignOf(V), raw_ptr);
+            const aligned = @alignCast(aln, raw_ptr);
             return @ptrCast(*V, aligned);
         }
 
         /// get a field value or interface
         pub fn get(self: Self, comptime tag: I.Tag) I.field(tag).Into() {
             if (I.itype == .variant) {
-                @compileError("use into() to observe a variant");
+                std.debug.assert(tag == self.getTagPtr().*);
             }
 
             return switch (I.field(tag)) {
+                .unit => {},
                 .value => self.getPtr(tag).*,
                 .slice => |T| SliceWrapper(T).of(
                     self.getFieldPtr(tag),
@@ -399,7 +443,7 @@ pub fn Wrapper(comptime Template: type) type {
             };
         }
 
-        /// get all of the fields of a
+        /// get all of the fields of a wrapped value
         pub fn into(self: Self) I.Into {
             switch (I.itype) {
                 .@"struct" => {
@@ -414,28 +458,50 @@ pub fn Wrapper(comptime Template: type) type {
                     const rt_tag = self.getTagPtr().*;
                     switch (rt_tag) {
                         inline else => |tag| {
-                            return @unionInit(
-                                I.Into,
-                                @tagName(tag),
-                                self.getPtr(tag).*,
-                            );
+                            const name = @tagName(tag);
+                            return @unionInit(I.Into, name, self.get(tag));
                         },
                     }
                 },
             }
         }
 
+        /// for variants, set the tag
+        pub fn setVarTag(self: Self, tag: I.Tag) void {
+            self.getTagPtr().* = tag;
+        }
+
+        /// sets the var tag and then returns the value. this is super useful
+        /// for initializing variant types.
+        pub fn setInto(self: Self, comptime tag: I.Tag) I.field(tag).Into() {
+            self.setVarTag(tag);
+            return self.get(tag);
+        }
+
+        /// set a value based on the templated value. if this is a variant, also
+        /// set the variant's tag.
+        ///
+        /// this copies nested data for nested fields.
         pub fn set(
             self: Self,
             comptime tag: I.Tag,
-            val: I.Value(tag),
+            val: TemplateField(tag),
         ) void {
             // tag must be set for variants
             if (I.itype == .variant) {
-                self.getTagPtr().* = tag;
+                self.setVarTag(tag);
             }
 
-            self.getPtr(tag).* = val;
+            switch (I.field(tag)) {
+                .unit => {},
+                .value => self.getPtr(tag).* = val,
+                .slice => {
+                    const slice = self.get(tag);
+                    slice.st.set(.ptr, val.ptr);
+                    slice.st.set(.len, val.len);
+                },
+                .coll => @compileError("TODO wrapper.set for collections"),
+            }
         }
 
         pub fn render(

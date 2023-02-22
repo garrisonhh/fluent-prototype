@@ -161,6 +161,12 @@ pub fn identifyZigType(
                     .bits = meta.bits,
                 },
             },
+            .Array => |meta| Type{
+                .array = Type.Array{
+                    .size = meta.len,
+                    .of = try self.identifyZigType(ally, meta.child),
+                },
+            },
             .Pointer => |meta| Type{
                 .ptr = Type.Pointer{
                     .kind = switch (meta.size) {

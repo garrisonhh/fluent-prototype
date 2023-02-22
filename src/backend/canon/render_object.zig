@@ -8,12 +8,15 @@ const canon = @import("../canon.zig");
 const Object = canon.Object;
 const Type = canon.Type;
 const TypeId = canon.TypeId;
+const Basic = canon.Basic;
 
 const Error = Object.InitError;
 
 const LIT_STY = kz.Style{ .fg = .magenta };
+const STR_STY = kz.Style{ .fg = .green };
 const SYNTAX_STY = kz.Style{ .fg = .blue };
 const IDENT_STY = kz.Style{ .fg = .red };
+
 const INDENT = 2;
 
 fn renderField(
@@ -62,6 +65,24 @@ fn renderSlice(
 
     const slice_ptr = @intToPtr([*]const u8, slice_addr);
     const slice_len = canon.to(obj.val.buf[len_offset .. len_offset + 8]);
+
+    // strings get special behavior
+    str: {
+        // must be []u8
+        if (!elem_ty.eql(Basic.u8.get())) break :str;
+
+        // all characters must be printable
+        const str = slice_ptr[0..slice_len];
+        for (str) |ch| {
+            if (!std.ascii.isPrint(ch)) break :str;
+        }
+
+        // this is an acceptable string
+        const escaped = try com.stringEscape(env.ally, str);
+        defer env.ally.free(escaped);
+
+        return try ctx.print(STR_STY, "\"{s}\"", .{escaped});
+    }
 
     // render each element
     var elems = std.ArrayList(kz.Ref).init(env.ally);

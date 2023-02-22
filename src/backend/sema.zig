@@ -52,6 +52,7 @@ fn expectError(
     return try err(ally, loc, fmt, .{ exp_text, found_text });
 }
 
+/// numbers become their fluent counterparts
 fn analyzeNumber(
     env: *Env,
     sexpr: SExpr,
@@ -77,6 +78,27 @@ fn analyzeNumber(
     return try coerce(env, expr, outward);
 }
 
+/// strings become arrays of bytes
+fn analyzeString(
+    env: *Env,
+    sexpr: SExpr,
+    outward: TypeId,
+) Error!Result {
+    const string = sexpr.data.string.str;
+
+    const ty = try env.identify(Type{
+        .array = .{ .size = string.len, .of = Basic.u8.get() },
+    });
+
+    const expr = try Expr.init(env);
+    expr.set(.type, ty);
+
+    const data = expr.get(.data);
+    try data.setInto(.string).dupe(string);
+
+    return try coerce(env, expr, outward);
+}
+
 fn analyzeExpr(
     env: *Env,
     scope: Name,
@@ -87,6 +109,7 @@ fn analyzeExpr(
 
     return switch (sexpr.data) {
         .number => analyzeNumber(env, sexpr, outward),
+        .string => analyzeString(env, sexpr, outward),
         else => |tag| std.debug.panic("TODO analyze {}", .{tag}),
     };
 }
