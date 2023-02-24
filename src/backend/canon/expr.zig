@@ -18,7 +18,7 @@ pub const ExprTemplate = struct {
 /// Fluent's AST represented as a Fluent data structure
 pub const Expr = Object.Wrapper(ExprTemplate);
 
-test "expr-usage" {
+test "exprs" {
     const std = @import("std");
     const expect = std.testing.expect;
     const prelude = @import("prelude.zig");
@@ -36,76 +36,88 @@ test "expr-usage" {
 
     try Expr.I.dump(writer);
 
-    const expr = try Expr.init(&env);
-    defer expr.deinit();
-
     // unit
-    expr.set(.type, Basic.unit.get());
-    expr.get(.data).set(.unit, {});
-
     {
+        const expr = try Expr.init(&env);
+        defer expr.deinit();
+
+        expr.set(.type, Basic.unit.get());
+        expr.get(.data).set(.unit, {});
+
         const data = expr.get(.data).into();
         try expect(data == .unit);
         try expect(data.unit == {});
+
+        try writer.writeAll("\n[unit]\n");
+        try kz.display(env.ally, {}, expr, writer);
     }
 
-    try writer.writeAll("\n[unit]\n");
-    try kz.display(env.ally, {}, expr, writer);
-
     // bool
-    expr.set(.type, Basic.bool.get());
-    expr.get(.data).set(.bool, true);
-
     {
+        const expr = try Expr.init(&env);
+        defer expr.deinit();
+
+        expr.set(.type, Basic.bool.get());
+        expr.get(.data).set(.bool, true);
+
         const data = expr.get(.data).into();
         try expect(data == .bool);
         try expect(data.bool == true);
+
+        try writer.writeAll("\n[bool]\n");
+        try kz.display(env.ally, {}, expr, writer);
     }
 
-    try writer.writeAll("\n[bool]\n");
-    try kz.display(env.ally, {}, expr, writer);
-
     // uint
-    expr.set(.type, Basic.u32.get());
-    expr.get(.data).set(.uint, 32);
-
     {
+        const expr = try Expr.init(&env);
+        defer expr.deinit();
+
+        expr.set(.type, Basic.u32.get());
+        expr.get(.data).set(.uint, 32);
+
         const data = expr.get(.data).into();
         try expect(data == .uint);
         try expect(data.uint == 32);
+
+        try writer.writeAll("\n[u32]\n");
+        try kz.display(env.ally, {}, expr, writer);
     }
 
-    try writer.writeAll("\n[u32]\n");
-    try kz.display(env.ally, {}, expr, writer);
-
     // int
-    expr.set(.type, Basic.i8.get());
-    expr.get(.data).set(.int, -32);
-
     {
+        const expr = try Expr.init(&env);
+        defer expr.deinit();
+
+        expr.set(.type, Basic.i8.get());
+        expr.get(.data).set(.int, -32);
+
         const data = expr.get(.data).into();
         try expect(data == .int);
         try expect(data.int == -32);
+
+        try writer.writeAll("\n[i8]\n");
+        try kz.display(env.ally, {}, expr, writer);
     }
 
-    try writer.writeAll("\n[i8]\n");
-    try kz.display(env.ally, {}, expr, writer);
-
     // string
-    const str = "garrison";
-
-    expr.set(.type, try env.identifyZigType([str.len]u8));
-    try expr.get(.data).setInto(.string).dupe(str);
-    defer expr.get(.data).get(.string).free();
-
     {
+        const expr = try Expr.init(&env);
+        defer expr.deinit();
+
+        const str = "hi, my name is garrison";
+
+        expr.set(.type, try env.identifyZigType([str.len]u8));
+        try expr.get(.data).setInto(.string).dupe(str);
+        defer expr.get(.data).get(.string).free();
+
         const data = expr.get(.data).into();
         try expect(data == .string);
         try expect(std.mem.eql(u8, data.string.slice(), str));
-    }
 
-    try writer.writeAll("\n[string]\n");
-    try kz.display(env.ally, {}, expr, writer);
+        try writer.writeAll("\n[string]\n");
+        try kz.display(env.ally, {}, expr, writer);
+    }
 
     try writer.writeByte('\n');
 }
