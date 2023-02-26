@@ -76,7 +76,7 @@ pub fn stringEscape(ally: Allocator, str: []const u8) Allocator.Error![]u8 {
             '\'' => try buf.appendSlice("\\\'"),
             '\"' => try buf.appendSlice("\\\""),
             else => {
-                if (ch > 0x20) {
+                if (ch >= 0x20) {
                     try buf.append(ch);
                 } else {
                     try buf.append('\\');

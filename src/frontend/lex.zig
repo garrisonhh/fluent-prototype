@@ -37,11 +37,12 @@ const CharClass = enum {
     comment,
     whitespace,
     newline,
+    dquote,
 };
 
 const Lexer = Stream(u8);
 
-const Error = Allocator.Error || error{InvalidCharacter};
+const Error = Allocator.Error || error{ InvalidCharacter, UnendingString };
 
 fn classify(ch: u8) error{InvalidCharacter}!CharClass {
     return switch (ch) {
@@ -49,11 +50,11 @@ fn classify(ch: u8) error{InvalidCharacter}!CharClass {
         ' ' => .whitespace,
         '\n' => .newline,
         '#' => .comment,
+        '"' => .dquote,
         // essentially alphabetical characters and punctuation
         'a'...'z',
         'A'...'Z',
         '!',
-        '"',
         '$'...'/',
         ':'...'@',
         '['...'`',
@@ -171,6 +172,29 @@ fn lexWords(
     try tokens.append(lexicalToken(lexer, lengthen(loc, length)));
 }
 
+fn lexString(lexer: *Lexer, file: FileRef) Error!Token {
+    lexer.eat();
+
+    const start = here(lexer.*, file, 0);
+
+    var escaped: bool = false;
+    while (true) {
+        const ch = lexer.peek() orelse {
+            return Error.UnendingString;
+        };
+
+        if (ch == '"' and !escaped) {
+            const stop = here(lexer.*, file, 0);
+            lexer.eat();
+
+            return Token.of(.string, start.span(stop));
+        }
+
+        lexer.eat();
+        escaped = ch == '\\';
+    }
+}
+
 fn lex(
     lexer: *Lexer,
     tokens: *std.ArrayList(Token),
@@ -181,6 +205,7 @@ fn lex(
         switch (try classify(ch)) {
             .whitespace => lexer.eat(),
             .digit => try tokens.append(lexNumber(lexer, loc)),
+            .dquote => try tokens.append(try lexString(lexer, file)),
             .lexical => try lexWords(lexer, tokens, loc),
             .newline => {
                 // insert a separator on a newline followed by an unindented
@@ -225,6 +250,15 @@ pub fn tokenize(
                 .@"error",
                 here(lexer, file, 0),
                 "invalid character",
+                .{},
+            ));
+        },
+        Error.UnendingString => {
+            return Result.err(try Message.print(
+                ally,
+                .@"error",
+                here(lexer, file, 0),
+                "unfinished string at EOF",
                 .{},
             ));
         },

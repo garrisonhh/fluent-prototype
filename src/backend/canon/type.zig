@@ -4,6 +4,7 @@ const Wyhash = std.hash.Wyhash;
 const kz = @import("kritzler");
 const com = @import("common");
 const Name = com.Name;
+const Symbol = com.Symbol;
 const TypeWelt = @import("typewelt.zig");
 const TypeId = TypeWelt.TypeId;
 const Repr = @import("repr.zig").Repr;
@@ -13,6 +14,11 @@ pub const Type = union(enum) {
 
     pub const Tag = std.meta.Tag(Self);
     pub const Set = std.AutoHashMapUnmanaged(TypeId, void);
+
+    pub const Field = struct {
+        name: Symbol,
+        of: TypeId,
+    };
 
     pub const Number = struct {
         // number literals don't always have a bit count
@@ -36,18 +42,18 @@ pub const Type = union(enum) {
     };
 
     pub const Func = struct {
-        takes: []TypeId,
+        // TODO add context
+        takes: []const TypeId,
         returns: TypeId,
     };
 
     // unique
     unit,
     hole,
-    namespace,
     builtin,
 
     // dynamic time
-    symbol,
+    name,
     ty,
 
     // generic
@@ -57,12 +63,13 @@ pub const Type = union(enum) {
     // concrete (exist at static runtime)
     @"bool",
     number: Number,
-    atom: Name, // this is not owned by the type
 
     // structured
     array: Array,
     ptr: Pointer,
-    tuple: []TypeId,
+    tuple: []const TypeId,
+    @"struct": []const Field,
+    variant: []const Field,
 
     func: Func,
 
@@ -84,13 +91,23 @@ pub const Type = union(enum) {
 
     pub fn deinit(self: *Self, ally: Allocator) void {
         switch (self.*) {
-            // zig fmt: off
-            .unit, .hole, .namespace, .builtin, .symbol, .any, .ty, .number,
-            .array, .@"bool", .@"ptr", .atom,
-            // zig fmt: on
+            .unit,
+            .hole,
+            .builtin,
+            .name,
+            .any,
+            .ty,
+            .number,
+            .array,
+            .@"bool",
+            .@"ptr",
             => {},
             .set => |*set| set.deinit(ally),
             .tuple => |tup| ally.free(tup),
+            .@"struct", .variant => |fields| {
+                for (fields) |field| ally.free(field.name.str);
+                ally.free(fields);
+            },
             .func => |func| ally.free(func.takes),
         }
     }
@@ -112,39 +129,33 @@ pub const Type = union(enum) {
     }
 
     pub fn hash(self: Self, wyhash: *Wyhash) void {
-        const asBytes = std.mem.asBytes;
-        wyhash.update(asBytes(&std.meta.activeTag(self)));
+        const b = std.mem.asBytes;
+        wyhash.update(b(&@as(Tag, self)));
 
         switch (self) {
-            // zig fmt: off
-            .unit, .symbol, .hole, .any, .ty, .@"bool", .namespace, .builtin
-            // zig fmt: on
-            => {},
-            .set => {
-                // NOTE if there is a serious issue here, figure out if there is
-                // a way to hash this in constant space. for now I'm just
-                // throwing my hands up and allowing .eql() to handle the work
-                // of figuring out if two sets match.
-                // NOTE after some thought I think the easiest solution is just
-                // using an ordered set
-            },
-            .atom => |sym| wyhash.update(asBytes(&sym.hash)),
-            .number => |num| {
-                wyhash.update(asBytes(&num.layout));
-                wyhash.update(asBytes(&num.bits));
-            },
-            .array => |arr| {
-                wyhash.update(asBytes(&arr.size));
-                wyhash.update(asBytes(&arr.of));
-            },
-            .ptr => |ptr| {
-                wyhash.update(asBytes(&ptr.kind));
-                wyhash.update(asBytes(&ptr.to));
-            },
-            .tuple => |tup| wyhash.update(asBytes(&tup)),
-            .func => |func| {
-                wyhash.update(asBytes(&func.takes));
-                wyhash.update(asBytes(&func.returns));
+            // NOTE using an sorted ordered set datatype of some kind would
+            // allow hasing here, but idk if it's worth it at this moment
+            .set => {},
+
+            inline .unit,
+            .hole,
+            .builtin,
+            .name,
+            .any,
+            .@"bool",
+            .ty,
+            .number,
+            .array,
+            .ptr,
+            .tuple,
+            .func,
+            => |data| std.hash.autoHashStrat(wyhash, data, .DeepRecursive),
+
+            .@"struct", .variant => |fields| {
+                for (fields) |field| {
+                    wyhash.update(b(&field.name.hash));
+                    wyhash.update(b(&field.of));
+                }
             },
         }
     }
@@ -166,10 +177,7 @@ pub const Type = union(enum) {
         if (@as(Tag, self) != @as(Tag, ty)) return false;
 
         return switch (self) {
-            // zig fmt: off
-            .unit, .symbol, .hole, .any, .ty, .@"bool", .namespace, .builtin,
-            // zig fmt: on
-            => true,
+            .unit, .name, .hole, .any, .ty, .@"bool", .builtin => true,
             .set => |set| set: {
                 if (set.count() != ty.set.count()) {
                     break :set false;
@@ -182,30 +190,63 @@ pub const Type = union(enum) {
 
                 break :set true;
             },
-            .atom => |sym| sym.eql(ty.atom),
             .ptr => |ptr| ptr.kind == ty.ptr.kind and ptr.to.eql(ty.ptr.to),
             .tuple => |tup| idsEql(tup, ty.tuple),
-            // zig fmt: off
-            .number => |num| num.layout == ty.number.layout
-                         and num.bits == ty.number.bits,
-            .array => |arr| arr.size == ty.array.size
-                        and arr.of.eql(ty.array.of),
-            .func => |func| idsEql(func.takes, ty.func.takes)
-                        and func.returns.eql(ty.func.returns),
-            // zig fmt: on
+            inline .@"struct", .variant => |fields, tag| coll: {
+                const ty_fields = @field(ty, @tagName(tag));
+
+                if (fields.len != ty_fields.len) {
+                    break :coll false;
+                }
+
+                for (fields) |field, i| {
+                    const other = ty_fields[i];
+
+                    if (!field.name.eql(other.name) or
+                        !field.of.eql(other.of))
+                    {
+                        break :coll false;
+                    }
+                }
+
+                break :coll true;
+            },
+            .number => |num| num.layout == ty.number.layout and
+                num.bits == ty.number.bits,
+            .array => |arr| arr.size == ty.array.size and
+                arr.of.eql(ty.array.of),
+            .func => |func| idsEql(func.takes, ty.func.takes) and
+                func.returns.eql(ty.func.returns),
         };
     }
 
     pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch (self) {
-            // zig fmt: off
-            .unit, .symbol, .hole, .namespace, .builtin, .any, .number, .ty,
-            .array, .@"bool", .ptr,
-            // zig fmt: on
+            .unit,
+            .name,
+            .hole,
+            .builtin,
+            .any,
+            .number,
+            .ty,
+            .array,
+            .@"bool",
+            .ptr,
             => self,
+
             .set => |set| Self{ .set = try set.clone(ally) },
-            .atom => |name| Self{ .atom = name },
             .tuple => |tup| Self{ .tuple = try ally.dupe(TypeId, tup) },
+            inline .@"struct", .variant => |fields, tag| coll: {
+                const cloned = try ally.alloc(Field, fields.len);
+                for (fields) |field, i| {
+                    cloned[i] = Field{
+                        .name = try field.name.clone(ally),
+                        .of = field.of,
+                    };
+                }
+
+                break :coll @unionInit(Self, @tagName(tag), cloned);
+            },
             .func => |func| Self{
                 .func = Func{
                     .takes = try ally.dupe(TypeId, func.takes),
@@ -341,7 +382,7 @@ pub const Type = union(enum) {
     pub fn classifyRuntime(self: Self, typewelt: TypeWelt) RuntimeClass {
         return switch (self) {
             .any, .set, .hole => .analysis,
-            .ty, .symbol, .namespace => .dynamic,
+            .ty, .name, .namespace => .dynamic,
             .unit, .atom, .@"bool", .builtin => .static,
             .number => |num| if (num.bits != null) .static else .dynamic,
             .array => |arr| typewelt.get(arr.of).classifyRuntime(typewelt),

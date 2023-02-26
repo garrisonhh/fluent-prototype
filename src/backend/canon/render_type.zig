@@ -5,7 +5,7 @@ const Type = @import("type.zig").Type;
 const TypeWelt = @import("typewelt.zig");
 const TypeId = TypeWelt.TypeId;
 
-const sty = kz.Style{ .fg = .blue };
+const TYPE_STY = kz.Style{ .fg = .blue };
 
 fn renderTypeArray(
     ctx: *kz.Context,
@@ -31,6 +31,18 @@ fn renderTypeArray(
     }, .right, .{});
 }
 
+pub fn renderTypeId(
+    self: TypeId,
+    ctx: *kz.Context,
+    tw: TypeWelt,
+) Allocator.Error!kz.Ref {
+    if (tw.getName(self)) |name| {
+        return ctx.print(TYPE_STY, "{s}", .{name});
+    } else {
+        return try tw.get(self).render(ctx, tw);
+    }
+}
+
 pub fn renderType(
     self: Type,
     ctx: *kz.Context,
@@ -42,58 +54,42 @@ pub fn renderType(
             const name = @tagName(self);
             const first = std.ascii.toUpper(name[0]);
 
-            break :title try ctx.print(sty, "{c}{s}", .{ first, name[1..] });
+            break :title try ctx.print(
+                TYPE_STY,
+                "{c}{s}",
+                .{ first, name[1..] },
+            );
         },
 
         // lowercase
         .unit,
         .builtin,
-        .namespace,
         .bool,
         .hole,
-        .symbol,
-        => try ctx.print(sty, "{s}", .{@tagName(self)}),
-        .ty => try ctx.print(sty, "type", .{}),
-        .atom => |name| atom: {
-            const comma = try ctx.print(.{}, ", ", .{});
-
-            var tex = try ctx.print(sty, "~", .{});
-            for (name.syms) |sym, i| {
-                if (i > 0) {
-                    tex = try ctx.slap(tex, try ctx.clone(comma), .right, .{});
-                }
-
-                tex = try ctx.slap(
-                    tex,
-                    try ctx.print(sty, "{}", .{sym}),
-                    .right,
-                    .{},
-                );
-            }
-
-            break :atom tex;
-        },
+        .name,
+        => try ctx.print(TYPE_STY, "{s}", .{@tagName(self)}),
+        .ty => try ctx.print(TYPE_STY, "type", .{}),
 
         .number => |num| num: {
             if (num.bits) |bits| {
                 break :num try ctx.slap(
-                    try ctx.print(sty, "{c}", .{@tagName(num.layout)[0]}),
-                    try ctx.print(sty, "{d}", .{bits}),
+                    try ctx.print(TYPE_STY, "{c}", .{@tagName(num.layout)[0]}),
+                    try ctx.print(TYPE_STY, "{d}", .{bits}),
                     .right,
                     .{},
                 );
             }
 
             break :num try ctx.print(
-                sty,
-                "compiler-{s}",
+                TYPE_STY,
+                "compiler_{s}",
                 .{@tagName(num.layout)},
             );
         },
         .array => |arr| try ctx.stack(
             &.{
                 try ctx.print(.{}, "[", .{}),
-                try ctx.print(sty, "{d}", .{arr.size}),
+                try ctx.print(TYPE_STY, "{d}", .{arr.size}),
                 try ctx.print(.{}, "]", .{}),
                 try arr.of.render(ctx, tw),
             },
@@ -111,7 +107,7 @@ pub fn renderType(
             }
 
             break :set try ctx.slap(
-                try ctx.print(sty, "set", .{}),
+                try ctx.print(TYPE_STY, "set", .{}),
                 try renderTypeArray(ctx, tw, list.items),
                 .right,
                 .{ .space = 1 },
@@ -126,16 +122,50 @@ pub fn renderType(
                 try list.append(try id.render(ctx, tw));
             }
 
-            break :tup try ctx.stack(&.{
-                try ctx.print(.{}, "(", .{}),
-                try ctx.sep(
-                    try ctx.print(.{}, ", ", .{}),
-                    list.items,
+            break :tup try ctx.stack(
+                &.{
+                    try ctx.print(.{}, "(", .{}),
+                    try ctx.sep(
+                        try ctx.print(.{}, ", ", .{}),
+                        list.items,
+                        .right,
+                        .{},
+                    ),
+                    try ctx.print(.{}, ")", .{}),
+                },
+                .right,
+                .{},
+            );
+        },
+        .@"struct", .variant => |fields| coll: {
+            const cnt = fields.len;
+            var list = try std.ArrayList(kz.Ref).initCapacity(ctx.ally, cnt);
+            defer list.deinit();
+
+            for (fields) |field| {
+                try list.append(try ctx.slap(
+                    try ctx.print(.{}, "{}: ", .{field.name}),
+                    try field.of.render(ctx, tw),
                     .right,
                     .{},
-                ),
-                try ctx.print(.{}, ")", .{}),
-            }, .right, .{});
+                ));
+            }
+
+            break :coll try ctx.stack(
+                &.{
+                    try ctx.print(TYPE_STY, "{s}", .{@tagName(self)}),
+                    try ctx.print(.{}, " {{", .{}),
+                    try ctx.sep(
+                        try ctx.print(.{}, ", ", .{}),
+                        list.items,
+                        .right,
+                        .{},
+                    ),
+                    try ctx.print(.{}, "}}", .{}),
+                },
+                .right,
+                .{},
+            );
         },
         .func => |func| try ctx.stack(&.{
             try renderTypeArray(ctx, tw, func.takes),

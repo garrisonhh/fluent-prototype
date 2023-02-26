@@ -1,9 +1,4 @@
 pub const Env = @import("backend/env.zig");
-pub const TExpr = @import("backend/texpr.zig");
 pub const SExpr = @import("backend/sexpr.zig");
 pub const eval = @import("backend/eval.zig");
-const canon = @import("backend/canon.zig");
-pub const generatePrelude = canon.generatePrelude;
-pub const Typet = canon.Type;
-pub const TypeId = canon.TypeId;
-pub const TypeWelt = canon.TypeWelt;
+pub usingnamespace @import("backend/canon.zig");

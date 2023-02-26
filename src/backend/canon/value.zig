@@ -1,6 +1,6 @@
 //! value is the canonical low-level representation of a type-erased value. this
 //! is what SSA IR constants use, and the bytecode VM follows its layout rules
-//! in code generation.
+//! in code generation
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -8,15 +8,28 @@ const builtin = @import("builtin");
 
 const Self = @This();
 
-buf: []u8,
+pub const Alignment = 8;
+pub const Slice = []align(Alignment) u8;
 
-pub fn of(buf: []u8) Self {
+buf: Slice,
+
+pub fn of(buf: Slice) Self {
     return Self{ .buf = buf };
+}
+
+pub fn alloc(
+    ally: Allocator,
+    nbytes: usize,
+) Allocator.Error!Self {
+    return Self{ .buf = try ally.alignedAlloc(u8, Alignment, nbytes) };
 }
 
 /// allocates and dupes data to aligned ptr
 pub fn init(ally: Allocator, buf: []const u8) Allocator.Error!Self {
-    return Self.of(try ally.dupe(u8, buf));
+    const self = try Self.alloc(ally, buf.len);
+    std.mem.copy(u8, self.buf, buf);
+
+    return self;
 }
 
 pub fn deinit(self: Self, ally: Allocator) void {

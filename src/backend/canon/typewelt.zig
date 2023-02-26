@@ -21,16 +21,14 @@ const Type = @import("type.zig").Type;
 
 const Self = @This();
 
-pub const TypeId = packed struct {
+pub const TypeId = packed struct(u64) {
     index: usize,
 
     pub fn eql(self: @This(), id: @This()) bool {
         return self.index == id.index;
     }
 
-    pub fn render(self: @This(), ctx: *kz.Context, tw: Self) !kz.Ref {
-        return try tw.get(self).render(ctx, tw);
-    }
+    pub const render = @import("render_type.zig").renderTypeId;
 
     pub fn toString(
         self: @This(),
@@ -122,18 +120,95 @@ pub fn identify(
 ) Allocator.Error!TypeId {
     const res = try self.map.getOrPut(ally, &ty);
     if (!res.found_existing) {
-        // find id
-        const id = TypeId{ .index = self.types.items.len };
-
         // allocate for type and clone
         const cloned = try com.placeOn(ally, try ty.clone(ally));
 
         // store in internal data structures
         res.key_ptr.* = cloned;
-        res.value_ptr.* = id;
+        res.value_ptr.* = TypeId{ .index = self.types.items.len };
 
         try self.types.append(ally, cloned);
     }
 
     return res.value_ptr.*;
+}
+
+/// very useful for syncing object interfaces
+pub fn identifyZigType(
+    self: *Self,
+    ally: Allocator,
+    comptime T: type,
+) Allocator.Error!TypeId {
+    var ty: Type = switch (T) {
+        void => .unit,
+        bool => .bool,
+        TypeId => .ty,
+        comptime_int => Type{ .number = .{ .layout = .int, .bits = null } },
+        comptime_float => Type{ .number = .{ .layout = .float, .bits = null } },
+        else => switch (@typeInfo(T)) {
+            .Int => |meta| Type{
+                .number = Type.Number{
+                    .layout = switch (meta.signedness) {
+                        .unsigned => .uint,
+                        .signed => .int,
+                    },
+                    .bits = meta.bits,
+                },
+            },
+            .Float => |meta| Type{
+                .number = Type.Number{
+                    .layout = .float,
+                    .bits = meta.bits,
+                },
+            },
+            .Array => |meta| Type{
+                .array = Type.Array{
+                    .size = meta.len,
+                    .of = try self.identifyZigType(ally, meta.child),
+                },
+            },
+            .Pointer => |meta| Type{
+                .ptr = Type.Pointer{
+                    .kind = switch (meta.size) {
+                        .One => .single,
+                        .Many => .many,
+                        .Slice => .slice,
+                        .C => @compileError("fluent does not have C pointers"),
+                    },
+                    .to = try self.identifyZigType(ally, meta.child),
+                },
+            },
+            .Struct => |meta| st: {
+                const fields = try ally.alloc(Type.Field, meta.fields.len);
+                inline for (meta.fields) |field, i| {
+                    fields[i] = Type.Field{
+                        .name = com.Symbol.init(try ally.dupe(u8, field.name)),
+                        .of = try self.identifyZigType(ally, field.field_type),
+                    };
+                }
+
+                break :st Type{ .@"struct" = fields };
+            },
+            .Union => |meta| u: {
+                const fields = try ally.alloc(Type.Field, meta.fields.len);
+                inline for (meta.fields) |field, i| {
+                    std.debug.assert(!std.mem.eql(u8, field.name, "tag"));
+
+                    fields[i] = Type.Field{
+                        .name = com.Symbol.init(try ally.dupe(u8, field.name)),
+                        .of = try self.identifyZigType(ally, field.field_type),
+                    };
+                }
+
+                break :u Type{ .variant = fields };
+            },
+            else => @compileError(comptime std.fmt.comptimePrint(
+                "cannot convert {} to fluent type",
+                .{T},
+            )),
+        },
+    };
+    defer ty.deinit(ally);
+
+    return self.identify(ally, ty);
 }

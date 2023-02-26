@@ -12,7 +12,7 @@ const frontend = @import("frontend.zig");
 const translate = @import("translate.zig").translate;
 const backend = @import("backend.zig");
 const Env = backend.Env;
-const TExpr = backend.TExpr;
+const Expr = backend.Expr;
 const eval = backend.eval;
 
 /// loads a file and evaluate it
@@ -29,7 +29,7 @@ pub fn exec(
 
     // parse
     const parse_res = try frontend.parse(ally, proj, file, what);
-    const ast = parse_res.get() orelse return parse_res.cast(TExpr);
+    const ast = parse_res.get() orelse return parse_res.cast(Expr);
     defer ast.deinit(ally);
 
     if (com.options.log.parse) {
@@ -43,7 +43,7 @@ pub fn exec(
 
     // translate
     const trans_res = try translate(ally, proj, ast);
-    const sexpr = trans_res.get() orelse return trans_res.cast(TExpr);
+    const sexpr = trans_res.get() orelse return trans_res.cast(Expr);
     defer sexpr.deinit(ally);
 
     if (com.options.log.translate) {

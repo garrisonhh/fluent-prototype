@@ -1,10 +1,6 @@
 /// individual values that have special semantics that the compiler needs to
 /// understand during sema
-pub const Builtin = enum {
-    // this is a transient value that only exists during the first sema pass
-    // over defs in a namespace (a.k.a while the pie crust is baking)
-    pie_stone,
-
+pub const Builtin = enum(u64) {
     // pure syntax
     ns,
     def,
@@ -21,8 +17,6 @@ pub const Builtin = enum {
 
     // control flow
     lambda,
-    // TODO remove recur
-    recur,
     do,
     @"if",
 

@@ -36,14 +36,15 @@ fn execPrint(
     ref: FileRef,
     what: ParseType,
 ) !void {
+    const ally = env.ally;
     switch (try plumbing.exec(proj, env, ref, what)) {
-        .ok => |value| {
-            defer value.deinit(env.ally);
-            try kz.display(env.ally, env.*, value, stdout);
+        .ok => |expr| {
+            defer expr.deinit();
+            try kz.display(ally, {}, expr, stdout);
         },
         .err => |msg| {
-            defer msg.deinit(env.ally);
-            try kz.display(env.ally, proj, msg, stderr);
+            defer msg.deinit(ally);
+            try kz.display(ally, proj, msg, stderr);
         },
     }
 }
@@ -101,7 +102,17 @@ fn repl(env: *Env, proj: *Project) !void {
 
         try stdout.writeAll("[Reprs]\n");
         for (env.rw.map.items(.repr)) |repr| {
-            const tex = try repr.render(&ctx, env.rw);
+            const id = try env.rw.intern(env.ally, repr);
+
+            const tex = try ctx.slap(
+                try repr.render(&ctx, env.rw),
+                try ctx.print(.{}, "sz: {} aln: {}", .{
+                    try env.rw.sizeOf(id),
+                    try env.rw.alignOf(id),
+                }),
+                .right,
+                .{ .space = 1 },
+            );
             try ctx.write(tex, stdout);
         }
         try stdout.writeByte('\n');
@@ -200,8 +211,10 @@ pub fn main() !void {
     defer frontend.deinit(ally);
 
     // fluent env
-    ENV = try backend.generatePrelude(ally);
+    ENV = try Env.init(ally);
     defer ENV.deinit();
+
+    try backend.initPrelude(&ENV);
 
     PROJ = com.Project.init();
     defer PROJ.deinit(ENV.ally);
