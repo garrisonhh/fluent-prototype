@@ -94,7 +94,8 @@ fn analyzeString(
     expr.set(.type, ty);
 
     const data = expr.get(.data);
-    try data.setInto(.string).dupe(string);
+    const owned = try env.ally.dupe(u8, string);
+    data.setInto(.string).setInto(owned);
 
     return try coerce(env, expr, outward);
 }

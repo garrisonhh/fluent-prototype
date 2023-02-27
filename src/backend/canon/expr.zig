@@ -106,14 +106,15 @@ test "exprs" {
         defer expr.deinit();
 
         const str = "hi, my name is garrison";
+        const owned = try env.ally.dupe(u8, str);
+        defer env.ally.free(owned);
 
         expr.set(.type, try env.identifyZigType([str.len]u8));
-        try expr.get(.data).setInto(.string).dupe(str);
-        defer expr.get(.data).get(.string).free();
+        expr.get(.data).setInto(.string).setInto(owned);
 
         const data = expr.get(.data).into();
         try expect(data == .string);
-        try expect(std.mem.eql(u8, data.string.slice(), str));
+        try expect(std.mem.eql(u8, data.string.into(), str));
 
         try writer.writeAll("\n[string]\n");
         try kz.display(env.ally, {}, expr, writer);

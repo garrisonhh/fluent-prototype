@@ -226,11 +226,12 @@ fn SliceWrapper(comptime T: type) type {
         const Self = @This();
 
         const Struct = Wrapper(struct {
-            ptr: [*]T,
+            ptr: *anyopaque,
             len: u64,
         });
 
-        const Elem = genField(T).Into();
+        const ElemField = genField(T);
+        const Elem = ElemField.Into();
 
         st: Struct,
 
@@ -238,43 +239,66 @@ fn SliceWrapper(comptime T: type) type {
             return Self{ .st = Struct.of(base, env) };
         }
 
-        pub fn alloc(self: Self, length: usize) Allocator.Error!void {
-            const ally = self.st.env.ally;
-            const data = try ally.alloc(T, length);
-            self.st.set(.ptr, data.ptr);
-            self.st.set(.len, data.len);
+        pub fn sizeOf(self: Self) usize {
+            return self.st.sizeOf();
         }
 
-        pub fn free(self: Self) void {
-            const ally = self.st.env.ally;
-            ally.free(self.slice());
+        /// set the slice struct when I can't properly type it
+        pub fn rawSetInto(self: Self, sl_ptr: *anyopaque, sl_len: usize) void {
+            self.st.set(.ptr, sl_ptr);
+            self.st.set(.len, sl_len);
         }
 
-        pub fn slice(self: Self) []T {
-            return self.st.get(.ptr)[0..self.len()];
+        /// set the slice struct with proper type
+        pub fn setInto(self: Self, slice: []ElemField.value) void {
+            self.rawSetInto(slice.ptr, slice.len);
         }
 
-        pub fn copy(self: Self, src: []const T) void {
-            std.mem.copy(T, self.slice(), src);
-        }
-
-        pub fn dupe(self: Self, src: []const T) Allocator.Error!void {
-            try self.alloc(src.len);
-            self.copy(src);
+        /// as a slice of values
+        pub fn into(self: Self) []ElemField.value {
+            const raw_ptr = self.st.get(.ptr);
+            const aligned_ptr = @alignCast(@alignOf(ElemField.value), raw_ptr);
+            const ptr = @ptrCast([*]ElemField.value, aligned_ptr);
+            return ptr[0..self.len()];
         }
 
         pub fn len(self: Self) usize {
             return self.st.get(.len);
         }
 
-        /// index into slice
-        pub fn get(self: Self, index: usize) Elem {
-            return self.st.get(.ptr)[index];
+        pub fn getElemPtr(self: Self, index: usize) *anyopaque {
+            std.debug.assert(index < self.len());
+
+            const ptr = self.st.get(.ptr);
+            const elem_sz = switch (ElemField) {
+                .unit => 0,
+                .value => |V| @sizeOf(V),
+                .slice => |E| SliceWrapper(E).of(ptr, self.st.env).sizeOf(),
+                .coll => |I| Wrapper(I).of(ptr, self.st.env).sizeOf(),
+            };
+
+            const addr = @ptrToInt(ptr) + elem_sz * index;
+            return @intToPtr(*anyopaque, addr);
         }
 
-        /// get index of slice
-        pub fn set(self: Self, index: usize, value: T) void {
-            self.st.get(.ptr)[index] = value;
+        /// index into slice
+        pub fn get(self: Self, index: usize) Elem {
+            const ptr = self.getElemPtr(index);
+
+            return switch (ElemField) {
+                .unit => {},
+                .value => |V| p: {
+                    const aligned = @alignCast(@alignOf(V), ptr);
+                    break :p @ptrCast(*const V, aligned).*;
+                },
+                .slice => |E| SliceWrapper(E).of(ptr, self.st.env),
+                .coll => |I| Wrapper(I).of(ptr, self.st.env),
+            };
+        }
+
+        /// set a value, use into() and get() to modify collections and slics
+        pub fn set(self: Self, index: usize, value: ElemField.value) void {
+            self.into()[index] = value;
         }
 
         fn dumpR(writer: anytype, level: usize) !void {
@@ -365,6 +389,11 @@ pub fn Wrapper(comptime Template: type) type {
         pub fn clone(self: Self) Allocator.Error!Self {
             const obj = try self.unwrap().clone(self.env.ally);
             return Self.wrap(self.env, obj);
+        }
+
+        pub fn sizeOf(self: Self) usize {
+            // this would have errored out in init if it were to error
+            return self.env.sizeOf(self.ty) catch unreachable;
         }
 
         fn getFieldPtrIndexed(self: Self, tag_index: usize) *anyopaque {
@@ -625,13 +654,14 @@ test "interface-variant" {
     try kz.display(env.ally, {}, wrapped, writer);
 }
 
-test "interface-slice" {
+test "interface-value-slice" {
     const prelude = @import("prelude.zig");
 
     const writer = std.io.getStdErr().writer();
     try writer.writeByte('\n');
 
-    var env = try Env.init(std.testing.allocator);
+    const ally = std.testing.allocator;
+    var env = try Env.init(ally);
     defer env.deinit();
 
     try prelude.initPrelude(&env);
@@ -644,8 +674,8 @@ test "interface-slice" {
     defer wrapped.deinit();
 
     const slice = wrapped.get(.slice);
-    try slice.alloc(3);
-    defer slice.free();
+    slice.setInto(try ally.alloc(u32, 3));
+    defer ally.free(slice.into());
 
     try expect(slice.len() == 3);
 
@@ -656,6 +686,61 @@ test "interface-slice" {
     try expect(11 == slice.get(0));
     try expect(22 == slice.get(1));
     try expect(33 == slice.get(2));
+
+    try kz.display(env.ally, {}, wrapped, writer);
+}
+
+test "interface-coll-slice" {
+    const prelude = @import("prelude.zig");
+
+    const writer = std.io.getStdErr().writer();
+    try writer.writeByte('\n');
+
+    const ally = std.testing.allocator;
+    var env = try Env.init(ally);
+    defer env.deinit();
+
+    try prelude.initPrelude(&env);
+
+    const Test = struct {
+        a: u32,
+        b: bool,
+    };
+    const test_sz = try env.sizeOf(try env.identifyZigType(Test));
+
+    const S = Wrapper(struct {
+        slice: []Test,
+    });
+
+    const wrapped = try S.init(&env);
+    defer wrapped.deinit();
+
+    const slice = wrapped.get(.slice);
+    const mem = try ally.alloc(u8, test_sz * 3);
+    defer ally.free(mem);
+
+    slice.rawSetInto(mem.ptr, 3);
+
+    try expect(slice.len() == 3);
+
+    slice.get(0).set(.a, 11);
+    slice.get(0).set(.b, true);
+    slice.get(1).set(.a, 22);
+    slice.get(1).set(.b, false);
+    slice.get(2).set(.a, 33);
+    slice.get(2).set(.b, true);
+
+    const fst = slice.get(0);
+    try expect(11 == fst.get(.a));
+    try expect(true == fst.get(.b));
+
+    const snd = slice.get(1);
+    try expect(22 == snd.get(.a));
+    try expect(false == snd.get(.b));
+
+    const thd = slice.get(2);
+    try expect(33 == thd.get(.a));
+    try expect(true == thd.get(.b));
 
     try kz.display(env.ally, {}, wrapped, writer);
 }

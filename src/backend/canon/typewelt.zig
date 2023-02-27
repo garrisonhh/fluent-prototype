@@ -146,6 +146,7 @@ pub fn identifyZigType(
         comptime_int => Type{ .number = .{ .layout = .int, .bits = null } },
         comptime_float => Type{ .number = .{ .layout = .float, .bits = null } },
         else => switch (@typeInfo(T)) {
+            .Opaque => .unit,
             .Int => |meta| Type{
                 .number = Type.Number{
                     .layout = switch (meta.signedness) {
