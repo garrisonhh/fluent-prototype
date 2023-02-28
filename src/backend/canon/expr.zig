@@ -21,6 +21,7 @@ pub const Expr = Object.Wrapper(ExprTemplate);
 test "exprs" {
     const std = @import("std");
     const expect = std.testing.expect;
+    const expectEqual = std.testing.expectEqual;
     const prelude = @import("prelude.zig");
     const Basic = prelude.Basic;
     const Env = @import("../env.zig");
@@ -46,7 +47,7 @@ test "exprs" {
 
         const data = expr.get(.data).into();
         try expect(data == .unit);
-        try expect(data.unit == {});
+        try expectEqual({}, data.unit);
 
         try writer.writeAll("\n[unit]\n");
         try kz.display(env.ally, {}, expr, writer);
@@ -62,7 +63,7 @@ test "exprs" {
 
         const data = expr.get(.data).into();
         try expect(data == .bool);
-        try expect(data.bool == true);
+        try expectEqual(true, data.bool);
 
         try writer.writeAll("\n[bool]\n");
         try kz.display(env.ally, {}, expr, writer);
@@ -78,7 +79,7 @@ test "exprs" {
 
         const data = expr.get(.data).into();
         try expect(data == .uint);
-        try expect(data.uint == 32);
+        try expectEqual(@as(u64, 32), data.uint);
 
         try writer.writeAll("\n[u32]\n");
         try kz.display(env.ally, {}, expr, writer);
@@ -94,7 +95,7 @@ test "exprs" {
 
         const data = expr.get(.data).into();
         try expect(data == .int);
-        try expect(data.int == -32);
+        try expectEqual(@as(i64, -32), data.int);
 
         try writer.writeAll("\n[i8]\n");
         try kz.display(env.ally, {}, expr, writer);

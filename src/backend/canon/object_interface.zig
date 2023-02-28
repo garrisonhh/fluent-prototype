@@ -1,5 +1,5 @@
 const std = @import("std");
-const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
 const Allocator = std.mem.Allocator;
 const ZType = std.builtin.Type;
 const builtin = @import("builtin");
@@ -567,9 +567,9 @@ test "interface-struct" {
     wrapped.set(.y, 22);
     wrapped.set(.z, 33);
 
-    try expect(11 == wrapped.get(.x));
-    try expect(22 == wrapped.get(.y));
-    try expect(33 == wrapped.get(.z));
+    try expectEqual(@as(u32, 11), wrapped.get(.x));
+    try expectEqual(@as(u32, 22), wrapped.get(.y));
+    try expectEqual(@as(u32, 33), wrapped.get(.z));
 
     try kz.display(env.ally, {}, wrapped, writer);
 }
@@ -599,12 +599,12 @@ test "interface-nested-struct" {
     wrapped.get(.dir).set(.y, 55);
     wrapped.get(.dir).set(.z, 66);
 
-    try expect(11 == wrapped.get(.pos).get(.x));
-    try expect(22 == wrapped.get(.pos).get(.y));
-    try expect(33 == wrapped.get(.pos).get(.z));
-    try expect(44 == wrapped.get(.dir).get(.x));
-    try expect(55 == wrapped.get(.dir).get(.y));
-    try expect(66 == wrapped.get(.dir).get(.z));
+    try expectEqual(@as(u32, 11), wrapped.get(.pos).get(.x));
+    try expectEqual(@as(u32, 22), wrapped.get(.pos).get(.y));
+    try expectEqual(@as(u32, 33), wrapped.get(.pos).get(.z));
+    try expectEqual(@as(u32, 44), wrapped.get(.dir).get(.x));
+    try expectEqual(@as(u32, 55), wrapped.get(.dir).get(.y));
+    try expectEqual(@as(u32, 66), wrapped.get(.dir).get(.z));
 
     try kz.display(env.ally, {}, wrapped, writer);
 }
@@ -625,6 +625,7 @@ test "interface-variant" {
         b: i32,
         c: f32,
     });
+    const VTag = V.I.Tag;
 
     const wrapped = try V.init(&env);
     defer wrapped.deinit();
@@ -635,13 +636,15 @@ test "interface-variant" {
     try kz.display(env.ally, {}, wrapped, writer);
 
     const val_a = wrapped.into();
-    try expect(val_a == .a and val_a.a == 11);
+    try expectEqual(VTag.a, val_a);
+    try expectEqual(@as(u32, 11), val_a.a);
 
     // b
     wrapped.set(.b, -22);
 
     const val_b = wrapped.into();
-    try expect(val_b == .b and val_b.b == -22);
+    try expectEqual(VTag.b, val_b);
+    try expectEqual(@as(i32, -22), val_b.b);
 
     try kz.display(env.ally, {}, wrapped, writer);
 
@@ -649,7 +652,8 @@ test "interface-variant" {
     wrapped.set(.c, 1.5);
 
     const val_c = wrapped.into();
-    try expect(val_c == .c and val_c.c == 1.5);
+    try expectEqual(VTag.c, val_c);
+    try expectEqual(@as(f32, 1.5), val_c.c);
 
     try kz.display(env.ally, {}, wrapped, writer);
 }
@@ -677,15 +681,15 @@ test "interface-value-slice" {
     slice.setInto(try ally.alloc(u32, 3));
     defer ally.free(slice.into());
 
-    try expect(slice.len() == 3);
+    try expectEqual(@as(usize, 3), slice.len());
 
     slice.set(0, 11);
     slice.set(1, 22);
     slice.set(2, 33);
 
-    try expect(11 == slice.get(0));
-    try expect(22 == slice.get(1));
-    try expect(33 == slice.get(2));
+    try expectEqual(@as(u32, 11), slice.get(0));
+    try expectEqual(@as(u32, 22), slice.get(1));
+    try expectEqual(@as(u32, 33), slice.get(2));
 
     try kz.display(env.ally, {}, wrapped, writer);
 }
@@ -721,7 +725,7 @@ test "interface-coll-slice" {
 
     slice.rawSetInto(mem.ptr, 3);
 
-    try expect(slice.len() == 3);
+    try expectEqual(@as(usize, 3), slice.len());
 
     slice.get(0).set(.a, 11);
     slice.get(0).set(.b, true);
@@ -731,16 +735,16 @@ test "interface-coll-slice" {
     slice.get(2).set(.b, true);
 
     const fst = slice.get(0);
-    try expect(11 == fst.get(.a));
-    try expect(true == fst.get(.b));
+    try expectEqual(@as(u32, 11), fst.get(.a));
+    try expectEqual(true, fst.get(.b));
 
     const snd = slice.get(1);
-    try expect(22 == snd.get(.a));
-    try expect(false == snd.get(.b));
+    try expectEqual(@as(u32, 22), snd.get(.a));
+    try expectEqual(false, snd.get(.b));
 
     const thd = slice.get(2);
-    try expect(33 == thd.get(.a));
-    try expect(true == thd.get(.b));
+    try expectEqual(@as(u32, 33), thd.get(.a));
+    try expectEqual(true, thd.get(.b));
 
     try kz.display(env.ally, {}, wrapped, writer);
 }
