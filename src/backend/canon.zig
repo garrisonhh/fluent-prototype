@@ -17,6 +17,13 @@ pub const Repr = @import("canon/repr.zig").Repr;
 pub const Object = @import("canon/object.zig");
 pub const Expr = @import("canon/expr.zig").Expr;
 pub usingnamespace @import("canon/prelude.zig");
+pub const Image = @import("canon/image.zig");
+pub const Ptr = Image.Ptr;
+
+// TODO remove
+comptime {
+    std.testing.refAllDeclsRecursive(Image);
+}
 
 /// given up to 8 bytes, return canonical u64 representation for vm
 pub fn to(bytes: []const u8) u64 {
