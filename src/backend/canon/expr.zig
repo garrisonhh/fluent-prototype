@@ -15,8 +15,20 @@ pub const ExprTemplate = struct {
     },
 };
 
+fn ExprMixin(comptime Self: type) type {
+    return struct {
+        pub fn deinit(self: Self) void {
+            const ally = self.env.ally;
+            switch (self.get(.data).into()) {
+                .string => |sl| ally.free(sl.into()),
+                else => {},
+            }
+        }
+    };
+}
+
 /// Fluent's AST represented as a Fluent data structure
-pub const Expr = Object.Wrapper(ExprTemplate);
+pub const Expr = Object.Wrapper(ExprTemplate, ExprMixin);
 
 test "exprs" {
     const std = @import("std");
@@ -108,7 +120,6 @@ test "exprs" {
 
         const str = "hi, my name is garrison";
         const owned = try env.ally.dupe(u8, str);
-        defer env.ally.free(owned);
 
         expr.set(.type, try env.identifyZigType([str.len]u8));
         expr.get(.data).setInto(.string).setInto(owned);

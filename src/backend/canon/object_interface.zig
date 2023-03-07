@@ -30,7 +30,7 @@ const IField = union(enum) {
             .unit => void,
             .value => |T| T,
             .slice => |T| SliceWrapper(T),
-            .coll => |I| Wrapper(I),
+            .coll => |I| Wrapper(I, null),
         };
     }
 };
@@ -228,7 +228,7 @@ fn SliceWrapper(comptime T: type) type {
         const Struct = Wrapper(struct {
             ptr: *anyopaque,
             len: u64,
-        });
+        }, null);
 
         const ElemField = genField(T);
         const Elem = ElemField.Into();
@@ -274,7 +274,7 @@ fn SliceWrapper(comptime T: type) type {
                 .unit => 0,
                 .value => |V| @sizeOf(V),
                 .slice => |E| SliceWrapper(E).of(ptr, self.st.env).sizeOf(),
-                .coll => |I| Wrapper(I).of(ptr, self.st.env).sizeOf(),
+                .coll => |I| Wrapper(I, null).of(ptr, self.st.env).sizeOf(),
             };
 
             const addr = @ptrToInt(ptr) + elem_sz * index;
@@ -292,7 +292,7 @@ fn SliceWrapper(comptime T: type) type {
                     break :p @ptrCast(*const V, aligned).*;
                 },
                 .slice => |E| SliceWrapper(E).of(ptr, self.st.env),
-                .coll => |I| Wrapper(I).of(ptr, self.st.env),
+                .coll => |I| Wrapper(I, null).of(ptr, self.st.env),
             };
         }
 
@@ -308,9 +308,24 @@ fn SliceWrapper(comptime T: type) type {
     };
 }
 
-pub fn Wrapper(comptime Template: type) type {
+/// provide a zig template type and an optional mixin.
+///
+/// mixin can provide:
+/// ```zig
+/// /// called after Object.init
+/// pub fn init(self: Self) Object.InitError!void
+/// /// called prior to Object.deinit
+/// pub fn deinit(self: Self) void
+/// /// called after performing a shallow clone
+/// pub fn clone(self: Self) Allocator.Error!void
+/// ```
+pub fn Wrapper(
+    comptime Template: type,
+    comptime Mixin: ?fn (type) type,
+) type {
     return struct {
         const Self = @This();
+        const Ext = if (Mixin) |M| M(Self) else struct {};
 
         pub const I = genInterface(Template);
 
@@ -346,11 +361,17 @@ pub fn Wrapper(comptime Template: type) type {
         /// create an object and wrap it
         pub fn init(env: *Env) Object.InitError!Self {
             const ty = try env.identifyZigType(Template);
-            return Self.wrap(env, try Object.init(env, ty));
+            const self = Self.wrap(env, try Object.init(env, ty));
+
+            if (@hasDecl(Ext, "init")) try Ext.init(self);
+
+            return self;
         }
 
         /// free the wrapped object
         pub fn deinit(self: Self) void {
+            if (@hasDecl(Ext, "deinit")) Ext.deinit(self);
+
             self.unwrap().deinit(self.env);
         }
 
@@ -388,7 +409,11 @@ pub fn Wrapper(comptime Template: type) type {
 
         pub fn clone(self: Self) Allocator.Error!Self {
             const obj = try self.unwrap().clone(self.env.ally);
-            return Self.wrap(self.env, obj);
+            const cloned = Self.wrap(self.env, obj);
+
+            if (@hasDecl(Ext, "clone")) try Ext.clone(cloned);
+
+            return cloned;
         }
 
         pub fn sizeOf(self: Self) usize {
@@ -462,7 +487,7 @@ pub fn Wrapper(comptime Template: type) type {
                     const field_ptr = self.getFieldPtr(tag);
                     const field_fields = self.env.rw.get(field_repr).coll;
 
-                    break :wrapped Wrapper(FieldI){
+                    break :wrapped Wrapper(FieldI, null){
                         .base = field_ptr,
                         .env = self.env,
                         .ty = field_ty,
@@ -558,7 +583,7 @@ test "interface-struct" {
         x: u32,
         y: u32,
         z: u32,
-    });
+    }, null);
 
     const wrapped = try Vec3.init(&env);
     defer wrapped.deinit();
@@ -587,7 +612,7 @@ test "interface-nested-struct" {
 
     const Vec3 = struct { x: u32, y: u32, z: u32 };
     const ZRay = struct { pos: Vec3, dir: Vec3 };
-    const Ray = Wrapper(ZRay);
+    const Ray = Wrapper(ZRay, null);
 
     const wrapped = try Ray.init(&env);
     defer wrapped.deinit();
@@ -624,7 +649,7 @@ test "interface-variant" {
         a: u32,
         b: i32,
         c: f32,
-    });
+    }, null);
     const VTag = V.I.Tag;
 
     const wrapped = try V.init(&env);
@@ -670,9 +695,7 @@ test "interface-value-slice" {
 
     try prelude.initPrelude(&env);
 
-    const S = Wrapper(struct {
-        slice: []u32,
-    });
+    const S = Wrapper(struct { slice: []u32 }, null);
 
     const wrapped = try S.init(&env);
     defer wrapped.deinit();
@@ -712,9 +735,7 @@ test "interface-coll-slice" {
     };
     const test_sz = try env.sizeOf(try env.identifyZigType(Test));
 
-    const S = Wrapper(struct {
-        slice: []Test,
-    });
+    const S = Wrapper(struct { slice: []Test }, null);
 
     const wrapped = try S.init(&env);
     defer wrapped.deinit();
