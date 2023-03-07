@@ -4,7 +4,7 @@ const Allocator = std.mem.Allocator;
 const com = @import("common");
 const Success = com.Success;
 
-const Self = @This();
+pub const AllocError = error{ OutOfMemory, TooManyBytes };
 
 pub const Section = enum(u8) {
     stack,
@@ -38,16 +38,21 @@ const Pager = struct {
 
         /// fat pointer metadata
         const Block = struct {
+            // if this breaks, alignment for allocations breaks
+            comptime {
+                std.debug.assert(@alignOf(Block) >= 8);
+            }
+
             next: ?*Block,
         };
 
         /// each list contains free segments of 2 ** index size
         unused: [PAGE_POW + 1]?*Block = [1]?*Block{null} ** (PAGE_POW + 1),
-        mem: *align(16) Mem,
+        mem: *align(8) Mem,
 
         fn init(ally: Allocator) Allocator.Error!Page {
-            const slice = try ally.alignedAlloc(u8, 16, PAGE_SIZE);
-            var self = Page{ .mem = @ptrCast(*align(16) Mem, slice.ptr) };
+            const slice = try ally.alignedAlloc(u8, 8, PAGE_SIZE);
+            var self = Page{ .mem = @ptrCast(*align(8) Mem, slice.ptr) };
 
             // set up first block
             const block = @ptrCast(*Block, self.mem);
@@ -124,8 +129,6 @@ const Pager = struct {
 
             return block;
         }
-
-        const AllocError = error{TooManyBytes};
 
         fn alloc(self: *Page, nbytes: usize) AllocError!?Ptr.Offset {
             // get block power, check that it fits
@@ -242,7 +245,7 @@ const Pager = struct {
         self: *Pager,
         nbytes: usize,
         index: usize,
-    ) Page.AllocError!?Ptr.Offset {
+    ) AllocError!?Ptr.Offset {
         const page = &self.pages.items[index];
         const page_offset = (try page.alloc(nbytes)) orelse {
             return null;
@@ -254,7 +257,7 @@ const Pager = struct {
         self: *Pager,
         ally: Allocator,
         nbytes: usize,
-    ) (Allocator.Error || Page.AllocError)!Ptr.Offset {
+    ) AllocError!Ptr.Offset {
         // attempt to allocate from an existing page
         var i = self.pages.items.len;
         while (i > 0) {
@@ -274,6 +277,16 @@ const Pager = struct {
         const page_index = ptr / PAGE_SIZE;
         const offset = ptr % PAGE_SIZE;
         self.pages.items[page_index].free(offset, len);
+    }
+
+    const RawPtr = *align(8) anyopaque;
+
+    fn get(self: *const Pager, ptr: Ptr.Offset) RawPtr {
+        const page_index = ptr / PAGE_SIZE;
+        const offset = ptr % PAGE_SIZE;
+
+        const rawptr = &self.pages.items[page_index].mem[offset];
+        return @ptrCast(RawPtr, @alignCast(8, rawptr));
     }
 
     /// number of bytes allocated
@@ -315,6 +328,59 @@ const Pager = struct {
         std.debug.print("\n", .{});
     }
 };
+
+const Self = @This();
+
+const SectionMap = std.EnumArray(Section, Pager);
+
+ally: Allocator,
+sections: SectionMap = SectionMap.initFill(Pager{}),
+
+pub fn init(ally: Allocator) Self {
+    return Self{ .ally = ally };
+}
+
+pub fn deinit(self: *Self) void {
+    for (self.sections.values) |*pager| pager.deinit(self.ally);
+}
+
+pub fn alloc(self: *Self, section: Section, nbytes: usize) AllocError!Ptr {
+    const pager = self.sections.getPtr(section);
+    const offset = try pager.alloc(self.ally, nbytes);
+
+    return Ptr{
+        .offset = offset,
+        .section = section,
+    };
+}
+
+pub fn free(self: *Self, ptr: Ptr, nbytes: usize) void {
+    const pager = self.sections.getPtr(ptr.section);
+    pager.free(ptr.offset, nbytes);
+}
+
+pub fn get(self: Self, ptr: Ptr) Pager.RawPtr {
+    const pager = self.sections.getPtrConst(ptr.section);
+    return pager.get(ptr.offset);
+}
+
+// tests =======================================================================
+
+test "image" {
+    const ally = std.testing.allocator;
+    const stderr = std.io.getStdErr().writer();
+
+    try stderr.writeAll("\n");
+
+    var img = Self.init(ally);
+    defer img.deinit();
+
+    const ptr = try img.alloc(.static, @sizeOf(u64));
+    defer img.free(ptr, @sizeOf(u64));
+    const n = @ptrCast(*u64, img.get(ptr));
+
+    n.* = 420;
+}
 
 test "image-pager" {
     const ally = std.testing.allocator;
