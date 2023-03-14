@@ -39,7 +39,7 @@ pub fn renderTypeId(
     if (tw.getName(self)) |name| {
         return ctx.print(TYPE_STY, "{s}", .{name});
     } else {
-        return try tw.get(self).render(ctx, tw);
+        return ctx.print(TYPE_STY, "t{}", .{self.index});
     }
 }
 

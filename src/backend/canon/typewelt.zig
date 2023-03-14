@@ -21,6 +21,10 @@ const Type = @import("type.zig").Type;
 
 const Self = @This();
 
+// TODO replace ALL of the low level shit with com.IdMap. it already implements
+// pre-allocating TypeIds, also removes the potential for very subtle bugs where
+// after calling identify() a currently referenced *Type _might_ be moved
+
 pub const TypeId = packed struct(u64) {
     index: usize,
 
@@ -60,6 +64,8 @@ const TypeMap = std.HashMapUnmanaged(
     TypeMapContext,
     std.hash_map.default_max_load_percentage,
 );
+
+// TODO use IdMap here
 
 // maps TypeId -> Type
 // types are individually allocated to allow the typewelt to reuse the data

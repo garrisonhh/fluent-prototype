@@ -3,6 +3,8 @@ const TypeWelt = @import("typewelt.zig");
 const TypeId = TypeWelt.TypeId;
 
 pub const ExprTemplate = struct {
+    const Self = @This();
+
     type: TypeId,
     data: union(enum) {
         unit: void,
@@ -12,6 +14,7 @@ pub const ExprTemplate = struct {
         int: i64,
         float: f64,
         string: []const u8,
+        call: []Self,
     },
 };
 

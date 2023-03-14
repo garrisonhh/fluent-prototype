@@ -2,11 +2,34 @@ const std = @import("std");
 const expect = std.testing.expect;
 const Allocator = std.mem.Allocator;
 
-/// a non-moving handle table implementation.
-pub fn IdMap(comptime T: type) type {
+pub fn UId(comptime UniqueTag: @TypeOf(.EnumLiteral)) type {
+    _ = UniqueTag;
+
+    return packed struct(usize) {
+        const Self = @This();
+
+        index: usize,
+
+        pub fn of(index: usize) Self {
+            return .{ .index = index };
+        }
+
+        pub fn eql(self: Self, other: Self) bool {
+            return self.index == other.index;
+        }
+    };
+}
+
+/// a non-moving persistent handle table implementation.
+pub fn IdMap(
+    comptime UniqueTag: @TypeOf(.EnumLiteral),
+    comptime T: type,
+) type {
+    const must_deinit = comptime @hasDecl(T, "deinit");
+
     comptime {
         const Deinit = fn (*T, Allocator) void;
-        if (@TypeOf(T.deinit) != Deinit) {
+        if (must_deinit and @TypeOf(T.deinit) != Deinit) {
             const msg = std.fmt.comptimePrint(
                 "IdMap expects a T with a deinit function of type `{}`",
                 .{Deinit},
@@ -20,13 +43,7 @@ pub fn IdMap(comptime T: type) type {
 
         const Self = @This();
 
-        pub const Id = struct {
-            index: usize,
-
-            pub fn of(index: usize) Id {
-                return .{ .index = index };
-            }
-        };
+        pub const Id = UId(UniqueTag);
 
         const Page = struct {
             mem: [PAGE_SIZE]T = undefined,
@@ -44,31 +61,27 @@ pub fn IdMap(comptime T: type) type {
             }
         };
 
-        const PageList = std.SinglyLinkedList(*Page);
-
-        const Slot = struct {
-            id: Id,
-            ptr: *T,
-        };
+        const PageList = std.SinglyLinkedList(Page);
 
         /// memory pool for items
         pages: PageList = .{},
         /// stores deleted ids ready for reuse
-        unused: std.ArrayListUnmanaged(Slot) = .{},
+        unused: std.ArrayListUnmanaged(Id) = .{},
         /// maps id -> item
         items: std.ArrayListUnmanaged(?*T) = .{},
 
         pub fn deinit(self: *Self, ally: Allocator) void {
             // deinit live items
-            for (self.items.items) |ptr| {
-                if (ptr) |item| {
-                    item.deinit(ally);
+            if (must_deinit) {
+                for (self.items.items) |ptr| {
+                    if (ptr) |item| {
+                        item.deinit(ally);
+                    }
                 }
             }
 
             // deinit pages
             while (self.pages.popFirst()) |node| {
-                ally.destroy(node.data);
                 ally.destroy(node);
             }
 
@@ -81,78 +94,72 @@ pub fn IdMap(comptime T: type) type {
             // use current page
             const head = self.pages.first;
             if (head) |node| {
-                if (node.data.alloc()) |ptr| {
-                    return ptr;
-                } else |_| {
-                    // continue
-                }
+                if (node.data.alloc()) |ptr| return ptr else |_| {}
             }
 
             // make a new page
-            const page = try ally.create(Page);
-            page.* = .{};
-
             const node = try ally.create(PageList.Node);
-            node.data = page;
+            node.data = .{};
 
             self.pages.prepend(node);
 
-            return page.alloc() catch unreachable;
+            return node.data.alloc() catch unreachable;
         }
 
-        /// place an item in the refmap and return a new id
-        pub fn new(self: *Self, ally: Allocator, item: T) Allocator.Error!Id {
-            // reuse an unused id
-            if (self.unused.popOrNull()) |slot| {
-                std.debug.assert(self.items.items[slot.id.index] == null);
-                self.items.items[slot.id.index] = slot.ptr;
-                slot.ptr.* = item;
-                return slot.id;
+        /// creates an unbound id and ensures that the id's slot exists
+        pub fn newId(self: *Self, ally: Allocator) Allocator.Error!Id {
+            // reuse an old id if possible
+            if (self.unused.popOrNull()) |id| {
+                return id;
             }
 
-            // allocate a new id
-            const ptr = try self.alloc(ally);
-            ptr.* = item;
-
+            // create a new id
             const id = Id.of(self.items.items.len);
-            try self.items.append(ally, ptr);
+            try self.items.ensureTotalCapacity(ally, id.index + 1);
 
             return id;
         }
 
-        /// free up an id for reusage
-        pub fn del(self: *Self, ally: Allocator, id: Id) Allocator.Error!void {
-            const slot = Slot{
-                .id = id,
-                .ptr = self.get(id),
-            };
+        /// create a new id and initialize a slot
+        pub fn new(self: *Self, ally: Allocator, item: T) Allocator.Error!Id {
+            const id = try self.newId(ally);
+            const slot = try self.alloc(ally);
 
-            try self.unused.append(ally, slot);
-            slot.ptr.deinit(ally);
-            self.items.items[id.index] = null;
+            slot.* = item;
+            self.items.items[id.index] = slot;
+        }
+
+        /// free up an id for reusage, deinitializes item if it exists
+        pub fn del(self: *Self, ally: Allocator, id: Id) Allocator.Error!void {
+            try self.unused.append(ally, id);
+
+            const ptr: *?*T = &self.items.items[id.index];
+            if (ptr.*) |item| {
+                ptr.* = null;
+                if (must_deinit) item.deinit(ally);
+            }
         }
 
         /// retrieve an id
+        pub fn getOpt(self: Self, id: Id) ?*T {
+            return self.items.items[id.index];
+        }
+
+        /// retrieve an id when it must exist
         pub fn get(self: Self, id: Id) *T {
-            // if this fails, this id was deleted
-            std.debug.assert(self.items.items[id.index] != null);
-            return self.items.items[id.index].?;
+            return self.getOpt(id).?;
         }
     };
 }
 
-const X = struct {
-    const Self = @This();
-
-    x: u32,
-
-    fn deinit(_: *Self, _: Allocator) void {}
-};
+// tests =======================================================================
 
 test "basic usage" {
     const ally = std.testing.allocator;
 
-    var map = IdMap(X){};
+    const X = struct { x: u32 };
+
+    var map = IdMap(.x, X){};
     defer map.deinit(ally);
 
     const a = try map.new(ally, .{ .x = 3 });
