@@ -119,7 +119,7 @@ pub fn render(
         .unit => try ctx.print(.{}, "()", .{}),
         .@"bool" => try ctx.print(LIT_STY, "{}", .{obj.intoBool()}),
         .number => try ctx.print(LIT_STY, "{}", .{obj.intoNumber(env.*)}),
-        .ty => try obj.intoType().render(ctx, env.tw),
+        .ty => try env.tw.get(obj.intoType()).render(ctx, env.tw),
         .ptr => |ptr| switch (ptr.kind) {
             .single, .many => addr: {
                 const raw_ptr = obj.intoPtr(*anyopaque);

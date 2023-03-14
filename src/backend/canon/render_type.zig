@@ -12,6 +12,8 @@ fn renderTypeArray(
     tw: TypeWelt,
     types: []const TypeId,
 ) Allocator.Error!kz.Ref {
+    _ = tw;
+
     var elems = try ctx.stub();
     const comma = try ctx.print(.{}, ", ", .{});
     defer ctx.drop(comma);
@@ -21,7 +23,7 @@ fn renderTypeArray(
             elems = try ctx.slap(elems, try ctx.clone(comma), .right, .{});
         }
 
-        elems = try ctx.slap(elems, try id.render(ctx, tw), .right, .{});
+        elems = try ctx.slap(elems, try id.render(ctx, {}), .right, .{});
     }
 
     return try ctx.stack(&.{
@@ -91,7 +93,7 @@ pub fn renderType(
                 try ctx.print(.{}, "[", .{}),
                 try ctx.print(TYPE_STY, "{d}", .{arr.size}),
                 try ctx.print(.{}, "]", .{}),
-                try arr.of.render(ctx, tw),
+                try arr.of.render(ctx, {}),
             },
             .right,
             .{},
@@ -119,7 +121,7 @@ pub fn renderType(
             defer list.deinit();
 
             for (tup) |id| {
-                try list.append(try id.render(ctx, tw));
+                try list.append(try id.render(ctx, {}));
             }
 
             break :tup try ctx.stack(
@@ -145,7 +147,7 @@ pub fn renderType(
             for (fields) |field| {
                 try list.append(try ctx.slap(
                     try ctx.print(.{}, "{}: ", .{field.name}),
-                    try field.of.render(ctx, tw),
+                    try field.of.render(ctx, {}),
                     .right,
                     .{},
                 ));
@@ -170,7 +172,7 @@ pub fn renderType(
         .func => |func| try ctx.stack(&.{
             try renderTypeArray(ctx, tw, func.takes),
             try ctx.print(.{}, "->", .{}),
-            try func.returns.render(ctx, tw),
+            try func.returns.render(ctx, {}),
         }, .right, .{ .space = 1 }),
         .ptr => |ptr| ptr: {
             const pre: []const u8 = switch (ptr.kind) {
@@ -181,7 +183,7 @@ pub fn renderType(
 
             break :ptr try ctx.slap(
                 try ctx.print(.{}, "{s}", .{pre}),
-                try ptr.to.render(ctx, tw),
+                try ptr.to.render(ctx, {}),
                 .right,
                 .{},
             );

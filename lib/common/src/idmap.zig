@@ -1,12 +1,12 @@
 const std = @import("std");
 const expect = std.testing.expect;
 const Allocator = std.mem.Allocator;
+const kz = @import("kritzler");
 
 pub fn UId(comptime UniqueTag: @TypeOf(.EnumLiteral)) type {
-    _ = UniqueTag;
-
     return packed struct(usize) {
         const Self = @This();
+        const UTag = UniqueTag;
 
         index: usize,
 
@@ -17,17 +17,33 @@ pub fn UId(comptime UniqueTag: @TypeOf(.EnumLiteral)) type {
         pub fn eql(self: Self, other: Self) bool {
             return self.index == other.index;
         }
+
+        /// kritzler compat
+        pub fn render(self: Self, ctx: *kz.Context, _: void) !kz.Ref {
+            return try ctx.print(.{}, "{}", .{self});
+        }
+
+        /// std.fmt compat
+        pub fn format(
+            self: Self,
+            comptime _: []const u8,
+            _: std.fmt.FormatOptions,
+            writer: anytype,
+        ) @TypeOf(writer).Error!void {
+            try writer.print("{s}{}", .{ @tagName(UTag), self.index });
+        }
     };
 }
 
-/// a non-moving persistent handle table implementation.
-pub fn IdMap(
-    comptime UniqueTag: @TypeOf(.EnumLiteral),
-    comptime T: type,
-) type {
+/// a non-moving persistent handle table implementation
+///
+/// Id parameter should be created using UId.
+pub fn IdMap(comptime Id: type, comptime T: type) type {
     const must_deinit = comptime @hasDecl(T, "deinit");
 
     comptime {
+        std.debug.assert(Id == UId(Id.UTag));
+
         const Deinit = fn (*T, Allocator) void;
         if (must_deinit and @TypeOf(T.deinit) != Deinit) {
             const msg = std.fmt.comptimePrint(
@@ -42,8 +58,6 @@ pub fn IdMap(
         const PAGE_SIZE = 1024;
 
         const Self = @This();
-
-        pub const Id = UId(UniqueTag);
 
         const Page = struct {
             mem: [PAGE_SIZE]T = undefined,
@@ -115,18 +129,30 @@ pub fn IdMap(
 
             // create a new id
             const id = Id.of(self.items.items.len);
-            try self.items.ensureTotalCapacity(ally, id.index + 1);
+            try self.items.append(ally, null);
 
             return id;
+        }
+
+        /// initialize a slot
+        pub fn set(
+            self: *Self,
+            ally: Allocator,
+            id: Id,
+            item: T,
+        ) Allocator.Error!void {
+            const slot = try self.alloc(ally);
+
+            slot.* = item;
+            self.items.items[id.index] = slot;
         }
 
         /// create a new id and initialize a slot
         pub fn new(self: *Self, ally: Allocator, item: T) Allocator.Error!Id {
             const id = try self.newId(ally);
-            const slot = try self.alloc(ally);
+            try self.set(ally, id, item);
 
-            slot.* = item;
-            self.items.items[id.index] = slot;
+            return id;
         }
 
         /// free up an id for reusage, deinitializes item if it exists

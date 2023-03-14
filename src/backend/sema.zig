@@ -27,12 +27,7 @@ fn err(
 }
 
 fn holeError(env: Env, loc: ?Loc, ty: TypeId) Allocator.Error!Result {
-    const ally = env.ally;
-
-    const ty_text = try ty.toString(ally, env.tw);
-    defer ally.free(ty_text);
-
-    return try err(ally, loc, "this hole expects {s}", .{ty_text});
+    return err(env.ally, loc, "this hole expects {}", .{ty});
 }
 
 fn expectError(
@@ -41,15 +36,8 @@ fn expectError(
     expected: TypeId,
     found: TypeId,
 ) Allocator.Error!Result {
-    const ally = env.ally;
-
-    const exp_text = try expected.toString(ally, env.tw);
-    defer ally.free(exp_text);
-    const found_text = try found.toString(ally, env.tw);
-    defer ally.free(found_text);
-
-    const fmt = "expected {s}, found {s}";
-    return try err(ally, loc, fmt, .{ exp_text, found_text });
+    const fmt = "expected {}, found {}";
+    return err(env.ally, loc, fmt, .{ expected, found });
 }
 
 /// numbers become their fluent counterparts
