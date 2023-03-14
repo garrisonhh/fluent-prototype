@@ -5,59 +5,54 @@ const Type = @import("type.zig").Type;
 const TypeWelt = @import("typewelt.zig");
 const TypeId = TypeWelt.TypeId;
 
-const TYPE_STY = kz.Style{ .fg = .blue };
+const STY = kz.Style{ .fg = .blue };
+
+const Selves = std.AutoHashMapUnmanaged(TypeId, void);
+
+fn renderId(
+    ctx: *kz.Context,
+    selves: *Selves,
+    tw: TypeWelt,
+    id: TypeId,
+) Allocator.Error!kz.Ref {
+    return renderTypeAdvanced(tw.get(id), ctx, selves, tw);
+}
 
 fn renderTypeArray(
     ctx: *kz.Context,
+    selves: *Selves,
     tw: TypeWelt,
     types: []const TypeId,
 ) Allocator.Error!kz.Ref {
-    _ = tw;
+    var list = std.ArrayList(kz.Ref).init(ctx.ally);
+    defer list.deinit();
 
-    var elems = try ctx.stub();
-    const comma = try ctx.print(.{}, ", ", .{});
-    defer ctx.drop(comma);
-
-    for (types) |id, i| {
-        if (i > 0) {
-            elems = try ctx.slap(elems, try ctx.clone(comma), .right, .{});
-        }
-
-        elems = try ctx.slap(elems, try id.render(ctx, {}), .right, .{});
+    for (types) |id| {
+        try list.append(try renderId(ctx, selves, tw, id));
     }
 
+    const comma = try ctx.print(.{}, ", ", .{});
     return try ctx.stack(&.{
         try ctx.print(.{}, "{{", .{}),
-        elems,
+        try ctx.sep(comma, list.items, .right, .{}),
         try ctx.print(.{}, "}}", .{}),
     }, .right, .{});
 }
 
-pub fn renderTypeId(
-    self: TypeId,
+fn renderTypeAdvanced(
+    self: *const Type,
     ctx: *kz.Context,
+    selves: *Selves,
     tw: TypeWelt,
 ) Allocator.Error!kz.Ref {
-    if (tw.getName(self)) |name| {
-        return ctx.print(TYPE_STY, "{s}", .{name});
-    } else {
-        return ctx.print(TYPE_STY, "t{}", .{self.index});
-    }
-}
-
-pub fn renderType(
-    self: Type,
-    ctx: *kz.Context,
-    tw: TypeWelt,
-) Allocator.Error!kz.Ref {
-    return switch (self) {
+    return switch (self.*) {
         // title case
         .any => title: {
-            const name = @tagName(self);
+            const name = @tagName(self.*);
             const first = std.ascii.toUpper(name[0]);
 
             break :title try ctx.print(
-                TYPE_STY,
+                STY,
                 "{c}{s}",
                 .{ first, name[1..] },
             );
@@ -69,21 +64,21 @@ pub fn renderType(
         .bool,
         .hole,
         .name,
-        => try ctx.print(TYPE_STY, "{s}", .{@tagName(self)}),
-        .ty => try ctx.print(TYPE_STY, "type", .{}),
+        => try ctx.print(STY, "{s}", .{@tagName(self.*)}),
+        .ty => try ctx.print(STY, "type", .{}),
 
         .number => |num| num: {
             if (num.bits) |bits| {
                 break :num try ctx.slap(
-                    try ctx.print(TYPE_STY, "{c}", .{@tagName(num.layout)[0]}),
-                    try ctx.print(TYPE_STY, "{d}", .{bits}),
+                    try ctx.print(STY, "{c}", .{@tagName(num.layout)[0]}),
+                    try ctx.print(STY, "{d}", .{bits}),
                     .right,
                     .{},
                 );
             }
 
             break :num try ctx.print(
-                TYPE_STY,
+                STY,
                 "compiler_{s}",
                 .{@tagName(num.layout)},
             );
@@ -91,9 +86,9 @@ pub fn renderType(
         .array => |arr| try ctx.stack(
             &.{
                 try ctx.print(.{}, "[", .{}),
-                try ctx.print(TYPE_STY, "{d}", .{arr.size}),
+                try ctx.print(STY, "{d}", .{arr.size}),
                 try ctx.print(.{}, "]", .{}),
-                try arr.of.render(ctx, {}),
+                try renderId(ctx, selves, tw, arr.of),
             },
             .right,
             .{},
@@ -109,8 +104,8 @@ pub fn renderType(
             }
 
             break :set try ctx.slap(
-                try ctx.print(TYPE_STY, "set", .{}),
-                try renderTypeArray(ctx, tw, list.items),
+                try ctx.print(STY, "set", .{}),
+                try renderTypeArray(ctx, selves, tw, list.items),
                 .right,
                 .{ .space = 1 },
             );
@@ -121,7 +116,7 @@ pub fn renderType(
             defer list.deinit();
 
             for (tup) |id| {
-                try list.append(try id.render(ctx, {}));
+                try list.append(try renderId(ctx, selves, tw, id));
             }
 
             break :tup try ctx.stack(
@@ -140,6 +135,20 @@ pub fn renderType(
             );
         },
         .@"struct", .variant => |fields| coll: {
+            // check if this is a self
+            const id = tw.retrieve(self);
+            if (selves.contains(id)) {
+                if (tw.getName(id)) |name| {
+                    break :coll try ctx.print(STY, "{}", .{name});
+                }
+
+                break :coll id.render(ctx, {});
+            }
+
+            // not a self
+            try selves.put(ctx.ally, id, {});
+            defer _ = selves.remove(id);
+
             const cnt = fields.len;
             var list = try std.ArrayList(kz.Ref).initCapacity(ctx.ally, cnt);
             defer list.deinit();
@@ -147,32 +156,53 @@ pub fn renderType(
             for (fields) |field| {
                 try list.append(try ctx.slap(
                     try ctx.print(.{}, "{}: ", .{field.name}),
-                    try field.of.render(ctx, {}),
+                    try renderId(ctx, selves, tw, field.of),
                     .right,
                     .{},
                 ));
             }
 
-            break :coll try ctx.stack(
-                &.{
-                    try ctx.print(TYPE_STY, "{s}", .{@tagName(self)}),
-                    try ctx.print(.{}, " {{", .{}),
-                    try ctx.sep(
-                        try ctx.print(.{}, ", ", .{}),
-                        list.items,
-                        .right,
-                        .{},
-                    ),
-                    try ctx.print(.{}, "}}", .{}),
-                },
+            // put it together
+            const header = try ctx.slap(
+                try ctx.print(STY, "{s}", .{@tagName(self.*)}),
+                try ctx.print(.{}, " {{", .{}),
                 .right,
                 .{},
             );
+            const footer = try ctx.print(.{}, "}}", .{});
+
+            break :coll switch (cnt) {
+                0 => try ctx.slap(header, footer, .right, .{}),
+                1 => try ctx.stack(&.{
+                    header,
+                    list.items[0],
+                    footer,
+                }, .right, .{}),
+                else => many: {
+                    const indent = try ctx.print(.{}, "  ", .{});
+                    defer ctx.drop(indent);
+
+                    for (list.items) |tex, i| {
+                        list.items[i] = try ctx.slap(
+                            tex,
+                            try ctx.clone(indent),
+                            .left,
+                            .{},
+                        );
+                    }
+
+                    break :many try ctx.stack(&.{
+                        header,
+                        try ctx.stack(list.items, .bottom, .{}),
+                        footer,
+                    }, .bottom, .{});
+                },
+            };
         },
         .func => |func| try ctx.stack(&.{
-            try renderTypeArray(ctx, tw, func.takes),
+            try renderTypeArray(ctx, selves, tw, func.takes),
             try ctx.print(.{}, "->", .{}),
-            try func.returns.render(ctx, {}),
+            try renderId(ctx, selves, tw, func.returns),
         }, .right, .{ .space = 1 }),
         .ptr => |ptr| ptr: {
             const pre: []const u8 = switch (ptr.kind) {
@@ -183,10 +213,21 @@ pub fn renderType(
 
             break :ptr try ctx.slap(
                 try ctx.print(.{}, "{s}", .{pre}),
-                try ptr.to.render(ctx, {}),
+                try renderId(ctx, selves, tw, ptr.to),
                 .right,
                 .{},
             );
         },
     };
+}
+
+pub fn renderType(
+    self: *const Type,
+    ctx: *kz.Context,
+    tw: TypeWelt,
+) Allocator.Error!kz.Ref {
+    var selves = Selves{};
+    defer selves.deinit(ctx.ally);
+
+    return renderTypeAdvanced(self, ctx, &selves, tw);
 }

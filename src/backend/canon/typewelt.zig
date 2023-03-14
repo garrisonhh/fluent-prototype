@@ -98,6 +98,11 @@ pub fn distinct(self: *Self, ally: Allocator, ty: Type) Allocator.Error!TypeId {
     return id;
 }
 
+/// retrieves a previously stored type
+pub fn retrieve(self: Self, ty: *const Type) TypeId {
+    return self.reverse.get(ty).?;
+}
+
 /// retrieves a previously stored id or creates a new one if this is a new type
 pub fn identify(self: *Self, ally: Allocator, ty: Type) Allocator.Error!TypeId {
     return self.reverse.get(&ty) orelse self.distinct(ally, ty);
@@ -151,7 +156,9 @@ fn identifyZig(
                 else => unreachable,
             };
             const final = @unionInit(Type, @tagName(tag), fields);
+
             try self.map.set(ally, id, final);
+            try self.reverse.put(ally, self.map.get(id), id);
 
             return id;
         },
