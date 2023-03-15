@@ -15,12 +15,13 @@ pub const Section = enum(u8) {
     frame,
 };
 
-pub const Ptr = packed struct(u64) {
-    /// a type that is an unsigned int that is 64 - (# section bits) wide
+const UIntPtr = usize;
+pub const Ptr = packed struct(UIntPtr) {
+    /// a type that is a uint that is (UIntPtr bits) - (section bits) wide
     const Offset = @Type(.{
         .Int = .{
             .signedness = .unsigned,
-            .bits = 64 - @bitSizeOf(Section),
+            .bits = @bitSizeOf(UIntPtr) - @bitSizeOf(Section),
         },
     });
 
@@ -279,14 +280,14 @@ const Pager = struct {
         self.pages.items[page_index].free(offset, len);
     }
 
-    const RawPtr = *align(8) anyopaque;
+    const Raw = *align(8) anyopaque;
 
-    fn get(self: *const Pager, ptr: Ptr.Offset) RawPtr {
+    fn get(self: *const Pager, ptr: Ptr.Offset) Raw {
         const page_index = ptr / PAGE_SIZE;
         const offset = ptr % PAGE_SIZE;
 
         const rawptr = &self.pages.items[page_index].mem[offset];
-        return @ptrCast(RawPtr, @alignCast(8, rawptr));
+        return @ptrCast(Raw, @alignCast(8, rawptr));
     }
 
     /// number of bytes allocated
@@ -359,9 +360,15 @@ pub fn free(self: *Self, ptr: Ptr, nbytes: usize) void {
     pager.free(ptr.offset, nbytes);
 }
 
-pub fn get(self: Self, ptr: Ptr) Pager.RawPtr {
+pub const RawPtr = Pager.Raw;
+
+pub fn raw(self: Self, ptr: Ptr) RawPtr {
     const pager = self.sections.getPtrConst(ptr.section);
     return pager.get(ptr.offset);
+}
+
+pub fn into(self: Self, ptr: Ptr, comptime P: type) P {
+    return @ptrCast(P, self.raw(ptr));
 }
 
 // tests =======================================================================
@@ -377,7 +384,7 @@ test "image" {
 
     const ptr = try img.alloc(.static, @sizeOf(u64));
     defer img.free(ptr, @sizeOf(u64));
-    const n = @ptrCast(*u64, img.get(ptr));
+    const n = img.into(ptr, *u64);
 
     n.* = 420;
 }

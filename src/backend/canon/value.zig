@@ -2,6 +2,10 @@
 //! is what SSA IR constants use, and the bytecode VM follows its layout rules
 //! in code generation
 
+// TODO next steps here are to remove Value and replace it with Image + Ptr,
+// since they are solving the same problem (and Ptr is just much better in all
+// ways)
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");

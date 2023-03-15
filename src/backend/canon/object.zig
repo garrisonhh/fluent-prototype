@@ -21,6 +21,7 @@ pub const Wrapper = interface.Wrapper;
 
 ty: TypeId,
 repr: ReprId,
+/// TODO replace with Ptr
 val: Value,
 
 pub const InitError = canon.ReprWelt.Error;

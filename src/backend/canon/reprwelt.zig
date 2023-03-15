@@ -279,13 +279,13 @@ fn genSlice(
     const ptr = try self.intern(ally, Repr{ .ptr = of });
     const len = try self.intern(ally, Repr{ .uint = 8 });
 
-    const fields = [_]Repr.Field{
+    const fields = try ally.dupe(Repr.Field, &.{
         .{ .offset = 0, .of = ptr },
         .{ .offset = 8, .of = len },
-    };
+    });
 
     try self.map.set(ally, id, Slot{
-        .repr = Repr{ .coll = &fields },
+        .repr = Repr{ .coll = fields },
         .sz = 16,
         .aln = 8,
     });
