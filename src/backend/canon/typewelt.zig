@@ -128,7 +128,10 @@ fn identifyZig(
     // special case for structured data, which must be distinct and allow self
     // referencing
     switch (info) {
-        inline .Struct, .Union => |_, zig_tag| {
+        inline .Struct, .Union => |_, zig_tag| coll: {
+            // TypeId is a struct but has to be translated to Type{ .ty = {} }
+            if (T == TypeId) break :coll;
+
             // for whatever reason zig doesn't recognize this is comptime
             // through the switch capture
             const zig_fields = std.meta.fields(T);

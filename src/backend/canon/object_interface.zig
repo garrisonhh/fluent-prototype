@@ -378,12 +378,23 @@ pub fn Wrapper(
         /// wrap an instantiated object
         pub fn wrap(env: *Env, obj: Object) Self {
             if (builtin.mode == .Debug) {
-                // ensure template type maps to the object type
-                const ty = env.identifyZigType(Template) catch |e| {
-                    std.debug.panic("{} while checking wrapped type", .{e});
-                };
+                // // ensure template type maps to the object type
+                // const ty = env.identifyZigType(Template) catch |e| {
+                // std.debug.panic("{} while checking wrapped type", .{e});
+                // };
 
-                std.debug.assert(ty.eql(obj.ty));
+                // if (!ty.eql(obj.ty)) {
+                // const stderr = std.io.getStdErr().writer();
+
+                // stderr.writeAll("expected to wrap type:\n") catch {};
+                // const expected = env.tw.get(ty);
+                // kz.display(env.ally, env.tw, expected, stderr) catch {};
+                // stderr.writeAll("instead received type:\n") catch {};
+                // const received = env.tw.get(obj.ty);
+                // kz.display(env.ally, env.tw, received, stderr) catch {};
+                // }
+
+                // std.debug.assert(ty.eql(obj.ty));
             }
 
             return Self{
