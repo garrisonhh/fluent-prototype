@@ -11,8 +11,10 @@ const TypeId = canon.TypeId;
 const Type = canon.Type;
 const Expr = canon.Expr;
 const Basic = canon.Basic;
+const Image = canon.Image;
+const Ptr = canon.Ptr;
 
-const Error = Object.InitError;
+pub const Error = Object.InitError || Image.AllocError;
 const Result = com.Message.Result(Expr);
 
 const ok = Result.ok;
@@ -27,12 +29,7 @@ fn err(
 }
 
 fn holeError(env: Env, loc: ?Loc, ty: TypeId) Allocator.Error!Result {
-    const ally = env.ally;
-
-    const ty_text = try ty.toString(ally, env.tw);
-    defer ally.free(ty_text);
-
-    return try err(ally, loc, "this hole expects {s}", .{ty_text});
+    return err(env.ally, loc, "this hole expects {}", .{ty});
 }
 
 fn expectError(
@@ -41,15 +38,8 @@ fn expectError(
     expected: TypeId,
     found: TypeId,
 ) Allocator.Error!Result {
-    const ally = env.ally;
-
-    const exp_text = try expected.toString(ally, env.tw);
-    defer ally.free(exp_text);
-    const found_text = try found.toString(ally, env.tw);
-    defer ally.free(found_text);
-
-    const fmt = "expected {s}, found {s}";
-    return try err(ally, loc, fmt, .{ exp_text, found_text });
+    const fmt = "expected {}, found {}";
+    return err(env.ally, loc, fmt, .{ expected, found });
 }
 
 /// numbers become their fluent counterparts
@@ -86,15 +76,22 @@ fn analyzeString(
 ) Error!Result {
     const string = sexpr.data.string.str;
 
+    // clone string to image
+    const mem = try env.alloc(.heap, string.len * @sizeOf(u8));
+    const owned = env.img.intoSlice(mem, u8, string.len);
+    std.mem.copy(u8, owned, string);
+
+    // create [N]u8 type
     const ty = try env.identify(Type{
         .array = .{ .size = string.len, .of = Basic.u8.get() },
     });
 
+    // create expr
     const expr = try Expr.init(env);
     expr.set(.type, ty);
 
     const data = expr.get(.data);
-    try data.setInto(.string).dupe(string);
+    data.setInto(.string).setInto(mem, string.len);
 
     return try coerce(env, expr, outward);
 }

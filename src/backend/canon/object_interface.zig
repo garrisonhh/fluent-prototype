@@ -1,5 +1,5 @@
 const std = @import("std");
-const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
 const Allocator = std.mem.Allocator;
 const ZType = std.builtin.Type;
 const builtin = @import("builtin");
@@ -11,7 +11,8 @@ const Repr = canon.Repr;
 const ReprId = canon.ReprId;
 const TypeId = canon.TypeId;
 const Object = canon.Object;
-const Value = canon.Value;
+const Image = canon.Image;
+const Ptr = canon.Ptr;
 
 const INDENT = 2;
 
@@ -30,7 +31,7 @@ const IField = union(enum) {
             .unit => void,
             .value => |T| T,
             .slice => |T| SliceWrapper(T),
-            .coll => |I| Wrapper(I),
+            .coll => |I| Wrapper(I, null),
         };
     }
 };
@@ -183,7 +184,7 @@ fn genField(comptime field_type: type) IField {
 
         else => switch (@typeInfo(field_type)) {
             .Pointer => |meta| switch (meta.size) {
-                .One, .Many, .C => IField{ .value = field_type },
+                .One, .Many, .C => IField{ .value = Ptr },
                 .Slice => IField{ .slice = meta.child },
             },
             .Struct => IField{ .coll = field_type },
@@ -226,55 +227,75 @@ fn SliceWrapper(comptime T: type) type {
         const Self = @This();
 
         const Struct = Wrapper(struct {
-            ptr: [*]T,
+            ptr: *T,
             len: u64,
-        });
+        }, null);
 
-        const Elem = genField(T).Into();
+        const ElemField = genField(T);
+        const Elem = ElemField.Into();
 
         st: Struct,
 
-        fn of(base: *anyopaque, env: *Env) Self {
+        fn of(base: Ptr, env: *Env) Self {
             return Self{ .st = Struct.of(base, env) };
         }
 
-        pub fn alloc(self: Self, length: usize) Allocator.Error!void {
-            const ally = self.st.env.ally;
-            const data = try ally.alloc(T, length);
-            self.st.set(.ptr, data.ptr);
-            self.st.set(.len, data.len);
+        pub fn sizeOf(self: Self) usize {
+            return self.st.sizeOf();
         }
 
-        pub fn free(self: Self) void {
-            const ally = self.st.env.ally;
-            ally.free(self.slice());
+        /// set the slice struct
+        pub fn setInto(self: Self, sl_ptr: Ptr, sl_len: usize) void {
+            self.st.set(.ptr, sl_ptr);
+            self.st.set(.len, sl_len);
         }
 
-        pub fn slice(self: Self) []T {
-            return self.st.get(.ptr)[0..self.len()];
+        /// as a slice of values
+        pub fn into(self: Self) []ElemField.value {
+            const img = &self.st.env.img;
+
+            const addr = self.st.get(.ptr);
+            return img.intoSlice(addr, ElemField.value, self.len());
         }
 
-        pub fn copy(self: Self, src: []const T) void {
-            std.mem.copy(T, self.slice(), src);
-        }
-
-        pub fn dupe(self: Self, src: []const T) Allocator.Error!void {
-            try self.alloc(src.len);
-            self.copy(src);
+        pub fn ptr(self: Self) Ptr {
+            return self.st.get(.ptr);
         }
 
         pub fn len(self: Self) usize {
             return self.st.get(.len);
         }
 
-        /// index into slice
-        pub fn get(self: Self, index: usize) Elem {
-            return self.st.get(.ptr)[index];
+        pub fn getElemPtr(self: Self, index: usize) Ptr {
+            std.debug.assert(index < self.len());
+
+            const p = self.st.get(.ptr);
+            const elem_sz = switch (ElemField) {
+                .unit => 0,
+                .value => |V| @sizeOf(V),
+                .slice => |E| SliceWrapper(E).of(p, self.st.env).sizeOf(),
+                .coll => |I| Wrapper(I, null).of(p, self.st.env).sizeOf(),
+            };
+
+            return p.add(elem_sz * index);
         }
 
-        /// get index of slice
-        pub fn set(self: Self, index: usize, value: T) void {
-            self.st.get(.ptr)[index] = value;
+        /// index into slice
+        pub fn get(self: Self, index: usize) Elem {
+            const img = &self.st.env.img;
+            const p = self.getElemPtr(index);
+
+            return switch (ElemField) {
+                .unit => {},
+                .value => |V| img.read(p, V),
+                .slice => |E| SliceWrapper(E).of(p, self.st.env),
+                .coll => |I| Wrapper(I, null).of(p, self.st.env),
+            };
+        }
+
+        /// set a value, use into() and get() to modify collections and slics
+        pub fn set(self: Self, index: usize, value: ElemField.value) void {
+            self.into()[index] = value;
         }
 
         fn dumpR(writer: anytype, level: usize) !void {
@@ -284,37 +305,43 @@ fn SliceWrapper(comptime T: type) type {
     };
 }
 
-pub fn Wrapper(comptime Template: type) type {
+/// provide a zig template type and an optional mixin.
+///
+/// mixin can provide:
+/// ```zig
+/// /// called after Object.init
+/// pub fn init(self: Self) Object.InitError!void
+/// /// called prior to Object.deinit
+/// pub fn deinit(self: Self) void
+/// /// called after performing a shallow clone
+/// pub fn clone(self: Self) Allocator.Error!void
+/// ```
+pub fn Wrapper(
+    comptime Template: type,
+    comptime Mixin: ?fn (type) type,
+) type {
     return struct {
         const Self = @This();
+        const Ext = if (Mixin) |M| M(Self) else struct {};
 
         pub const I = genInterface(Template);
 
-        pub fn TemplateField(comptime tag: I.Tag) type {
-            inline for (std.meta.fields(Template)) |field| {
-                if (std.mem.eql(u8, field.name, @tagName(tag))) {
-                    return field.field_type;
-                }
-            } else {
-                unreachable;
-            }
-        }
-
-        base: *anyopaque,
-        env: *Env,
+        base: Ptr,
         ty: TypeId,
+
+        env: *Env,
         fields: []const Repr.Field,
 
         /// wrap raw data
-        pub fn of(base: *anyopaque, env: *Env) Self {
+        pub fn of(base: Ptr, env: *Env) Self {
             // CollInterface will verify these
             const ty = env.identifyZigType(Template) catch unreachable;
             const repr = env.reprOf(ty) catch unreachable;
 
             return Self{
                 .base = base,
-                .env = env,
                 .ty = ty,
+                .env = env,
                 .fields = env.rw.get(repr).coll,
             };
         }
@@ -322,27 +349,46 @@ pub fn Wrapper(comptime Template: type) type {
         /// create an object and wrap it
         pub fn init(env: *Env) Object.InitError!Self {
             const ty = try env.identifyZigType(Template);
-            return Self.wrap(env, try Object.init(env, ty));
+            const self = Self.wrap(env, try Object.init(env, ty));
+
+            if (@hasDecl(Ext, "init")) try Ext.init(self);
+
+            return self;
         }
 
         /// free the wrapped object
         pub fn deinit(self: Self) void {
+            if (@hasDecl(Ext, "deinit")) Ext.deinit(self);
+
             self.unwrap().deinit(self.env);
         }
 
         /// wrap an instantiated object
         pub fn wrap(env: *Env, obj: Object) Self {
             if (builtin.mode == .Debug) {
-                // ensure template type maps to the object type
-                const ty = env.identifyZigType(Template) catch |e| {
-                    std.debug.panic("{} while checking wrapped type", .{e});
-                };
+                // TODO this relies on hashing Types with 'self-awareness'
 
-                std.debug.assert(ty.eql(obj.ty));
+                // // ensure template type maps to the object type
+                // const ty = env.identifyZigType(Template) catch |e| {
+                // std.debug.panic("{} while checking wrapped type", .{e});
+                // };
+
+                // if (!ty.eql(obj.ty)) {
+                // const stderr = std.io.getStdErr().writer();
+
+                // stderr.writeAll("expected to wrap type:\n") catch {};
+                // const expected = env.tw.get(ty);
+                // kz.display(env.ally, env.tw, expected, stderr) catch {};
+                // stderr.writeAll("instead received type:\n") catch {};
+                // const received = env.tw.get(obj.ty);
+                // kz.display(env.ally, env.tw, received, stderr) catch {};
+                // }
+
+                // std.debug.assert(ty.eql(obj.ty));
             }
 
             return Self{
-                .base = obj.val.buf.ptr,
+                .base = obj.ptr,
                 .env = env,
                 .ty = obj.ty,
                 .fields = env.rw.get(obj.repr).coll,
@@ -351,28 +397,29 @@ pub fn Wrapper(comptime Template: type) type {
 
         /// unwrap an instantiated object
         pub fn unwrap(self: Self) Object {
-            // since finding the size and creating the object were already done
-            // when instantiating the wrapper, they should never fail
-            const ptr = @ptrCast([*]u8, self.base);
-            const aligned_ptr = @alignCast(Value.Alignment, ptr);
-
-            const sz = self.env.sizeOf(self.ty) catch unreachable;
-            const val = Value.of(aligned_ptr[0..sz]);
-
-            return Object.from(self.env, self.ty, val) catch unreachable;
+            return Object.from(self.env, self.ty, self.base) catch unreachable;
         }
 
-        pub fn clone(self: Self) Allocator.Error!Self {
-            const obj = try self.unwrap().clone(self.env.ally);
-            return Self.wrap(self.env, obj);
+        pub fn clone(self: Self) Object.InitError!Self {
+            const obj = try self.unwrap().clone(self.env);
+            const cloned = Self.wrap(self.env, obj);
+
+            if (@hasDecl(Ext, "clone")) try Ext.clone(cloned);
+
+            return cloned;
         }
 
-        fn getFieldPtrIndexed(self: Self, tag_index: usize) *anyopaque {
+        pub fn sizeOf(self: Self) usize {
+            // this would have errored out in init if it were to error
+            return self.env.sizeOf(self.ty) catch unreachable;
+        }
+
+        fn getFieldPtrIndexed(self: Self, tag_index: usize) Ptr {
             const offset = self.fields[tag_index].offset;
-            return @intToPtr(*anyopaque, @ptrToInt(self.base) + offset);
+            return self.base.add(offset);
         }
 
-        fn getFieldPtr(self: Self, comptime tag: I.Tag) *anyopaque {
+        fn getFieldPtr(self: Self, comptime tag: I.Tag) Ptr {
             const tag_index = @enumToInt(tag) + switch (I.itype) {
                 .@"struct" => 0,
                 // variant must skip 'tag' field
@@ -385,9 +432,8 @@ pub fn Wrapper(comptime Template: type) type {
         fn getTagPtr(self: Self) *I.Tag {
             std.debug.assert(I.itype == .variant);
 
-            const raw_ptr = self.getFieldPtrIndexed(0);
-            const aligned_ptr = @alignCast(@alignOf(I.Tag), raw_ptr);
-            return @ptrCast(*I.Tag, aligned_ptr);
+            const ptr = self.getFieldPtrIndexed(0);
+            return self.env.img.into(ptr, *I.Tag);
         }
 
         /// get a pointer to a field value
@@ -403,8 +449,7 @@ pub fn Wrapper(comptime Template: type) type {
             }
 
             const raw_ptr = self.getFieldPtr(tag);
-            const aligned = @alignCast(aln, raw_ptr);
-            return @ptrCast(*V, aligned);
+            return self.env.img.into(raw_ptr, *V);
         }
 
         /// get a field value or interface
@@ -433,7 +478,7 @@ pub fn Wrapper(comptime Template: type) type {
                     const field_ptr = self.getFieldPtr(tag);
                     const field_fields = self.env.rw.get(field_repr).coll;
 
-                    break :wrapped Wrapper(FieldI){
+                    break :wrapped Wrapper(FieldI, null){
                         .base = field_ptr,
                         .env = self.env,
                         .ty = field_ty,
@@ -455,8 +500,7 @@ pub fn Wrapper(comptime Template: type) type {
                     return st;
                 },
                 .variant => {
-                    const rt_tag = self.getTagPtr().*;
-                    switch (rt_tag) {
+                    switch (self.getVarTag()) {
                         inline else => |tag| {
                             const name = @tagName(tag);
                             return @unionInit(I.Into, name, self.get(tag));
@@ -471,11 +515,26 @@ pub fn Wrapper(comptime Template: type) type {
             self.getTagPtr().* = tag;
         }
 
+        pub fn getVarTag(self: Self) I.Tag {
+            return self.getTagPtr().*;
+        }
+
         /// sets the var tag and then returns the value. this is super useful
         /// for initializing variant types.
         pub fn setInto(self: Self, comptime tag: I.Tag) I.field(tag).Into() {
             self.setVarTag(tag);
             return self.get(tag);
+        }
+
+        fn SetType(comptime tag: I.Tag) type {
+            return switch (I.field(tag)) {
+                .unit => void,
+                .value => |T| T,
+                else => @compileError(std.fmt.comptimePrint(
+                    "cannot set field `{s}`",
+                    @tagName(tag),
+                )),
+            };
         }
 
         /// set a value based on the templated value. if this is a variant, also
@@ -485,7 +544,7 @@ pub fn Wrapper(comptime Template: type) type {
         pub fn set(
             self: Self,
             comptime tag: I.Tag,
-            val: TemplateField(tag),
+            val: SetType(tag),
         ) void {
             // tag must be set for variants
             if (I.itype == .variant) {
@@ -495,12 +554,7 @@ pub fn Wrapper(comptime Template: type) type {
             switch (I.field(tag)) {
                 .unit => {},
                 .value => self.getPtr(tag).* = val,
-                .slice => {
-                    const slice = self.get(tag);
-                    slice.st.set(.ptr, val.ptr);
-                    slice.st.set(.len, val.len);
-                },
-                .coll => @compileError("TODO wrapper.set for collections"),
+                else => unreachable,
             }
         }
 
@@ -529,7 +583,7 @@ test "interface-struct" {
         x: u32,
         y: u32,
         z: u32,
-    });
+    }, null);
 
     const wrapped = try Vec3.init(&env);
     defer wrapped.deinit();
@@ -538,9 +592,9 @@ test "interface-struct" {
     wrapped.set(.y, 22);
     wrapped.set(.z, 33);
 
-    try expect(11 == wrapped.get(.x));
-    try expect(22 == wrapped.get(.y));
-    try expect(33 == wrapped.get(.z));
+    try expectEqual(@as(u32, 11), wrapped.get(.x));
+    try expectEqual(@as(u32, 22), wrapped.get(.y));
+    try expectEqual(@as(u32, 33), wrapped.get(.z));
 
     try kz.display(env.ally, {}, wrapped, writer);
 }
@@ -558,7 +612,7 @@ test "interface-nested-struct" {
 
     const Vec3 = struct { x: u32, y: u32, z: u32 };
     const ZRay = struct { pos: Vec3, dir: Vec3 };
-    const Ray = Wrapper(ZRay);
+    const Ray = Wrapper(ZRay, null);
 
     const wrapped = try Ray.init(&env);
     defer wrapped.deinit();
@@ -570,12 +624,12 @@ test "interface-nested-struct" {
     wrapped.get(.dir).set(.y, 55);
     wrapped.get(.dir).set(.z, 66);
 
-    try expect(11 == wrapped.get(.pos).get(.x));
-    try expect(22 == wrapped.get(.pos).get(.y));
-    try expect(33 == wrapped.get(.pos).get(.z));
-    try expect(44 == wrapped.get(.dir).get(.x));
-    try expect(55 == wrapped.get(.dir).get(.y));
-    try expect(66 == wrapped.get(.dir).get(.z));
+    try expectEqual(@as(u32, 11), wrapped.get(.pos).get(.x));
+    try expectEqual(@as(u32, 22), wrapped.get(.pos).get(.y));
+    try expectEqual(@as(u32, 33), wrapped.get(.pos).get(.z));
+    try expectEqual(@as(u32, 44), wrapped.get(.dir).get(.x));
+    try expectEqual(@as(u32, 55), wrapped.get(.dir).get(.y));
+    try expectEqual(@as(u32, 66), wrapped.get(.dir).get(.z));
 
     try kz.display(env.ally, {}, wrapped, writer);
 }
@@ -595,7 +649,8 @@ test "interface-variant" {
         a: u32,
         b: i32,
         c: f32,
-    });
+    }, null);
+    const VTag = V.I.Tag;
 
     const wrapped = try V.init(&env);
     defer wrapped.deinit();
@@ -606,13 +661,15 @@ test "interface-variant" {
     try kz.display(env.ally, {}, wrapped, writer);
 
     const val_a = wrapped.into();
-    try expect(val_a == .a and val_a.a == 11);
+    try expectEqual(VTag.a, val_a);
+    try expectEqual(@as(u32, 11), val_a.a);
 
     // b
     wrapped.set(.b, -22);
 
     const val_b = wrapped.into();
-    try expect(val_b == .b and val_b.b == -22);
+    try expectEqual(VTag.b, val_b);
+    try expectEqual(@as(i32, -22), val_b.b);
 
     try kz.display(env.ally, {}, wrapped, writer);
 
@@ -620,42 +677,100 @@ test "interface-variant" {
     wrapped.set(.c, 1.5);
 
     const val_c = wrapped.into();
-    try expect(val_c == .c and val_c.c == 1.5);
+    try expectEqual(VTag.c, val_c);
+    try expectEqual(@as(f32, 1.5), val_c.c);
 
     try kz.display(env.ally, {}, wrapped, writer);
 }
 
-test "interface-slice" {
+test "interface-value-slice" {
     const prelude = @import("prelude.zig");
 
     const writer = std.io.getStdErr().writer();
     try writer.writeByte('\n');
 
-    var env = try Env.init(std.testing.allocator);
+    const ally = std.testing.allocator;
+    var env = try Env.init(ally);
     defer env.deinit();
 
     try prelude.initPrelude(&env);
 
-    const S = Wrapper(struct {
-        slice: []u32,
-    });
+    const S = Wrapper(struct { slice: []u32 }, null);
 
     const wrapped = try S.init(&env);
     defer wrapped.deinit();
 
-    const slice = wrapped.get(.slice);
-    try slice.alloc(3);
-    defer slice.free();
+    const len = 3;
+    const mem_sz = len * @sizeOf(u32);
+    const mem = try env.alloc(.heap, mem_sz);
+    defer env.free(mem, mem_sz);
 
-    try expect(slice.len() == 3);
+    const slice = wrapped.get(.slice);
+    slice.setInto(mem, len);
+
+    try expectEqual(@as(usize, 3), slice.len());
 
     slice.set(0, 11);
     slice.set(1, 22);
     slice.set(2, 33);
 
-    try expect(11 == slice.get(0));
-    try expect(22 == slice.get(1));
-    try expect(33 == slice.get(2));
+    try expectEqual(@as(u32, 11), slice.get(0));
+    try expectEqual(@as(u32, 22), slice.get(1));
+    try expectEqual(@as(u32, 33), slice.get(2));
+
+    try kz.display(env.ally, {}, wrapped, writer);
+}
+
+test "interface-coll-slice" {
+    const prelude = @import("prelude.zig");
+
+    const writer = std.io.getStdErr().writer();
+    try writer.writeByte('\n');
+
+    const ally = std.testing.allocator;
+    var env = try Env.init(ally);
+    defer env.deinit();
+
+    try prelude.initPrelude(&env);
+
+    const Test = struct {
+        a: u32,
+        b: bool,
+    };
+    const test_sz = try env.sizeOf(try env.identifyZigType(Test));
+
+    const S = Wrapper(struct { slice: []Test }, null);
+
+    const wrapped = try S.init(&env);
+    defer wrapped.deinit();
+
+    const slice = wrapped.get(.slice);
+    const mem_sz = test_sz * 3;
+    const mem = try env.alloc(.heap, mem_sz);
+    defer env.free(mem, mem_sz);
+
+    slice.setInto(mem, 3);
+
+    try expectEqual(@as(usize, 3), slice.len());
+
+    slice.get(0).set(.a, 11);
+    slice.get(0).set(.b, true);
+    slice.get(1).set(.a, 22);
+    slice.get(1).set(.b, false);
+    slice.get(2).set(.a, 33);
+    slice.get(2).set(.b, true);
+
+    const fst = slice.get(0);
+    try expectEqual(@as(u32, 11), fst.get(.a));
+    try expectEqual(true, fst.get(.b));
+
+    const snd = slice.get(1);
+    try expectEqual(@as(u32, 22), snd.get(.a));
+    try expectEqual(false, snd.get(.b));
+
+    const thd = slice.get(2);
+    try expectEqual(@as(u32, 33), thd.get(.a));
+    try expectEqual(true, thd.get(.b));
 
     try kz.display(env.ally, {}, wrapped, writer);
 }

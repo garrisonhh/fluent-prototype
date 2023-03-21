@@ -1,4 +1,4 @@
-//! manages handles for fluent reprs.
+//! manages handles for fluent reverse.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -17,18 +17,6 @@ pub const ConversionError = Allocator.Error || error{NoRepr};
 pub const QualError = Repr.QualError;
 pub const Error = ConversionError || Repr.AccessError;
 
-pub const ReprId = packed struct(u64) {
-    index: usize,
-
-    pub fn eql(self: @This(), id: @This()) bool {
-        return self.index == id.index;
-    }
-
-    pub fn render(self: @This(), ctx: *kz.Context, rw: Self) !kz.Ref {
-        return try rw.get(self).render(ctx, rw);
-    }
-};
-
 const ReprMapContext = struct {
     const K = Repr;
 
@@ -44,7 +32,7 @@ const ReprMapContext = struct {
     }
 };
 
-const ReprMap = std.HashMapUnmanaged(
+const ReverseMap = std.HashMapUnmanaged(
     Repr,
     ReprId,
     ReprMapContext,
@@ -56,24 +44,31 @@ const Slot = struct {
     repr: Repr,
     aln: ?usize,
     sz: ?usize,
+
+    /// for ReprMap to automatically deinit repr
+    pub fn deinit(self: *@This(), ally: Allocator) void {
+        self.repr.deinit(ally);
+    }
 };
 
+pub const ReprId = com.UId(.repr);
+const ReprMap = com.IdMap(ReprId, Slot);
+
 /// maps ReprId -> Repr
-map: std.MultiArrayList(Slot) = .{},
+map: ReprMap = .{},
 /// maps Repr -> ReprId
-reprs: ReprMap = .{},
+reverse: ReverseMap = .{},
 /// maps TypeId -> ReprId
 converts: std.AutoHashMapUnmanaged(TypeId, ReprId) = .{},
 
 pub fn deinit(self: *Self, ally: Allocator) void {
-    for (self.map.items(.repr)) |repr| repr.deinit(ally);
     self.map.deinit(ally);
-    self.reprs.deinit(ally);
+    self.reverse.deinit(ally);
     self.converts.deinit(ally);
 }
 
-pub fn get(self: Self, id: ReprId) Repr {
-    return self.map.get(id.index).repr;
+pub fn get(self: Self, id: ReprId) *const Repr {
+    return &self.map.get(id).repr;
 }
 
 pub fn intern(self: *Self, ally: Allocator, repr: Repr) Allocator.Error!ReprId {
@@ -91,24 +86,22 @@ pub fn internExtra(
     ally: Allocator,
     slot: Slot,
 ) Allocator.Error!ReprId {
-    if (self.reprs.get(slot.repr)) |id| {
+    if (self.reverse.get(slot.repr)) |id| {
         // repr is known
         return id;
-    } else {
-        // repr is unknown, clone and store it
-        const id = ReprId{ .index = self.map.len };
-        const cloned = try slot.repr.clone(ally);
-
-        try self.map.append(ally, Slot{
-            .repr = cloned,
-            .sz = slot.sz,
-            .aln = slot.aln,
-        });
-
-        try self.reprs.put(ally, cloned, id);
-
-        return id;
     }
+
+    // repr is unknown, clone and store it
+    const cloned = try slot.repr.clone(ally);
+    const id = try self.map.new(ally, Slot{
+        .repr = cloned,
+        .sz = slot.sz,
+        .aln = slot.aln,
+    });
+
+    try self.reverse.put(ally, cloned, id);
+
+    return id;
 }
 
 /// get ReprId for any type. may convert or retrieve a cached id
@@ -131,22 +124,22 @@ pub fn reprOf(
 
 /// the necessary alignment of the Repr
 pub fn alignOf(self: Self, id: ReprId) QualError!usize {
-    const alns = self.map.items(.aln);
-    if (alns[id.index] == null) {
-        alns[id.index] = try self.get(id).alignOf(self);
+    const slot = self.map.get(id);
+    if (slot.aln == null) {
+        slot.aln = try slot.repr.alignOf(self);
     }
 
-    return alns[id.index].?;
+    return slot.aln.?;
 }
 
 /// the aligned size of the Repr
 pub fn sizeOf(self: Self, id: ReprId) QualError!usize {
-    const szs = self.map.items(.sz);
-    if (szs[id.index] == null) {
-        szs[id.index] = try self.get(id).sizeOf(self);
+    const slot = self.map.get(id);
+    if (slot.sz == null) {
+        slot.sz = try slot.repr.sizeOf(self);
     }
 
-    return szs[id.index].?;
+    return slot.sz.?;
 }
 
 /// what size this Repr takes in memory, given an alignment
@@ -164,47 +157,28 @@ pub fn ofType(
     tw: TypeWelt,
     id: TypeId,
 ) Error!ReprId {
+    // check for cached repr
+    if (self.converts.get(id)) |rid| {
+        return rid;
+    }
+
+    // map a new rid
+    const rid = try self.map.newId(ally);
+    try self.converts.put(ally, id, rid);
+
     const ty = tw.get(id);
-    return switch (ty.*) {
-        // no repr
-        .hole,
-        .any,
-        .set,
-        => return error.NoRepr,
 
-        .unit => try self.intern(ally, .unit),
-        .@"bool" => try self.intern(ally, .{ .uint = 1 }),
-        .ty, .builtin => try self.intern(ally, .{ .uint = 8 }),
-        .array => |arr| try self.intern(ally, .{
-            .array = .{
-                .size = arr.size,
-                .of = try self.reprOf(ally, tw, arr.of),
-            },
-        }),
-        .number => |num| num: {
-            const nbytes = if (num.bits) |bits| @divExact(bits, 8) else 8;
-            const repr = switch (num.layout) {
-                inline else => |tag| @unionInit(
-                    Repr,
-                    @tagName(tag),
-                    @intCast(u4, nbytes),
-                ),
-            };
-
-            break :num try self.intern(ally, repr);
-        },
+    // special cases
+    // some cases handle putting themselves into the idmap
+    switch (ty.*) {
         .ptr => |ptr| switch (ptr.kind) {
-            .slice => sl: {
-                const of = try self.reprOf(ally, tw, ptr.to);
-                break :sl try self.makeSlice(ally, of);
+            .slice => {
+                try self.genSlice(ally, rid, try self.reprOf(ally, tw, ptr.to));
+                return rid;
             },
-            // the difference between single and many pointers is purely
-            // symbolic
-            .single, .many => try self.intern(ally, Repr{
-                .ptr = try self.reprOf(ally, tw, ptr.to),
-            }),
+            else => {},
         },
-        inline .@"struct", .variant => |fields, tag| st: {
+        inline .@"struct", .variant => |fields, tag| {
             const field_reprs = try ally.alloc(ReprId, fields.len);
             defer ally.free(field_reprs);
 
@@ -212,11 +186,51 @@ pub fn ofType(
                 field_reprs[i] = try self.reprOf(ally, tw, field.of);
             }
 
-            break :st switch (comptime tag) {
-                .@"struct" => try self.makeStruct(ally, field_reprs),
-                .variant => try self.makeVariant(ally, field_reprs),
+            switch (comptime tag) {
+                .@"struct" => try self.genStruct(ally, rid, field_reprs),
+                .variant => try self.genVariant(ally, rid, field_reprs),
                 else => unreachable,
+            }
+
+            return rid;
+        },
+        else => {},
+    }
+
+    // create repr
+    const repr: Repr = switch (ty.*) {
+        // no repr
+        .hole,
+        .any,
+        .set,
+        => return error.NoRepr,
+
+        .unit => .unit,
+        .@"bool" => .{ .uint = 1 },
+        .ty, .builtin => .{ .uint = 8 },
+        .array => |arr| .{
+            .array = .{
+                .size = arr.size,
+                .of = try self.reprOf(ally, tw, arr.of),
+            },
+        },
+        .number => |num| num: {
+            const nbytes = if (num.bits) |bits| @divExact(bits, 8) else 8;
+            break :num switch (num.layout) {
+                inline else => |tag| @unionInit(
+                    Repr,
+                    @tagName(tag),
+                    @intCast(u4, nbytes),
+                ),
             };
+        },
+        .ptr => |ptr| switch (ptr.kind) {
+            .slice => unreachable,
+            // the difference between single and many pointers is purely
+            // symbolic
+            .single, .many => Repr{
+                .ptr = try self.reprOf(ally, tw, ptr.to),
+            },
         },
         .func => |func| func: {
             // NOTE this implements the base truth for the fluent callconv
@@ -233,50 +247,48 @@ pub fn ofType(
 
             const returns = try Param.ofType(ally, self, tw, func.returns);
 
-            break :func try self.intern(ally, Repr{
+            break :func Repr{
                 .func = .{
                     .ctx = ctx,
                     .takes = takes,
                     .returns = returns,
                 },
-            });
+            };
         },
+        .@"struct", .variant => unreachable,
         else => |tag| std.debug.panic("TODO convert repr of {}", .{tag}),
     };
-}
 
-/// dupes parameters
-pub fn makeFunc(
-    self: *Self,
-    ally: Allocator,
-    ctx: Param,
-    takes: []const Param,
-    returns: Param,
-) Allocator.Error!Self {
-    return try self.intern(ally, Repr{
-        .func = Repr.Func{
-            .ctx = ctx,
-            .takes = takes,
-            .returns = returns,
-        },
+    try self.map.set(ally, rid, Slot{
+        .repr = repr,
+        .sz = null,
+        .aln = null,
     });
+
+    return rid;
 }
 
+/// helper for ofType
 /// create a slice repr
-pub fn makeSlice(
+fn genSlice(
     self: *Self,
     ally: Allocator,
+    id: ReprId,
     of: ReprId,
-) Error!ReprId {
+) Error!void {
     const ptr = try self.intern(ally, Repr{ .ptr = of });
     const len = try self.intern(ally, Repr{ .uint = 8 });
 
-    const fields = [_]Repr.Field{
+    const fields = try ally.dupe(Repr.Field, &.{
         .{ .offset = 0, .of = ptr },
         .{ .offset = 8, .of = len },
-    };
+    });
 
-    return try self.intern(ally, Repr{ .coll = &fields });
+    try self.map.set(ally, id, Slot{
+        .repr = Repr{ .coll = fields },
+        .sz = 16,
+        .aln = 8,
+    });
 }
 
 /// helper for creating collections
@@ -291,12 +303,14 @@ const FieldSlot = struct {
     }
 };
 
+/// helper for ofType
 /// create a struct repr. all fields will have the same index as their repr.
-pub fn makeStruct(
+fn genStruct(
     self: *Self,
     ally: Allocator,
+    id: ReprId,
     field_reprs: []const ReprId,
-) Error!ReprId {
+) Error!void {
     // construct field metadata and sort
     const slots = try ally.alloc(FieldSlot, field_reprs.len);
     defer ally.free(slots);
@@ -313,7 +327,6 @@ pub fn makeStruct(
 
     // manipulate into fields, calculating struct aln and sz along the way
     const fields = try ally.alloc(Repr.Field, slots.len);
-    defer ally.free(fields);
 
     var offset: usize = 0;
     var struct_aln: usize = 1;
@@ -337,23 +350,24 @@ pub fn makeStruct(
     const struct_sz = com.padAlignment(offset, struct_aln);
     const repr = Repr{ .coll = fields };
 
-    return try self.internExtra(ally, Slot{
+    try self.map.set(ally, id, Slot{
         .repr = repr,
         .sz = struct_sz,
         .aln = struct_aln,
     });
 }
 
+/// helper for ofType
 /// variant == enum or tagged union
 /// all variants have a u64 tag at offset zero, which will become index 0. all
 /// field reprs will then be indexable at their passed index + 1
-pub fn makeVariant(
+fn genVariant(
     self: *Self,
     ally: Allocator,
+    id: ReprId,
     field_reprs: []const ReprId,
-) Error!ReprId {
+) Error!void {
     const fields = try ally.alloc(Repr.Field, field_reprs.len + 1);
-    defer ally.free(fields);
 
     // tag
     const tag = try self.intern(ally, Repr{ .uint = 8 });
@@ -382,7 +396,7 @@ pub fn makeVariant(
     const variant_sz = com.padAlignment(max_aln + fields_sz, max_aln);
     const repr = Repr{ .coll = fields };
 
-    return try self.internExtra(ally, Slot{
+    try self.map.set(ally, id, Slot{
         .repr = repr,
         .sz = variant_sz,
         .aln = max_aln,

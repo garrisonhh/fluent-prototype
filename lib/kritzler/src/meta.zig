@@ -13,12 +13,7 @@ pub fn display(
     env: anytype,
     target: anytype,
     writer: anytype,
-) err: {
-    const render_fn_type = @TypeOf(@TypeOf(target).render);
-    const return_type = @typeInfo(render_fn_type).Fn.return_type.?;
-    const error_set = @typeInfo(return_type).ErrorUnion.error_set;
-    break :err Allocator.Error || @TypeOf(writer).Error || error_set;
-}!void {
+) !void {
     var ctx = Context.init(ally);
     defer ctx.deinit();
 

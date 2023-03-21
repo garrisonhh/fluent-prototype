@@ -3,6 +3,8 @@ const TypeWelt = @import("typewelt.zig");
 const TypeId = TypeWelt.TypeId;
 
 pub const ExprTemplate = struct {
+    const Self = @This();
+
     type: TypeId,
     data: union(enum) {
         unit: void,
@@ -12,15 +14,30 @@ pub const ExprTemplate = struct {
         int: i64,
         float: f64,
         string: []const u8,
+        call: []Self,
     },
 };
 
+fn ExprMixin(comptime Self: type) type {
+    return struct {
+        pub fn deinit(self: Self) void {
+            const env = self.env;
+
+            switch (self.get(.data).into()) {
+                .string => |sl| env.free(sl.ptr(), sl.len()),
+                else => {},
+            }
+        }
+    };
+}
+
 /// Fluent's AST represented as a Fluent data structure
-pub const Expr = Object.Wrapper(ExprTemplate);
+pub const Expr = Object.Wrapper(ExprTemplate, ExprMixin);
 
 test "exprs" {
     const std = @import("std");
     const expect = std.testing.expect;
+    const expectEqual = std.testing.expectEqual;
     const prelude = @import("prelude.zig");
     const Basic = prelude.Basic;
     const Env = @import("../env.zig");
@@ -46,7 +63,7 @@ test "exprs" {
 
         const data = expr.get(.data).into();
         try expect(data == .unit);
-        try expect(data.unit == {});
+        try expectEqual({}, data.unit);
 
         try writer.writeAll("\n[unit]\n");
         try kz.display(env.ally, {}, expr, writer);
@@ -62,7 +79,7 @@ test "exprs" {
 
         const data = expr.get(.data).into();
         try expect(data == .bool);
-        try expect(data.bool == true);
+        try expectEqual(true, data.bool);
 
         try writer.writeAll("\n[bool]\n");
         try kz.display(env.ally, {}, expr, writer);
@@ -78,7 +95,7 @@ test "exprs" {
 
         const data = expr.get(.data).into();
         try expect(data == .uint);
-        try expect(data.uint == 32);
+        try expectEqual(@as(u64, 32), data.uint);
 
         try writer.writeAll("\n[u32]\n");
         try kz.display(env.ally, {}, expr, writer);
@@ -94,7 +111,7 @@ test "exprs" {
 
         const data = expr.get(.data).into();
         try expect(data == .int);
-        try expect(data.int == -32);
+        try expectEqual(@as(i64, -32), data.int);
 
         try writer.writeAll("\n[i8]\n");
         try kz.display(env.ally, {}, expr, writer);
@@ -106,14 +123,16 @@ test "exprs" {
         defer expr.deinit();
 
         const str = "hi, my name is garrison";
+        const owned_ptr = try env.alloc(.heap, str.len);
+        const owned = env.img.intoSlice(owned_ptr, u8, str.len);
+        std.mem.copy(u8, owned, str);
 
         expr.set(.type, try env.identifyZigType([str.len]u8));
-        try expr.get(.data).setInto(.string).dupe(str);
-        defer expr.get(.data).get(.string).free();
+        expr.get(.data).setInto(.string).setInto(owned_ptr, str.len);
 
         const data = expr.get(.data).into();
         try expect(data == .string);
-        try expect(std.mem.eql(u8, data.string.slice(), str));
+        try expect(std.mem.eql(u8, data.string.into(), str));
 
         try writer.writeAll("\n[string]\n");
         try kz.display(env.ally, {}, expr, writer);

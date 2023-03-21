@@ -114,20 +114,9 @@ pub const Type = union(enum) {
 
     pub const render = @import("render_type.zig").renderType;
 
-    /// this uses kritzler, so ANSI codes WILL be included
-    pub fn toString(
-        self: Self,
-        ally: Allocator,
-        tw: TypeWelt,
-    ) Allocator.Error![]u8 {
-        var buf = std.ArrayList(u8).init(ally);
-        defer buf.deinit();
-
-        try kz.display(ally, tw, self, buf.writer());
-
-        return buf.toOwnedSlice();
-    }
-
+    /// TODO this needs to be aware of it's 'self' TypeId, which should always
+    /// be hashed to zero. once that is implemented, I can actually 'identify'
+    /// structured types (which is currently broken)
     pub fn hash(self: Self, wyhash: *Wyhash) void {
         const b = std.mem.asBytes;
         wyhash.update(b(&@as(Tag, self)));
@@ -173,6 +162,8 @@ pub const Type = union(enum) {
         return true;
     }
 
+    /// TODO this needs to be aware of its 'self' id, or I need a version which
+    /// does so
     pub fn eql(self: Self, ty: Self) bool {
         if (@as(Tag, self) != @as(Tag, ty)) return false;
 

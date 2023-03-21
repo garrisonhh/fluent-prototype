@@ -5,7 +5,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const com = @import("common");
-const Value = @import("value.zig");
 
 pub const Layout = com.Number.Layout;
 
@@ -64,17 +63,10 @@ pub fn cast(self: Self, bits: ?u8, layout: com.Number.Layout) Self {
     };
 }
 
-/// returns this as a value on an allocator
-pub fn asValue(self: Self, ally: Allocator) Allocator.Error!Value {
-    const data: []const u8 = switch (self.data) {
-        inline else => |n| std.mem.asBytes(&n),
+pub fn asBytes(self: Self) *const [8]u8 {
+    return switch (self.data) {
+        inline else => |n| @ptrCast(*const [8]u8, &n),
     };
-
-    const bits = self.bits orelse 64;
-    std.debug.assert(bits % 8 == 0 and bits / 8 <= 8);
-    std.debug.assert(builtin.target.cpu.arch.endian() == .Little);
-
-    return try Value.init(ally, data[0 .. bits / 8]);
 }
 
 pub fn eql(self: Self, other: Self) bool {

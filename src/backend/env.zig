@@ -19,12 +19,12 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const kz = @import("kritzler");
 const com = @import("common");
 const Symbol = com.Symbol;
 const Name = com.Name;
 const NameMap = com.NameMap;
 const Loc = com.Loc;
-const kz = @import("kritzler");
 // const ssa = @import("ssa/ssa.zig");
 // const SsaProgram = ssa.Program;
 // const SsaRef = ssa.FuncRef;
@@ -41,6 +41,8 @@ const TypeWelt = canon.TypeWelt;
 const Repr = canon.Repr;
 const ReprId = canon.ReprId;
 const ReprWelt = canon.ReprWelt;
+const Image = canon.Image;
+const Ptr = canon.Ptr;
 
 const Self = @This();
 
@@ -49,10 +51,13 @@ pub const ROOT = Name.ROOT;
 const VM_STACK_SIZE = 32 * 1024;
 
 ally: Allocator,
+// ownership of data
+nmap: NameMap(Object) = .{},
+img: Image,
+// data tables
 tw: TypeWelt = .{},
 rw: ReprWelt = .{},
-/// env owns everything in every binding
-nmap: NameMap(Object) = .{},
+
 // these store the lowered + compiled forms of functions
 // prog: SsaProgram = .{},
 // bc: BcBuilder = .{},
@@ -64,6 +69,7 @@ nmap: NameMap(Object) = .{},
 pub fn init(ally: Allocator) Allocator.Error!Self {
     return Self{
         .ally = ally,
+        .img = Image.init(ally),
         // .vm = try Vm.init(ally, VM_STACK_SIZE),
     };
 }
@@ -72,14 +78,39 @@ pub fn deinit(self: *Self) void {
     var objects = self.nmap.map.valueIterator();
     while (objects.next()) |obj| obj.deinit(self);
 
+    self.nmap.deinit(self.ally);
+    self.img.deinit();
     self.tw.deinit(self.ally);
     self.rw.deinit(self.ally);
-    self.nmap.deinit(self.ally);
     // self.prog.deinit(self.ally);
     // self.bc.deinit(self.ally);
     // self.vm.deinit(self.ally);
     // self.compiled.deinit(self.ally);
     // self.lowered.deinit(self.ally);
+}
+
+// image =======================================================================
+
+pub fn alloc(
+    self: *Self,
+    section: Image.Section,
+    nbytes: usize,
+) Image.AllocError!Ptr {
+    return self.img.alloc(section, nbytes);
+}
+
+pub fn free(self: *Self, ptr: Ptr, nbytes: usize) void {
+    self.img.free(ptr, nbytes);
+}
+
+/// returns a machine ptr
+pub fn ptrRaw(self: *const Self, ptr: Ptr) Image.RawPtr {
+    return self.img.raw(ptr);
+}
+
+/// converts a fluent ptr into a typed zig ptr
+pub fn ptrInto(self: *const Self, ptr: Ptr, comptime P: type) P {
+    return self.img.into(ptr, P);
 }
 
 // objects =====================================================================

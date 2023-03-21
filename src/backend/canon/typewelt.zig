@@ -17,29 +17,19 @@ const Wyhash = std.hash.Wyhash;
 const kz = @import("kritzler");
 const com = @import("common");
 const Name = com.Name;
+const IdMap = com.IdMap;
 const Type = @import("type.zig").Type;
 
 const Self = @This();
 
-pub const TypeId = packed struct(u64) {
-    index: usize,
+// TODO replace ALL of the low level shit with com.IdMap. it already implements
+// pre-allocating TypeIds, also removes the potential for very subtle bugs where
+// after calling identify() a currently referenced *Type _might_ be moved
 
-    pub fn eql(self: @This(), id: @This()) bool {
-        return self.index == id.index;
-    }
+pub const TypeId = com.UId(.type);
+const TypeMap = IdMap(TypeId, Type);
 
-    pub const render = @import("render_type.zig").renderTypeId;
-
-    pub fn toString(
-        self: @This(),
-        ally: Allocator,
-        tw: Self,
-    ) Allocator.Error![]u8 {
-        return try tw.get(self).toString(ally, tw);
-    }
-};
-
-const TypeMapContext = struct {
+const ReverseMapContext = struct {
     const K = *const Type;
 
     pub fn hash(_: @This(), key: K) u64 {
@@ -54,35 +44,29 @@ const TypeMapContext = struct {
     }
 };
 
-const TypeMap = std.HashMapUnmanaged(
+const ReverseMap = std.HashMapUnmanaged(
     *const Type,
     TypeId,
-    TypeMapContext,
+    ReverseMapContext,
     std.hash_map.default_max_load_percentage,
 );
 
 // maps TypeId -> Type
-// types are individually allocated to allow the typewelt to reuse the data
-// as the key to the other map
-types: std.ArrayListUnmanaged(*Type) = .{},
-// maps Type -> TypeId
 map: TypeMap = .{},
 // maps TypeId -> Name
 // names are owned by the environment
-names: std.ArrayListUnmanaged(?Name) = .{},
+names: std.AutoHashMapUnmanaged(TypeId, Name) = .{},
+// maps Type -> TypeId
+reverse: ReverseMap = .{},
 
 pub fn deinit(self: *Self, ally: Allocator) void {
-    for (self.types.items) |ptr| {
-        ptr.deinit(ally);
-        ally.destroy(ptr);
-    }
-    self.types.deinit(ally);
-    self.names.deinit(ally);
     self.map.deinit(ally);
+    self.names.deinit(ally);
+    self.reverse.deinit(ally);
 }
 
 pub fn get(self: Self, id: TypeId) *const Type {
-    return self.types.items[id.index];
+    return self.map.get(id);
 }
 
 pub const RenameError = error{RenamedType};
@@ -94,58 +78,104 @@ pub fn setName(
     id: TypeId,
     name: Name,
 ) (Allocator.Error || RenameError)!void {
-    // expand names array
-    if (self.names.items.len <= id.index) {
-        const diff = 1 + id.index - self.names.items.len;
-        try self.names.appendNTimes(ally, null, diff);
+    const res = try self.names.getOrPut(ally, id);
+    if (res.found_existing) {
+        return RenameError.RenamedType;
     }
 
-    if (self.names.items[id.index] != null) {
-        return error.RenamedType;
-    } else {
-        self.names.items[id.index] = name;
-    }
+    res.value_ptr.* = name;
 }
 
 pub fn getName(self: Self, id: TypeId) ?Name {
-    if (id.index >= self.names.items.len) return null;
-    return self.names.items[id.index];
+    return self.names.get(id);
 }
 
-/// retrieves an established ID or creates a new one.
-pub fn identify(
-    self: *Self,
-    ally: Allocator,
-    ty: Type,
-) Allocator.Error!TypeId {
-    const res = try self.map.getOrPut(ally, &ty);
-    if (!res.found_existing) {
-        // allocate for type and clone
-        const cloned = try com.placeOn(ally, try ty.clone(ally));
+/// creates a new type id from a type
+pub fn distinct(self: *Self, ally: Allocator, ty: Type) Allocator.Error!TypeId {
+    const id = try self.map.new(ally, ty);
+    try self.reverse.put(ally, self.map.get(id), id);
 
-        // store in internal data structures
-        res.key_ptr.* = cloned;
-        res.value_ptr.* = TypeId{ .index = self.types.items.len };
-
-        try self.types.append(ally, cloned);
-    }
-
-    return res.value_ptr.*;
+    return id;
 }
 
-/// very useful for syncing object interfaces
-pub fn identifyZigType(
+/// retrieves a previously stored type
+pub fn retrieve(self: Self, ty: *const Type) TypeId {
+    return self.reverse.get(ty).?;
+}
+
+/// retrieves a previously stored id or creates a new one if this is a new type
+pub fn identify(self: *Self, ally: Allocator, ty: Type) Allocator.Error!TypeId {
+    return self.reverse.get(&ty) orelse self.distinct(ally, ty);
+}
+
+/// a map from zig @typeName to type id
+const SelfMap = std.StringHashMapUnmanaged(TypeId);
+
+fn identifyZig(
     self: *Self,
     ally: Allocator,
+    selves: *SelfMap,
     comptime T: type,
 ) Allocator.Error!TypeId {
+    const info = @typeInfo(T);
+    const typename = @as([]const u8, @typeName(T));
+
+    // internal self references have already been identified
+    if (selves.get(typename)) |this| {
+        return this;
+    }
+
+    // special case for structured data, which must be distinct and allow self
+    // referencing
+    switch (info) {
+        inline .Struct, .Union => |_, zig_tag| coll: {
+            // TypeId is a struct but has to be translated to Type{ .ty = {} }
+            if (T == TypeId) break :coll;
+
+            // for whatever reason zig doesn't recognize this is comptime
+            // through the switch capture
+            const zig_fields = std.meta.fields(T);
+
+            // make distinct id and store self id
+            const id = try self.map.newId(ally);
+            try selves.put(ally, typename, id);
+
+            // recurse on zig fields to make fluent fields
+            const fields = try ally.alloc(Type.Field, zig_fields.len);
+            inline for (zig_fields) |field, i| {
+                const name = try com.Symbol.init(field.name).clone(ally);
+                const ty = try self.identifyZig(ally, selves, field.field_type);
+
+                fields[i] = Type.Field{
+                    .name = name,
+                    .of = ty,
+                };
+            }
+
+            // fill in distinct type
+            const tag: Type.Tag = switch (zig_tag) {
+                .Struct => .@"struct",
+                .Union => .variant,
+                else => unreachable,
+            };
+            const final = @unionInit(Type, @tagName(tag), fields);
+
+            try self.map.set(ally, id, final);
+            try self.reverse.put(ally, self.map.get(id), id);
+
+            return id;
+        },
+        else => {},
+    }
+
     var ty: Type = switch (T) {
         void => .unit,
         bool => .bool,
         TypeId => .ty,
         comptime_int => Type{ .number = .{ .layout = .int, .bits = null } },
         comptime_float => Type{ .number = .{ .layout = .float, .bits = null } },
-        else => switch (@typeInfo(T)) {
+        else => switch (info) {
+            .Opaque => .unit,
             .Int => |meta| Type{
                 .number = Type.Number{
                     .layout = switch (meta.signedness) {
@@ -164,7 +194,7 @@ pub fn identifyZigType(
             .Array => |meta| Type{
                 .array = Type.Array{
                     .size = meta.len,
-                    .of = try self.identifyZigType(ally, meta.child),
+                    .of = try self.identifyZig(ally, selves, meta.child),
                 },
             },
             .Pointer => |meta| Type{
@@ -175,32 +205,8 @@ pub fn identifyZigType(
                         .Slice => .slice,
                         .C => @compileError("fluent does not have C pointers"),
                     },
-                    .to = try self.identifyZigType(ally, meta.child),
+                    .to = try self.identifyZig(ally, selves, meta.child),
                 },
-            },
-            .Struct => |meta| st: {
-                const fields = try ally.alloc(Type.Field, meta.fields.len);
-                inline for (meta.fields) |field, i| {
-                    fields[i] = Type.Field{
-                        .name = com.Symbol.init(try ally.dupe(u8, field.name)),
-                        .of = try self.identifyZigType(ally, field.field_type),
-                    };
-                }
-
-                break :st Type{ .@"struct" = fields };
-            },
-            .Union => |meta| u: {
-                const fields = try ally.alloc(Type.Field, meta.fields.len);
-                inline for (meta.fields) |field, i| {
-                    std.debug.assert(!std.mem.eql(u8, field.name, "tag"));
-
-                    fields[i] = Type.Field{
-                        .name = com.Symbol.init(try ally.dupe(u8, field.name)),
-                        .of = try self.identifyZigType(ally, field.field_type),
-                    };
-                }
-
-                break :u Type{ .variant = fields };
             },
             else => @compileError(comptime std.fmt.comptimePrint(
                 "cannot convert {} to fluent type",
@@ -211,4 +217,17 @@ pub fn identifyZigType(
     defer ty.deinit(ally);
 
     return self.identify(ally, ty);
+}
+
+/// translates zig types with clear fluent equivalents into fluent types. very
+/// useful for syncing object interfaces.
+pub fn identifyZigType(
+    self: *Self,
+    ally: Allocator,
+    comptime T: type,
+) Allocator.Error!TypeId {
+    var selves = SelfMap{};
+    defer selves.deinit(ally);
+
+    return self.identifyZig(ally, &selves, T);
 }

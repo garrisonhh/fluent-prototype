@@ -2,6 +2,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
+pub const Success = enum { success, failure };
+
 /// gets current time in milliseconds (see std.time.nanoTimestamp)
 pub fn now() f64 {
     return 1e-6 * @intToFloat(f64, std.time.nanoTimestamp());
