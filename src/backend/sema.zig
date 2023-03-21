@@ -11,8 +11,10 @@ const TypeId = canon.TypeId;
 const Type = canon.Type;
 const Expr = canon.Expr;
 const Basic = canon.Basic;
+const Image = canon.Image;
+const Ptr = canon.Ptr;
 
-const Error = Object.InitError;
+pub const Error = Object.InitError || Image.AllocError;
 const Result = com.Message.Result(Expr);
 
 const ok = Result.ok;
@@ -74,16 +76,22 @@ fn analyzeString(
 ) Error!Result {
     const string = sexpr.data.string.str;
 
+    // clone string to image
+    const mem = try env.alloc(.heap, string.len * @sizeOf(u8));
+    const owned = env.img.intoSlice(mem, u8, string.len);
+    std.mem.copy(u8, owned, string);
+
+    // create [N]u8 type
     const ty = try env.identify(Type{
         .array = .{ .size = string.len, .of = Basic.u8.get() },
     });
 
+    // create expr
     const expr = try Expr.init(env);
     expr.set(.type, ty);
 
     const data = expr.get(.data);
-    const owned = try env.ally.dupe(u8, string);
-    data.setInto(.string).setInto(owned);
+    data.setInto(.string).setInto(mem, string.len);
 
     return try coerce(env, expr, outward);
 }

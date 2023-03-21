@@ -6,6 +6,8 @@ const Success = com.Success;
 
 pub const AllocError = error{ OutOfMemory, TooManyBytes };
 
+pub const Alignment = 8;
+
 pub const Section = enum(u8) {
     stack,
     heap,
@@ -27,6 +29,17 @@ pub const Ptr = packed struct(UIntPtr) {
 
     offset: Offset,
     section: Section,
+
+    pub fn of(section: Section, offset: Offset) Ptr {
+        return Ptr{
+            .section = section,
+            .offset = offset,
+        };
+    }
+
+    pub fn add(ptr: Ptr, offset: usize) Ptr {
+        return Ptr.of(ptr.section, ptr.offset + @intCast(Offset, offset));
+    }
 };
 
 /// an indexable buddy allocator for fluent Ptrs.
@@ -41,7 +54,7 @@ const Pager = struct {
         const Block = struct {
             // if this breaks, alignment for allocations breaks
             comptime {
-                std.debug.assert(@alignOf(Block) >= 8);
+                std.debug.assert(@alignOf(Block) >= Alignment);
             }
 
             next: ?*Block,
@@ -49,11 +62,12 @@ const Pager = struct {
 
         /// each list contains free segments of 2 ** index size
         unused: [PAGE_POW + 1]?*Block = [1]?*Block{null} ** (PAGE_POW + 1),
-        mem: *align(8) Mem,
+        mem: *align(Alignment) Mem,
 
         fn init(ally: Allocator) Allocator.Error!Page {
-            const slice = try ally.alignedAlloc(u8, 8, PAGE_SIZE);
-            var self = Page{ .mem = @ptrCast(*align(8) Mem, slice.ptr) };
+            const slice = try ally.alignedAlloc(u8, Alignment, PAGE_SIZE);
+            const mem = @ptrCast(*align(Alignment) Mem, slice.ptr);
+            var self = Page{ .mem = mem };
 
             // set up first block
             const block = @ptrCast(*Block, self.mem);
@@ -131,22 +145,6 @@ const Pager = struct {
             return block;
         }
 
-        fn alloc(self: *Page, nbytes: usize) AllocError!?Ptr.Offset {
-            // get block power, check that it fits
-            const pow = blockPow(nbytes);
-            if (pow > PAGE_POW) return AllocError.TooManyBytes;
-
-            // get an unused block
-            const block = self.getFreeBlock(pow) orelse {
-                return null;
-            };
-
-            // get ptr as an offset
-            const base = @ptrToInt(self.mem);
-            const addr = @ptrToInt(block) + @sizeOf(Block) - base;
-            return @intCast(Ptr.Offset, addr);
-        }
-
         /// attempt to merge the first block with any other blocks at a power
         fn mergeFirst(self: *Page, pow: u6) Success {
             const diff = @as(usize, 1) << pow;
@@ -202,6 +200,22 @@ const Pager = struct {
             {
                 cur += 1;
             }
+        }
+
+        fn alloc(self: *Page, nbytes: usize) AllocError!?Ptr.Offset {
+            // get block power, check that it fits
+            const pow = blockPow(nbytes);
+            if (pow > PAGE_POW) return AllocError.TooManyBytes;
+
+            // get an unused block
+            const block = self.getFreeBlock(pow) orelse {
+                return null;
+            };
+
+            // get ptr as an offset
+            const base = @ptrToInt(self.mem);
+            const addr = @ptrToInt(block) + @sizeOf(Block) - base;
+            return @intCast(Ptr.Offset, addr);
         }
 
         fn free(self: *Page, ptr: Ptr.Offset, len: usize) void {
@@ -280,14 +294,12 @@ const Pager = struct {
         self.pages.items[page_index].free(offset, len);
     }
 
-    const Raw = *align(8) anyopaque;
-
-    fn get(self: *const Pager, ptr: Ptr.Offset) Raw {
+    fn get(self: *const Pager, ptr: Ptr.Offset) *anyopaque {
         const page_index = ptr / PAGE_SIZE;
         const offset = ptr % PAGE_SIZE;
 
         const rawptr = &self.pages.items[page_index].mem[offset];
-        return @ptrCast(Raw, @alignCast(8, rawptr));
+        return @ptrCast(*anyopaque, rawptr);
     }
 
     /// number of bytes allocated
@@ -360,15 +372,32 @@ pub fn free(self: *Self, ptr: Ptr, nbytes: usize) void {
     pager.free(ptr.offset, nbytes);
 }
 
-pub const RawPtr = Pager.Raw;
+pub fn copy(self: *Self, dst: Ptr, src: Ptr, nbytes: usize) void {
+    const dst_sl = self.into(dst, [*]u8)[0..nbytes];
+    const src_sl = self.into(src, [*]u8)[0..nbytes];
+    std.mem.copy(u8, dst_sl, src_sl);
+}
 
-pub fn raw(self: Self, ptr: Ptr) RawPtr {
+pub fn raw(self: Self, ptr: Ptr) *anyopaque {
     const pager = self.sections.getPtrConst(ptr.section);
     return pager.get(ptr.offset);
 }
 
 pub fn into(self: Self, ptr: Ptr, comptime P: type) P {
-    return @ptrCast(P, self.raw(ptr));
+    const aln = @alignOf(@typeInfo(P).Pointer.child);
+    return @ptrCast(P, @alignCast(aln, self.raw(ptr)));
+}
+
+pub fn intoSlice(self: Self, ptr: Ptr, comptime T: type, len: usize) []T {
+    return self.into(ptr, [*]T)[0..len];
+}
+
+pub fn read(self: Self, ptr: Ptr, comptime T: type) T {
+    return self.into(ptr, *const T).*;
+}
+
+pub fn write(self: Self, ptr: Ptr, comptime T: type, data: T) void {
+    self.into(ptr, *T).* = data;
 }
 
 // tests =======================================================================

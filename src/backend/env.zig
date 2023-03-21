@@ -99,8 +99,8 @@ pub fn alloc(
     return self.img.alloc(section, nbytes);
 }
 
-pub fn free(self: *Self, ptr: Ptr) void {
-    self.img.free(ptr);
+pub fn free(self: *Self, ptr: Ptr, nbytes: usize) void {
+    self.img.free(ptr, nbytes);
 }
 
 /// returns a machine ptr

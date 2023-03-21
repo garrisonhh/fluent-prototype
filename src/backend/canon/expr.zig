@@ -21,9 +21,10 @@ pub const ExprTemplate = struct {
 fn ExprMixin(comptime Self: type) type {
     return struct {
         pub fn deinit(self: Self) void {
-            const ally = self.env.ally;
+            const env = self.env;
+
             switch (self.get(.data).into()) {
-                .string => |sl| ally.free(sl.into()),
+                .string => |sl| env.free(sl.ptr(), sl.len()),
                 else => {},
             }
         }
@@ -122,10 +123,12 @@ test "exprs" {
         defer expr.deinit();
 
         const str = "hi, my name is garrison";
-        const owned = try env.ally.dupe(u8, str);
+        const owned_ptr = try env.alloc(.heap, str.len);
+        const owned = env.img.intoSlice(owned_ptr, u8, str.len);
+        std.mem.copy(u8, owned, str);
 
         expr.set(.type, try env.identifyZigType([str.len]u8));
-        expr.get(.data).setInto(.string).setInto(owned);
+        expr.get(.data).setInto(.string).setInto(owned_ptr, str.len);
 
         const data = expr.get(.data).into();
         try expect(data == .string);

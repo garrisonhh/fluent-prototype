@@ -21,10 +21,12 @@ const Repr = canon.Repr;
 const ReprWelt = canon.ReprWelt;
 const Object = canon.Object;
 const Expr = canon.Expr;
+const Image = canon.Image;
 
 pub const Error =
     std.mem.Allocator.Error ||
     ReprWelt.Error ||
+    Image.AllocError ||
     @TypeOf(stdout).Error;
 
 pub const Result = Message.Result(Expr);

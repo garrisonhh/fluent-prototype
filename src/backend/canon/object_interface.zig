@@ -11,7 +11,8 @@ const Repr = canon.Repr;
 const ReprId = canon.ReprId;
 const TypeId = canon.TypeId;
 const Object = canon.Object;
-const Value = canon.Value;
+const Image = canon.Image;
+const Ptr = canon.Ptr;
 
 const INDENT = 2;
 
@@ -183,7 +184,7 @@ fn genField(comptime field_type: type) IField {
 
         else => switch (@typeInfo(field_type)) {
             .Pointer => |meta| switch (meta.size) {
-                .One, .Many, .C => IField{ .value = field_type },
+                .One, .Many, .C => IField{ .value = Ptr },
                 .Slice => IField{ .slice = meta.child },
             },
             .Struct => IField{ .coll = field_type },
@@ -226,7 +227,7 @@ fn SliceWrapper(comptime T: type) type {
         const Self = @This();
 
         const Struct = Wrapper(struct {
-            ptr: *anyopaque,
+            ptr: *T,
             len: u64,
         }, null);
 
@@ -235,7 +236,7 @@ fn SliceWrapper(comptime T: type) type {
 
         st: Struct,
 
-        fn of(base: *anyopaque, env: *Env) Self {
+        fn of(base: Ptr, env: *Env) Self {
             return Self{ .st = Struct.of(base, env) };
         }
 
@@ -243,56 +244,52 @@ fn SliceWrapper(comptime T: type) type {
             return self.st.sizeOf();
         }
 
-        /// set the slice struct when I can't properly type it
-        pub fn rawSetInto(self: Self, sl_ptr: *anyopaque, sl_len: usize) void {
+        /// set the slice struct
+        pub fn setInto(self: Self, sl_ptr: Ptr, sl_len: usize) void {
             self.st.set(.ptr, sl_ptr);
             self.st.set(.len, sl_len);
         }
 
-        /// set the slice struct with proper type
-        pub fn setInto(self: Self, slice: []ElemField.value) void {
-            self.rawSetInto(slice.ptr, slice.len);
-        }
-
         /// as a slice of values
         pub fn into(self: Self) []ElemField.value {
-            const raw_ptr = self.st.get(.ptr);
-            const aligned_ptr = @alignCast(@alignOf(ElemField.value), raw_ptr);
-            const ptr = @ptrCast([*]ElemField.value, aligned_ptr);
-            return ptr[0..self.len()];
+            const img = &self.st.env.img;
+
+            const addr = self.st.get(.ptr);
+            return img.intoSlice(addr, ElemField.value, self.len());
+        }
+
+        pub fn ptr(self: Self) Ptr {
+            return self.st.get(.ptr);
         }
 
         pub fn len(self: Self) usize {
             return self.st.get(.len);
         }
 
-        pub fn getElemPtr(self: Self, index: usize) *anyopaque {
+        pub fn getElemPtr(self: Self, index: usize) Ptr {
             std.debug.assert(index < self.len());
 
-            const ptr = self.st.get(.ptr);
+            const p = self.st.get(.ptr);
             const elem_sz = switch (ElemField) {
                 .unit => 0,
                 .value => |V| @sizeOf(V),
-                .slice => |E| SliceWrapper(E).of(ptr, self.st.env).sizeOf(),
-                .coll => |I| Wrapper(I, null).of(ptr, self.st.env).sizeOf(),
+                .slice => |E| SliceWrapper(E).of(p, self.st.env).sizeOf(),
+                .coll => |I| Wrapper(I, null).of(p, self.st.env).sizeOf(),
             };
 
-            const addr = @ptrToInt(ptr) + elem_sz * index;
-            return @intToPtr(*anyopaque, addr);
+            return p.add(elem_sz * index);
         }
 
         /// index into slice
         pub fn get(self: Self, index: usize) Elem {
-            const ptr = self.getElemPtr(index);
+            const img = &self.st.env.img;
+            const p = self.getElemPtr(index);
 
             return switch (ElemField) {
                 .unit => {},
-                .value => |V| p: {
-                    const aligned = @alignCast(@alignOf(V), ptr);
-                    break :p @ptrCast(*const V, aligned).*;
-                },
-                .slice => |E| SliceWrapper(E).of(ptr, self.st.env),
-                .coll => |I| Wrapper(I, null).of(ptr, self.st.env),
+                .value => |V| img.read(p, V),
+                .slice => |E| SliceWrapper(E).of(p, self.st.env),
+                .coll => |I| Wrapper(I, null).of(p, self.st.env),
             };
         }
 
@@ -329,31 +326,22 @@ pub fn Wrapper(
 
         pub const I = genInterface(Template);
 
-        pub fn TemplateField(comptime tag: I.Tag) type {
-            inline for (std.meta.fields(Template)) |field| {
-                if (std.mem.eql(u8, field.name, @tagName(tag))) {
-                    return field.field_type;
-                }
-            } else {
-                unreachable;
-            }
-        }
-
-        base: *anyopaque,
-        env: *Env,
+        base: Ptr,
         ty: TypeId,
+
+        env: *Env,
         fields: []const Repr.Field,
 
         /// wrap raw data
-        pub fn of(base: *anyopaque, env: *Env) Self {
+        pub fn of(base: Ptr, env: *Env) Self {
             // CollInterface will verify these
             const ty = env.identifyZigType(Template) catch unreachable;
             const repr = env.reprOf(ty) catch unreachable;
 
             return Self{
                 .base = base,
-                .env = env,
                 .ty = ty,
+                .env = env,
                 .fields = env.rw.get(repr).coll,
             };
         }
@@ -378,6 +366,8 @@ pub fn Wrapper(
         /// wrap an instantiated object
         pub fn wrap(env: *Env, obj: Object) Self {
             if (builtin.mode == .Debug) {
+                // TODO this relies on hashing Types with 'self-awareness'
+
                 // // ensure template type maps to the object type
                 // const ty = env.identifyZigType(Template) catch |e| {
                 // std.debug.panic("{} while checking wrapped type", .{e});
@@ -398,7 +388,7 @@ pub fn Wrapper(
             }
 
             return Self{
-                .base = obj.val.buf.ptr,
+                .base = obj.ptr,
                 .env = env,
                 .ty = obj.ty,
                 .fields = env.rw.get(obj.repr).coll,
@@ -407,19 +397,11 @@ pub fn Wrapper(
 
         /// unwrap an instantiated object
         pub fn unwrap(self: Self) Object {
-            // since finding the size and creating the object were already done
-            // when instantiating the wrapper, they should never fail
-            const ptr = @ptrCast([*]u8, self.base);
-            const aligned_ptr = @alignCast(Value.Alignment, ptr);
-
-            const sz = self.env.sizeOf(self.ty) catch unreachable;
-            const val = Value.of(aligned_ptr[0..sz]);
-
-            return Object.from(self.env, self.ty, val) catch unreachable;
+            return Object.from(self.env, self.ty, self.base) catch unreachable;
         }
 
-        pub fn clone(self: Self) Allocator.Error!Self {
-            const obj = try self.unwrap().clone(self.env.ally);
+        pub fn clone(self: Self) Object.InitError!Self {
+            const obj = try self.unwrap().clone(self.env);
             const cloned = Self.wrap(self.env, obj);
 
             if (@hasDecl(Ext, "clone")) try Ext.clone(cloned);
@@ -432,12 +414,12 @@ pub fn Wrapper(
             return self.env.sizeOf(self.ty) catch unreachable;
         }
 
-        fn getFieldPtrIndexed(self: Self, tag_index: usize) *anyopaque {
+        fn getFieldPtrIndexed(self: Self, tag_index: usize) Ptr {
             const offset = self.fields[tag_index].offset;
-            return @intToPtr(*anyopaque, @ptrToInt(self.base) + offset);
+            return self.base.add(offset);
         }
 
-        fn getFieldPtr(self: Self, comptime tag: I.Tag) *anyopaque {
+        fn getFieldPtr(self: Self, comptime tag: I.Tag) Ptr {
             const tag_index = @enumToInt(tag) + switch (I.itype) {
                 .@"struct" => 0,
                 // variant must skip 'tag' field
@@ -450,9 +432,8 @@ pub fn Wrapper(
         fn getTagPtr(self: Self) *I.Tag {
             std.debug.assert(I.itype == .variant);
 
-            const raw_ptr = self.getFieldPtrIndexed(0);
-            const aligned_ptr = @alignCast(@alignOf(I.Tag), raw_ptr);
-            return @ptrCast(*I.Tag, aligned_ptr);
+            const ptr = self.getFieldPtrIndexed(0);
+            return self.env.img.into(ptr, *I.Tag);
         }
 
         /// get a pointer to a field value
@@ -468,8 +449,7 @@ pub fn Wrapper(
             }
 
             const raw_ptr = self.getFieldPtr(tag);
-            const aligned = @alignCast(aln, raw_ptr);
-            return @ptrCast(*V, aligned);
+            return self.env.img.into(raw_ptr, *V);
         }
 
         /// get a field value or interface
@@ -520,8 +500,7 @@ pub fn Wrapper(
                     return st;
                 },
                 .variant => {
-                    const rt_tag = self.getTagPtr().*;
-                    switch (rt_tag) {
+                    switch (self.getVarTag()) {
                         inline else => |tag| {
                             const name = @tagName(tag);
                             return @unionInit(I.Into, name, self.get(tag));
@@ -536,11 +515,26 @@ pub fn Wrapper(
             self.getTagPtr().* = tag;
         }
 
+        pub fn getVarTag(self: Self) I.Tag {
+            return self.getTagPtr().*;
+        }
+
         /// sets the var tag and then returns the value. this is super useful
         /// for initializing variant types.
         pub fn setInto(self: Self, comptime tag: I.Tag) I.field(tag).Into() {
             self.setVarTag(tag);
             return self.get(tag);
+        }
+
+        fn SetType(comptime tag: I.Tag) type {
+            return switch (I.field(tag)) {
+                .unit => void,
+                .value => |T| T,
+                else => @compileError(std.fmt.comptimePrint(
+                    "cannot set field `{s}`",
+                    @tagName(tag),
+                )),
+            };
         }
 
         /// set a value based on the templated value. if this is a variant, also
@@ -550,7 +544,7 @@ pub fn Wrapper(
         pub fn set(
             self: Self,
             comptime tag: I.Tag,
-            val: TemplateField(tag),
+            val: SetType(tag),
         ) void {
             // tag must be set for variants
             if (I.itype == .variant) {
@@ -560,12 +554,7 @@ pub fn Wrapper(
             switch (I.field(tag)) {
                 .unit => {},
                 .value => self.getPtr(tag).* = val,
-                .slice => {
-                    const slice = self.get(tag);
-                    slice.st.set(.ptr, val.ptr);
-                    slice.st.set(.len, val.len);
-                },
-                .coll => @compileError("TODO wrapper.set for collections"),
+                else => unreachable,
             }
         }
 
@@ -711,9 +700,13 @@ test "interface-value-slice" {
     const wrapped = try S.init(&env);
     defer wrapped.deinit();
 
+    const len = 3;
+    const mem_sz = len * @sizeOf(u32);
+    const mem = try env.alloc(.heap, mem_sz);
+    defer env.free(mem, mem_sz);
+
     const slice = wrapped.get(.slice);
-    slice.setInto(try ally.alloc(u32, 3));
-    defer ally.free(slice.into());
+    slice.setInto(mem, len);
 
     try expectEqual(@as(usize, 3), slice.len());
 
@@ -752,10 +745,11 @@ test "interface-coll-slice" {
     defer wrapped.deinit();
 
     const slice = wrapped.get(.slice);
-    const mem = try ally.alloc(u8, test_sz * 3);
-    defer ally.free(mem);
+    const mem_sz = test_sz * 3;
+    const mem = try env.alloc(.heap, mem_sz);
+    defer env.free(mem, mem_sz);
 
-    slice.rawSetInto(mem.ptr, 3);
+    slice.setInto(mem, 3);
 
     try expectEqual(@as(usize, 3), slice.len());
 

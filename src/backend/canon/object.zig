@@ -1,4 +1,5 @@
-//! Object is a high-level interface over bytes laid out in fluent's data model.
+//! Object is a high-level interface over bytes laid out in fluent's data model,
+//! that exist inside a fluent image.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -9,10 +10,10 @@ const Repr = canon.Repr;
 const ReprId = canon.ReprId;
 const Type = canon.Type;
 const TypeId = canon.TypeId;
-const Value = canon.Value;
 const Number = canon.Number;
 const Builtin = canon.Builtin;
 const Basic = canon.Basic;
+const Ptr = canon.Ptr;
 const interface = @import("object_interface.zig");
 
 const Self = @This();
@@ -21,63 +22,80 @@ pub const Wrapper = interface.Wrapper;
 
 ty: TypeId,
 repr: ReprId,
-/// TODO replace with Ptr
-val: Value,
+ptr: Ptr,
 
-pub const InitError = canon.ReprWelt.Error;
+pub const InitError = canon.ReprWelt.Error || canon.Image.AllocError;
 
-pub fn from(env: *Env, ty: TypeId, val: Value) InitError!Self {
+pub fn from(env: *Env, ty: TypeId, ptr: Ptr) InitError!Self {
     const repr = try env.reprOf(ty);
     return Self{
         .ty = ty,
         .repr = repr,
-        .val = val,
+        .ptr = ptr,
     };
 }
 
+/// initialize and allocate heap ptr
 pub fn init(env: *Env, ty: TypeId) InitError!Self {
     const size = try env.sizeOf(ty);
-    const val = try Value.alloc(env.ally, size);
-    return Self.from(env, ty, val);
+    const ptr = try env.alloc(.heap, size);
+    return Self.from(env, ty, ptr);
 }
 
+/// deallocate ptr
 pub fn deinit(self: Self, env: *Env) void {
-    self.val.deinit(env.ally);
+    const sz = env.sizeOf(self.ty) catch unreachable;
+    env.free(self.ptr, sz);
 }
 
 pub const render = @import("render_object.zig").render;
 
-pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
+/// allocates a new object and shallow copies this one onto it
+pub fn clone(self: Self, env: *Env) InitError!Self {
+    const size = env.sizeOf(self.ty) catch unreachable;
+    const ptr = try env.img.alloc(.heap, size);
+    env.img.copy(ptr, self.ptr, size);
+
     return Self{
         .ty = self.ty,
         .repr = self.repr,
-        .val = try Value.init(ally, self.val.buf),
+        .ptr = ptr,
     };
 }
 
-/// a lot of types use u64 as repr
-fn fromU64(env: *Env, ty: TypeId, n: u64) InitError!Self {
+/// 'from' helper
+fn fromByte(env: *Env, ty: TypeId, n: u8) InitError!Self {
     const obj = try Self.init(env, ty);
-    @ptrCast(*u64, obj.val.buf).* = n;
-    std.mem.set(u8, obj.val.buf, 0);
-    std.mem.copy(u8, obj.val.buf, canon.from(&n));
+    env.img.into(obj.ptr, *u8).* = n;
 
     return obj;
 }
 
-/// a lot of types use u64 as repr
-fn intoU64(self: Self) u64 {
-    return self.val.as(u64);
+/// 'into' helper
+fn intoByte(self: Self, env: *const Env) u8 {
+    return env.img.into(self.ptr, *const u8).*;
+}
+
+/// 'from' helper
+fn fromU64(env: *Env, ty: TypeId, n: u64) InitError!Self {
+    const obj = try Self.init(env, ty);
+    env.img.into(obj.ptr, *u64).* = n;
+
+    return obj;
+}
+
+/// 'into' helper
+fn intoU64(self: Self, env: *const Env) u64 {
+    return env.img.into(self.ptr, *const u64).*;
 }
 
 // unit ========================================================================
 
 pub fn fromUnit(env: *Env) InitError!Self {
-    const obj = try Self.init(env, Basic.unit.get());
-    std.debug.assert(obj.val.buf.len == 0);
-
-    return obj;
+    return Self.init(env, Basic.unit.get());
 }
+
+// intoUnit is completely useless
 
 // builtin =====================================================================
 
@@ -86,23 +104,23 @@ pub fn fromBuiltin(env: *Env, val: Builtin) InitError!Self {
     return Self.fromU64(env, ty, @enumToInt(val));
 }
 
-pub fn intoBuiltin(self: Self) Builtin {
-    return @intToEnum(Builtin, self.intoU64());
+pub fn intoBuiltin(self: Self, env: *const Env) Builtin {
+    return @intToEnum(Builtin, self.intoU64(env));
 }
 
 // bool ========================================================================
 
 pub fn fromBool(env: *Env, @"bool": bool) InitError!Self {
     const ty = try env.identify(.bool);
-    const obj = try Self.init(env, ty);
-    std.debug.assert(obj.val.buf.len == 1);
-    obj.val.buf[0] = @boolToInt(@"bool");
-
-    return obj;
+    return Self.fromByte(env, ty, @boolToInt(@"bool"));
 }
 
-pub fn intoBool(self: Self) bool {
-    return 0 != self.val.buf[0];
+pub fn intoBool(self: Self, env: *const Env) bool {
+    return switch (self.intoByte(env)) {
+        0 => false,
+        1 => true,
+        else => unreachable,
+    };
 }
 
 // type ========================================================================
@@ -112,8 +130,8 @@ pub fn fromType(env: *Env, val: TypeId) InitError!Self {
     return Self.fromU64(env, ty, val.index);
 }
 
-pub fn intoType(self: Self) TypeId {
-    return TypeId{ .index = self.intoU64() };
+pub fn intoType(self: Self, env: *const Env) TypeId {
+    return TypeId{ .index = self.intoU64(env) };
 }
 
 // ptr =========================================================================
@@ -133,9 +151,9 @@ pub fn fromPtr(env: *Env, comptime P: type, val: P) InitError!Self {
     return Self.fromU64(env, try env.identifyZigType(P), @ptrToInt(val));
 }
 
-pub fn intoPtr(self: Self, comptime P: type) P {
+pub fn intoPtr(self: Self, env: *const Env, comptime P: type) P {
     verifyPtrType(P);
-    return @intToPtr(P, self.intoU64());
+    return @intToPtr(P, self.intoU64(env));
 }
 
 // number ======================================================================
@@ -154,9 +172,10 @@ pub fn fromNumber(env: *Env, num: Number) InitError!Self {
 }
 
 fn convertNumber(
+    env: *const Env,
     comptime layout: Number.Layout,
     comptime bits: comptime_int,
-    value: Value,
+    ptr: Ptr,
 ) Number {
     // calculate zig type with comptime info
     const T = switch (layout) {
@@ -170,15 +189,14 @@ fn convertNumber(
         .data = @unionInit(
             Number.Concrete,
             @tagName(layout),
-            value.as(T),
+            env.img.into(ptr, *const T).*,
         ),
     };
 }
 
-pub fn intoNumber(self: Self, env: Env) Number {
+pub fn intoNumber(self: Self, env: *const Env) Number {
     const meta = env.tw.get(self.ty).number;
     const bits = meta.bits orelse 64;
-    std.debug.assert(bits == self.val.buf.len * 8);
 
     // this switch may look confusing, but it's just manipulating the zig
     // compiler into understanding all of the possible conversion types at
@@ -186,17 +204,19 @@ pub fn intoNumber(self: Self, env: Env) Number {
     return switch (meta.layout) {
         inline .int, .uint => |ct_layout| switch (bits) {
             inline 8, 16, 32, 64 => |ct_bits| convertNumber(
+                env,
                 ct_layout,
                 ct_bits,
-                self.val,
+                self.ptr,
             ),
             else => unreachable,
         },
         inline .float => |ct_layout| switch (bits) {
             inline 32, 64 => |ct_bits| convertNumber(
+                env,
                 ct_layout,
                 ct_bits,
-                self.val,
+                self.ptr,
             ),
             else => unreachable,
         },
