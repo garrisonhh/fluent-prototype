@@ -1,4 +1,6 @@
-//! forwarding namespaces
+//! forwarding namespaces, various globals
+
+pub const DEBUG = @import("builtin").mode == .Debug;
 
 pub var options = @import("src/options.zig"){};
 pub const cli = @import("src/cli.zig");

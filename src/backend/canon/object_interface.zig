@@ -314,7 +314,7 @@ fn SliceWrapper(comptime T: type) type {
 /// /// called prior to Object.deinit
 /// pub fn deinit(self: Self) void
 /// /// called after performing a shallow clone
-/// pub fn clone(self: Self) Allocator.Error!void
+/// pub fn clone(self: *Self) Allocator.Error!void
 /// ```
 pub fn Wrapper(
     comptime Template: type,
@@ -402,9 +402,9 @@ pub fn Wrapper(
 
         pub fn clone(self: Self) Object.InitError!Self {
             const obj = try self.unwrap().clone(self.env);
-            const cloned = Self.wrap(self.env, obj);
+            var cloned = Self.wrap(self.env, obj);
 
-            if (@hasDecl(Ext, "clone")) try Ext.clone(cloned);
+            if (@hasDecl(Ext, "clone")) try Ext.clone(&cloned);
 
             return cloned;
         }

@@ -1,3 +1,4 @@
+const std = @import("std");
 const Object = @import("object.zig");
 const TypeWelt = @import("typewelt.zig");
 const TypeId = TypeWelt.TypeId;
@@ -28,6 +29,23 @@ fn ExprMixin(comptime Self: type) type {
                 else => {},
             }
         }
+
+        pub fn clone(self: *Self) !void {
+            const env = self.env;
+            const data = self.get(.data);
+
+            switch (data.into()) {
+                .string => |sl| {
+                    const len = sl.len();
+                    const ptr = try env.alloc(.heap, len * @sizeOf(u8));
+                    const cloned = env.img.intoSlice(ptr, u8, len);
+                    std.mem.copy(u8, cloned, sl.into());
+
+                    data.get(.string).setInto(ptr, len);
+                },
+                else => {},
+            }
+        }
     };
 }
 
@@ -35,7 +53,6 @@ fn ExprMixin(comptime Self: type) type {
 pub const Expr = Object.Wrapper(ExprTemplate, ExprMixin);
 
 test "exprs" {
-    const std = @import("std");
     const expect = std.testing.expect;
     const expectEqual = std.testing.expectEqual;
     const prelude = @import("prelude.zig");

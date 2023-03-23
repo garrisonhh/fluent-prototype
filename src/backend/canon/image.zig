@@ -2,6 +2,7 @@ const std = @import("std");
 const expectEqual = std.testing.expectEqual;
 const Allocator = std.mem.Allocator;
 const com = @import("common");
+const DEBUG = com.DEBUG;
 const Success = com.Success;
 
 pub const AllocError = error{ OutOfMemory, TooManyBytes };
@@ -58,6 +59,17 @@ const Pager = struct {
             }
 
             next: ?*Block,
+
+            // in debug mode, this writes 'AA' bytes to the entire block
+            fn markFree(self: *Block, pow: u6) void {
+                if (DEBUG) {
+                    const addr = @ptrToInt(self) + @sizeOf(Block);
+                    const sz = (@as(usize, 1) << pow) - @sizeOf(Block);
+                    const bytes = @intToPtr([*]u8, addr)[0..sz];
+
+                    std.mem.set(u8, bytes, 0xAA);
+                }
+            }
         };
 
         /// each list contains free segments of 2 ** index size
@@ -73,6 +85,7 @@ const Pager = struct {
             const block = @ptrCast(*Block, self.mem);
             block.* = .{ .next = null };
 
+            block.markFree(PAGE_POW);
             self.unused[PAGE_POW] = block;
 
             return self;
@@ -93,66 +106,76 @@ const Pager = struct {
             }
         }
 
+        fn pop(self: *Page, pow: u6) ?*Block {
+            const block = self.unused[pow] orelse {
+                return null;
+            };
+
+            self.unused[pow] = block.next;
+            block.next = null;
+
+            return block;
+        }
+
+        fn push(self: *Page, pow: u6, block: *Block) void {
+            block.next = self.unused[pow];
+            self.unused[pow] = block;
+        }
+
         /// split a block at a size. assumes this block exists.
         fn splitBlock(self: *Page, pow: u6) void {
             const new_pow = pow - 1;
             const new_size = @as(usize, 1) << new_pow;
 
             // pop block
-            const block = self.unused[pow].?;
-            self.unused[pow] = block.next;
-            block.next = null;
+            const block = self.pop(pow).?;
 
             // create second block
             const new_block = @intToPtr(*Block, @ptrToInt(block) + new_size);
             new_block.* = .{ .next = null };
 
-            // prepend both blocks to the next list
-            new_block.next = self.unused[new_pow];
-            block.next = new_block;
-            self.unused[new_pow] = block;
+            // add blocks to new list
+            self.push(new_pow, new_block);
+            self.push(new_pow, block);
         }
 
         /// split blocks until you have a block at the correct power
-        fn splitFor(self: *Page, pow: u6) Success {
-            var i: u6 = pow + 1;
-            return while (i < self.unused.len) : (i += 1) {
-                if (self.unused[i] != null) {
-                    // found a bigger block, split it up
-                    while (i > pow) : (i -= 1) {
-                        self.splitBlock(i);
-                    }
+        fn ensureBlock(self: *Page, pow: u6) Success {
+            // check if this block exists
+            if (self.unused[pow] != null) {
+                return .success;
+            }
 
-                    break .success;
-                }
-            } else .failure;
+            // find a larger block power
+            var i: u6 = pow + 1;
+            while (i < self.unused.len) : (i += 1) {
+                // found a larger block size
+                if (self.unused[i] != null) break;
+            } else {
+                // there are no larger blocks
+                return .failure;
+            }
+
+            // split this block up
+            while (i > pow) : (i -= 1) {
+                self.splitBlock(i);
+            }
+
+            return .success;
         }
 
         fn getFreeBlock(self: *Page, pow: u6) ?*Block {
-            // if a unused block of the correct size is not available, try to
-            // create one
-            if (self.unused[pow] == null and
-                self.splitFor(pow) == .failure)
-            {
-                // no blocks available :(
-                return null;
-            }
-
-            // pop a unused block
-            const block = self.unused[pow].?;
-            self.unused[pow] = block.next;
-
-            return block;
+            _ = self.ensureBlock(pow);
+            return self.pop(pow);
         }
 
         /// attempt to merge the first block with any other blocks at a power
         fn mergeFirst(self: *Page, pow: u6) Success {
             const diff = @as(usize, 1) << pow;
-
             const fst = self.unused[pow].?;
 
-            var trav = fst.next;
             var prev = fst;
+            var trav = fst.next;
             while (trav) |got| : ({
                 prev = got;
                 trav = got.next;
@@ -170,6 +193,9 @@ const Pager = struct {
                     trav_addr - fst_addr == diff)
                 {
                     block = fst;
+                } else if (fst_addr == trav_addr) {
+                    // this will happen on a double free
+                    unreachable;
                 }
 
                 // blocks could be merged, merge them
@@ -180,12 +206,12 @@ const Pager = struct {
                     prev.next = got.next;
 
                     // pop first block
-                    self.unused[pow] = fst.next;
+                    _ = self.pop(pow);
 
                     // push merged block
-                    const merged_pow = pow + 1;
-                    found.next = self.unused[merged_pow];
-                    self.unused[merged_pow] = found;
+                    self.push(pow + 1, found);
+
+                    return .success;
                 }
             }
 
@@ -196,7 +222,7 @@ const Pager = struct {
         fn mergeFor(self: *Page, pow: u6) void {
             var cur = pow;
             while (cur <= PAGE_POW and
-                self.mergeFirst(pow) == .success)
+                self.mergeFirst(cur) == .success)
             {
                 cur += 1;
             }
@@ -224,12 +250,10 @@ const Pager = struct {
             const addr = @as(usize, ptr) - @sizeOf(Block) + base;
             const block = @intToPtr(*Block, addr);
 
-            // adds a block back onto the unused list
+            // store and merge
             const pow = blockPow(len);
-            block.next = self.unused[pow];
-            self.unused[pow] = block;
-
-            // try to merge this list
+            block.markFree(pow);
+            self.push(pow, block);
             self.mergeFor(pow);
         }
 
@@ -246,6 +270,29 @@ const Pager = struct {
             }
 
             return PAGE_SIZE - total;
+        }
+
+        /// debugging function
+        fn dump(self: *const Page, label: []const u8) void {
+            std.debug.print("[page dump {s}]\n", .{label});
+
+            for (self.unused) |head, i| {
+                std.debug.print("  {d} | ", .{i});
+
+                var trav = head;
+                while (trav) |got| : (trav = got.next) {
+                    std.debug.print("[{x}]", .{@ptrToInt(got)});
+
+                    if (trav == got.next) {
+                        std.debug.print(" -> LOOP", .{});
+                        break;
+                    } else if (got.next != null) {
+                        std.debug.print(" -> ", .{});
+                    }
+                }
+
+                std.debug.print("\n", .{});
+            }
         }
     };
 
@@ -284,7 +331,9 @@ const Pager = struct {
 
         // create a new page and allocate from it
         try self.pages.append(ally, try Page.init(ally));
-        return (try self.allocFromPage(nbytes, self.pages.items.len - 1)).?;
+
+        const page_num = self.pages.items.len - 1;
+        return (try self.allocFromPage(nbytes, page_num)).?;
     }
 
     fn free(self: *Pager, ptr: Ptr.Offset, len: usize) void {
