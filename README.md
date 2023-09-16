@@ -1,5 +1,7 @@
 # $\color{almond}\textit{fluent}$
 
+*I'm still working on this project, under a [new repo](https://github.com/garrisonhh/fluent/)*
+
 a language that is:
 - as fast as C
 - as typesafe as ML
